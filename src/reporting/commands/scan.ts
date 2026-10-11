@@ -18,8 +18,7 @@ import {
   loadConfig,
   findConfigFile,
 } from '../../core-open/index.js';
-import { writeScanSummary } from '../scan-summary.js';
-import { compareDriftBudget, evaluateConfigDriftBudget } from '../drift-budget-gate.js';
+import { prepareScanDriftBudget, writeScanSummary, type PreparedScanDriftBudget } from '../scan-summary.js';
 import {
   ARCHITECTURE_NEEDS_GRAPH,
   ARCHITECTURE_NOT_CLASSIFIED,
@@ -397,7 +396,7 @@ export const scanCommand = new Command('scan')
     '--fail-on <gates>',
     'Fail on warn or error. architecture-finding (hard boundary violations) or architecture-warning (violations and warnings) gate on the architecture module\'s boundary findings, judged under the policy pack in force: .vibgrate/architecture.toml (policy = "hexagonal-v1" | "layered-v1" | "vertical-v1", plus any [[overlay]] rules), VIBGRATE_ARCHITECTURE_POLICY, or vg build --policy; default hexagonal-v1. The pack is named in the output. See docs/architecture-policies.md. iac-finding[=<severity>] fails on infrastructure findings from the iac-cis-v1 pack at or above <severity> (critical|high|medium|low|info; default high) and needs --iac (or --full) plus the code map — it exits 2 when the Architecture module is missing rather than passing an unevaluated tree; security-finding[=<severity>] is the umbrella across every security pack that ran. Comma-separated: at most one of warn/error/architecture-* plus any security gates, e.g. --fail-on error,iac-finding=medium',
   )
-  .option('--summary-out <file>', 'Also write a small JSON summary (DriftScore, risk level, components, change since --baseline) for CI steps to read')
+  .option('--summary-out <file>', 'Also write a small JSON summary (DriftScore, risk level, components, drift-budget verdict, change since --baseline) for CI steps to read')
   .option('--baseline <file>', 'Compare against a baseline and record matching findings')
   .option('--changed-only', 'Only scan changed files')
   .option(
@@ -827,12 +826,36 @@ export const scanCommand = new Command('scan')
     let junitWritten = false;
     const measuredDrift = artifact.drift.score;
 
-    // Written before any gate can exit, so a CI step can read the score from a
-    // run that failed its budget. Confirmation goes to stderr; stdout stays the
-    // selected --format.
+    // Evaluate the pure budget first, write the summary, then apply gates.
+    // The file is on disk before any gate can exit, including an enforced breach.
+    // Confirmation goes to stderr; stdout stays the selected --format.
+    let configLoadError: unknown;
+    let configRaw: unknown;
+    let configFile: string | null = null;
+    const budgetFromFlags = scanOpts.driftBudget !== undefined || scanOpts.driftWorseningPercent !== undefined;
+    if (!budgetFromFlags) {
+      try {
+        const projectConfig = await loadConfig(rootDir);
+        configRaw = projectConfig.driftBudget;
+        configFile = findConfigFile(rootDir);
+      } catch (err) {
+        configLoadError = err;
+      }
+    }
+    const prepared: PreparedScanDriftBudget = configLoadError
+      ? { summary: null, flagBudget: null, flagWorsening: null, configGate: null, configScoreAbsent: false }
+      : prepareScanDriftBudget({
+          score: measuredDrift,
+          delta: artifact.delta,
+          driftBudget: scanOpts.driftBudget,
+          driftWorseningPercent: scanOpts.driftWorseningPercent,
+          configRaw,
+          configFile,
+        });
+
     if (opts.summaryOut) {
       try {
-        await writeScanSummary(opts.summaryOut, artifact);
+        await writeScanSummary(opts.summaryOut, artifact, prepared.summary);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         throw new CliError(`Could not write the scan summary to ${opts.summaryOut}: ${message}`, ExitCode.ERROR);
@@ -908,25 +931,13 @@ export const scanCommand = new Command('scan')
       if (scanOpts.driftWorseningPercent !== undefined) {
         gateCases.push(driftWorseningFlagCase(measuredDrift, artifact.delta, scanOpts.driftWorseningPercent));
       }
-      if (scanOpts.driftBudget === undefined && scanOpts.driftWorseningPercent === undefined) {
+      if (!budgetFromFlags && !configLoadError) {
         // A config read failure must not run ahead of the finding gates below.
-        // The budget block still loads the config and reports that failure.
-        try {
-          const projectConfig = await loadConfig(rootDir);
-          if (measuredDrift === null) {
-            if (projectConfig.driftBudget !== undefined && projectConfig.driftBudget !== null) {
-              gateCases.push(configDriftBudgetAbsentCase());
-            }
-          } else {
-            gateCases.push(...configDriftBudgetCases(evaluateConfigDriftBudget({
-              raw: projectConfig.driftBudget,
-              configFile: findConfigFile(rootDir),
-              headScore: measuredDrift,
-              baseScore: artifact.delta === undefined ? null : measuredDrift - artifact.delta,
-            })));
-          }
-        } catch {
-          // Leave the budget cases out. The gate block below surfaces the error.
+        // The budget was already loaded for the summary; the gate block reports that failure.
+        if (prepared.configScoreAbsent) {
+          gateCases.push(configDriftBudgetAbsentCase());
+        } else if (prepared.configGate) {
+          gateCases.push(...configDriftBudgetCases(prepared.configGate));
         }
       }
     }
@@ -1068,53 +1079,34 @@ export const scanCommand = new Command('scan')
       if (!opts.quiet) console.error(chalk.dim(`\niac gate: no findings at or above ${threshold} (${securityPacksLabel(section)}).`));
     }
 
-    if (scanOpts.driftBudget !== undefined) {
-      const budget = compareDriftBudget(measuredDrift, scanOpts.driftBudget);
-      if (budget.message) {
-        console.error(budget.exitCode === 2 ? chalk.red(`\n${budget.message}`) : chalk.yellow(`\n${budget.message}`));
+    if (prepared.flagBudget) {
+      if (prepared.flagBudget.message) {
+        console.error(prepared.flagBudget.exitCode === 2 ? chalk.red(`\n${prepared.flagBudget.message}`) : chalk.yellow(`\n${prepared.flagBudget.message}`));
       }
-      if (budget.exitCode === 2) return failGate();
+      if (prepared.flagBudget.exitCode === 2) return failGate();
     }
 
-    if (scanOpts.driftWorseningPercent !== undefined) {
-      if (measuredDrift === null) {
-        console.error(chalk.yellow('\nDriftScore is absent; --drift-worsening was not compared.'));
-      } else if (artifact.delta === undefined) {
-        console.error(chalk.red('\nFailing fitness function: --drift-worsening requires --baseline to compare against previous drift.'));
-        return failGate();
-      } else if (artifact.delta > 0) {
-        const baselineScore = measuredDrift - artifact.delta;
-        const denominator = Math.max(Math.abs(baselineScore), 0.0001);
-        const worseningPercent = (artifact.delta / denominator) * 100;
-
-        if (worseningPercent > scanOpts.driftWorseningPercent) {
-          console.error(chalk.red(`\nFailing fitness function: drift worsened by ${worseningPercent.toFixed(2)}% (threshold ${scanOpts.driftWorseningPercent}%).`));
-          return failGate();
-        }
+    if (prepared.flagWorsening) {
+      if (prepared.flagWorsening.message) {
+        console.error(prepared.flagWorsening.exitCode === 2 ? chalk.red(`\n${prepared.flagWorsening.message}`) : chalk.yellow(`\n${prepared.flagWorsening.message}`));
       }
+      if (prepared.flagWorsening.exitCode === 2) return failGate();
     }
 
     // `driftBudget` in the project config — only when neither flag was passed,
-    // so an explicit flag keeps its exact historic meaning.
-    if (scanOpts.driftBudget === undefined && scanOpts.driftWorseningPercent === undefined) {
-      const projectConfig = await loadConfig(rootDir);
-      if (measuredDrift === null) {
-        if (projectConfig.driftBudget !== undefined && projectConfig.driftBudget !== null) {
-          console.error(chalk.yellow('\nDriftScore is absent; the project drift budget was not compared.'));
-        }
-      } else {
-        const gate = evaluateConfigDriftBudget({
-          raw: projectConfig.driftBudget,
-          configFile: findConfigFile(rootDir),
-          headScore: measuredDrift,
-          baseScore: artifact.delta === undefined ? null : measuredDrift - artifact.delta,
-        });
-        for (const line of gate.lines) {
+    // so an explicit flag keeps its exact historic meaning. The verdict was
+    // computed before the summary was written.
+    if (!budgetFromFlags) {
+      if (configLoadError) throw configLoadError;
+      if (prepared.configScoreAbsent) {
+        console.error(chalk.yellow('\nDriftScore is absent; the project drift budget was not compared.'));
+      } else if (prepared.configGate) {
+        for (const line of prepared.configGate.lines) {
           if (line.level === 'error') console.error(chalk.red(line.text));
           else if (line.level === 'warn') console.error(chalk.yellow(line.text));
           else if (!opts.quiet) console.error(chalk.dim(line.text));
         }
-        if (gate.exitCode === 2) return failGate();
+        if (prepared.configGate.exitCode === 2) return failGate();
       }
     }
 

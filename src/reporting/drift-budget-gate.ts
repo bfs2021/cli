@@ -55,6 +55,45 @@ export function compareDriftBudget(
   return { exitCode: 0, message: null };
 }
 
+/**
+ * Compare a DriftScore change to `--drift-worsening`.
+ *
+ * A null score is unmeasured. It does not fail the gate, and it is not
+ * treated as 0. A measured score with no baseline delta fails: the flag
+ * cannot compare. Worsening is `delta / max(|baseline|, 0.0001) * 100`,
+ * counted only when the score got worse.
+ */
+export function compareDriftWorsening(
+  score: number | null,
+  delta: number | undefined,
+  limit: number,
+): { exitCode: 0 | 2; message: string | null } {
+  if (score === null) {
+    return {
+      exitCode: 0,
+      message: 'DriftScore is absent; --drift-worsening was not compared.',
+    };
+  }
+  if (delta === undefined) {
+    return {
+      exitCode: 2,
+      message: 'Failing fitness function: --drift-worsening requires --baseline to compare against previous drift.',
+    };
+  }
+  if (delta > 0) {
+    const baselineScore = score - delta;
+    const denominator = Math.max(Math.abs(baselineScore), 0.0001);
+    const worseningPercent = (delta / denominator) * 100;
+    if (worseningPercent > limit) {
+      return {
+        exitCode: 2,
+        message: `Failing fitness function: drift worsened by ${worseningPercent.toFixed(2)}% (threshold ${limit}%).`,
+      };
+    }
+  }
+  return { exitCode: 0, message: null };
+}
+
 export function evaluateConfigDriftBudget(input: DriftBudgetGateInput): DriftBudgetGateResult {
   const source = input.configFile ?? 'the project config';
   const parsed = parseDriftBudget(input.raw);

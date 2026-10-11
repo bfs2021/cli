@@ -19,7 +19,7 @@
  * drift gate; otherwise it is `<skipped>`. Notes never fail a gate.
  */
 import * as path from 'node:path';
-import { compareDriftBudget, type DriftBudgetGateResult } from './drift-budget-gate.js';
+import { compareDriftBudget, compareDriftWorsening, type DriftBudgetGateResult } from './drift-budget-gate.js';
 import { writeTextFile } from './utils/fs.js';
 
 export const JUNIT_FINDINGS_CLASS = 'vg.findings';
@@ -250,30 +250,9 @@ export function driftWorseningFlagCase(
   delta: number | undefined,
   limit: number,
 ): JUnitTestCase {
-  if (score === null) {
-    return skipped(JUNIT_GATES_CLASS, 'drift-worsening', 'DriftScore is absent; --drift-worsening was not compared.');
-  }
-  if (delta === undefined) {
-    return failure(
-      JUNIT_GATES_CLASS,
-      'drift-worsening',
-      'gate',
-      'Failing fitness function: --drift-worsening requires --baseline to compare against previous drift.',
-    );
-  }
-  if (delta > 0) {
-    const baselineScore = score - delta;
-    const denominator = Math.max(Math.abs(baselineScore), 0.0001);
-    const worseningPercent = (delta / denominator) * 100;
-    if (worseningPercent > limit) {
-      return failure(
-        JUNIT_GATES_CLASS,
-        'drift-worsening',
-        'gate',
-        `Failing fitness function: drift worsened by ${worseningPercent.toFixed(2)}% (threshold ${limit}%).`,
-      );
-    }
-  }
+  const result = compareDriftWorsening(score, delta, limit);
+  if (result.exitCode === 2 && result.message) return failure(JUNIT_GATES_CLASS, 'drift-worsening', 'gate', result.message);
+  if (result.message) return skipped(JUNIT_GATES_CLASS, 'drift-worsening', result.message);
   return pass(JUNIT_GATES_CLASS, 'drift-worsening');
 }
 

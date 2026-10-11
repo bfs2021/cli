@@ -54,6 +54,8 @@ The outputs need a scanner image that supports `--summary-out`, and `jq` on the
 runner (present on GitHub-hosted runners). With an older `image-tag` the scan
 still runs and the outputs stay empty, with a notice in the log.
 
+The summary file also carries `driftBudget`: `null` when no budget applies, otherwise the verdict (`source`, `mode`, `withinBudget`, `blocking`, and `rules` with status `pass`, `breach`, or `not_evaluated`). `schemaVersion` stays `1`. An unmeasured DriftScore stays `null` and is not treated as `0` in the budget. The file is written before a budget gate exits.
+
 ## Fail when drift gets worse
 
 Create a baseline once, commit it, and point the Action at it:
