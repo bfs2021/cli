@@ -325,6 +325,8 @@ vg evidence export [--out <dir>] [--regime <id>]
 
 `release` freezes the manifest from a Vibgrate scan artifact or an SBOM — CycloneDX, SPDX, or either one wrapped in an in-toto / DSSE **SBOM attestation**. Where the artefact is a container image, it can also take the facts straight from what BuildKit wrote instead of values typed in by hand: `--buildkit-metadata` reads the `docker buildx build --metadata-file` output for the image digest and build reference; `--provenance` reads a SLSA provenance attestation for the source repository, commit, and base images; and `--image <ref>` asks Docker for the image's digest, `org.opencontainers.image.*` labels, and any attached provenance and SBOM attestations (an attached SBOM becomes the manifest when `--from` is not given). `--image` runs `docker image inspect` and `docker buildx imagetools inspect`; the second contacts the image's registry when the reference is not present locally. Those facts are stored under `build` in the frozen manifest. A typed `--digest` that disagrees with what the build wrote is an error, never a silent preference, and attestation signatures are recorded as unverified — verify them with `cosign`.
 
+A `--from` file that is truncated, not valid JSON, or a CycloneDX or SPDX document missing a required field exits `1`. The message names that file and the format it expected: CycloneDX JSON with `bomFormat`, `specVersion`, and `version`, or SPDX JSON with `spdxVersion`, `SPDXID`, and `name`. It says to regenerate the SBOM and run the command again. The document and any home directory stay out of the message. A component or package missing `name` fails the command. The same check applies to an SBOM attached to an image. An unversioned component stays out of the frozen manifest: both formats allow a component without a version, and a manifest records a concrete one.
+
 `push` sends the product registry, every frozen release manifest (components, artefact digest, and the build facts read from BuildKit), and — when `--result` points at a bundle directory — the exposure result with its DSSE envelope and RFC 3161 token. Vibgrate Cloud verifies the signature itself and records the outcome as `intact`, `failed` or `absent`; it never takes a flag's word for it (the old `--signed` flag is accepted and ignored). Bodies above the 10 MB limit drop component lists from the oldest releases first and say so; `--no-releases` omits the manifests entirely. In Vibgrate Cloud → Govern ▸ Evidence the frozen releases appear with their chain of custody, every component is searchable across releases, and each ledger entry offers its archived bundle for download.
 
 `exposure` matches against manifests **frozen at ship time**, not the current tree, and never guesses: a bound product with no frozen manifest returns `undetermined` with a reason. It runs fully `--offline` against a local advisory file, and can emit a signed evidence bundle (`--bundle <dir>`) that `vg evidence verify` checks offline with honest `verified` / `unverified` / `failed` states. Pass `--tsa <url>` to anchor the bundle to a trusted **RFC 3161** timestamp (`timestamp.tsr`), fully verifiable with `openssl ts -verify`.
@@ -334,6 +336,8 @@ vg evidence export [--out <dir>] [--regime <id>]
 **Exit codes** (CI-usable): `0` no exposure · `2` exposure found · `3` undetermined (manual review) · `1` operational error.
 
 If a command cannot serialize or write a JSON or JSONL file — permission denied, a missing parent directory, a path that is a directory, a full disk, or a value that cannot be serialized — that is an operational error. The command exits `1`. The message names the file. Check the path and permissions, or choose another `--out` or `--bundle`.
+
+`vg evidence verify` reads the bundle before it reports `verified`, `unverified`, or `failed`. A missing bundle exits `3`. A bundle whose envelope or `result.json` is truncated, is not valid JSON, or is not an evidence document this version can read exits `1`. The message names the envelope or the result and tells you to restore the bundle or re-create it with `vg evidence exposure --bundle`. It does not print the file's contents or a stack trace. A readable bundle that was signed and then edited still reports `failed`.
 
 No language model touches any figure in the evidence path, and every determination carries an evidence-not-compliance disclaimer. Vibgrate Evidence produces evidence to support your obligations under a regime; it does not determine compliance and is not legal advice.
 
@@ -1988,6 +1992,30 @@ root. It has no version and no purl. A scan that recorded no dependencies still
 writes that metadata component and an empty `components` array. SPDX `packages`
 is empty in that case, and `primaryPackagePurpose` is still absent because there
 is still no package.
+
+#### Root package.json without a name or version
+
+A root `package.json` may omit `name`, `version`, or both. A missing field is
+one that is absent, blank, or not a string. `vg build`, `vg scan`, and
+`vg sbom export` keep going. Each prints one warning,
+`warning [VG_WARN_ROOT_PACKAGE_IDENTITY]`. Dependencies declared in that file,
+and the versions the lockfile resolves, are still reported.
+
+The fallback name is the last segment of the directory you passed to the
+command. It is not an absolute path, so the same tree produces the same name
+on every machine. A missing version is omitted. The command does not write
+`0.0.0` in its place.
+
+| Field | When `package.json` has the field | When it does not |
+| --- | --- | --- |
+| Code-map package node, scan project `name`, and `repository.name` | the `name` string | the directory name |
+| `repository.version` | the `version` string | the field is omitted |
+| CycloneDX `metadata.component.name` | the directory name (`rootPath`) | the directory name (`rootPath`) |
+| CycloneDX `metadata.component.version` | omitted | omitted |
+| SPDX document `name` | `<rootPath>-sbom` | `<rootPath>-sbom` |
+
+The code map does not name that package `.`. `vg sbom export` still writes the
+root component and the dependency rows.
 
 **Gaps.** These are holes in the inventory, labeled as holes.
 
@@ -5754,7 +5782,7 @@ Stderr lines look like `warning [VG_WARN_PARSE_FAILED]: …`. The code is the to
 
 `vg build --json` keeps `warnings` as strings and adds `codedWarnings`: an array of `{ code, message }` in that same order. Each string in `warnings` ends with ` [CODE]`. `codedWarnings` is left out when there are no warnings.
 
-`vg scan --format json` adds `degradations` when a path was skipped or a baseline file could not be read. The field is left out when there are none. `vg report` prints those same rows.
+`vg scan --format json` adds `degradations` when a path was skipped, a baseline file could not be read, or the root `package.json` omitted `name` or `version`. The field is left out when there are none. `vg report` prints those same rows.
 
 `vg sbom export` prints the code on stderr. CycloneDX adds a `vibgrate:warningCode` property next to the existing warning property. SPDX adds an annotation whose comment is `warningCode=VG_WARN_…`. The warning sentences already stored on the document stay as they are.
 
@@ -5783,6 +5811,7 @@ A truncated or invalid lockfile stops the command. Warning codes cover condition
 | `VG_WARN_LICENSE_UNREPRESENTABLE` | `vg sbom` | A declared license cannot be represented in an SBOM. |
 | `VG_WARN_CVSS_UNPARSEABLE` | `vg scan` | A CVSS vector was present and could not be parsed. |
 | `VG_WARN_PURL_UNAVAILABLE` | `vg sbom` | A package URL could not be formed. The component is included without a purl. |
+| `VG_WARN_ROOT_PACKAGE_IDENTITY` | `vg build`, `vg scan`, `vg sbom` | The root `package.json` omitted `name`, `version`, or both. The root component uses the directory name when `name` is missing, and omits `version` when that field is missing. Dependencies are still resolved. |
 | `VG_WARN_SBOM_LOSSY_EDGES` | `vg sbom` | Merge dropped a different dependency list for one package. |
 | `VG_WARN_SBOM_LOSSY_MANIFEST` | `vg sbom` | Merge dropped differing manifest metadata for one package. |
 | `VG_WARN_SBOM_UNKNOWN_ECOSYSTEM` | `vg sbom` | Merge recorded an unknown ecosystem as npm. |
