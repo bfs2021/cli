@@ -1905,6 +1905,12 @@ inside one lockfile edge are sorted on their own. SPDX `SPDXID` values are
 `SPDXRef-Package-N` for that order, so they stay put when only discovery order
 changes. The document id stays a content-derived UUID.
 
+String keys in that order — purls, package names, versions, and the project
+names in `vibgrate:projects` — compare by UTF-16 code unit. `LANG` and
+`LC_ALL` do not change the document. Lockfiles are visited in that same
+code-unit order of project path, and the first path wins when two lockfiles
+repeat one identity.
+
 **Same inputs, same document.** For one scan artifact and the lockfiles under
 `--root`, `vg sbom export` writes the same JSON on every run, including the
 CycloneDX `serialNumber` and the SPDX `documentNamespace`. Those values are
@@ -2273,6 +2279,8 @@ The fail-closed path is covered by `src/reporting/commands/scan-package-manifest
 #### Determinism
 
 The same tree and the same manifest produce the same findings order and the same advisory ids. Vulnerability findings are ordered by ecosystem, then package name, then installed version. Advisories on one package are ordered by severity — critical, high, moderate, low, unknown — and then by advisory id. That id is the `id` from the manifest. JSON records it as `details.advisoryId`. The order of keys in the manifest file does not change the result. `timestamp` and `durationMs` on the scan artifact still change between runs. In a git checkout, an exposure window's day count follows the scan date. The advisory id and the finding order stay the same.
+
+Those string keys, and the package-name tie-break on dependency rows inside a project, compare by UTF-16 code unit. SARIF results follow that finding order. Degrade-and-continue warnings are ordered by code, then message, the same way. `LANG` and `LC_ALL` do not change the JSON or the SARIF.
 
 Registry, sign-in, and upload failures — the message `vg` prints and the next command — are in [Troubleshooting: registry, auth, and network](#troubleshooting-registry-auth-and-network).
 
@@ -5171,6 +5179,18 @@ text only; it does not hide this notice.
 
 ```text
 notice: skipped 3 symlinks (alias.ts, nested/cycle, via). vg does not follow symlinks. Point the root at the link target, or pass --exclude or a narrower root.
+```
+
+### Binary and non-UTF-8 files
+
+`vg build` and `vg scan` read project files as text. A file that contains a NUL byte, or bytes that are not valid UTF-8, is not text. That includes a binary blob saved with a source or manifest extension, and UTF-16 saved as `.md` or `.json`.
+
+Those files are left out. The build does not parse them and does not put their bytes in the map. The scan does not feed them to text parsers. One warning names the count and the first few root-relative paths, in sorted order (at most five; further files are a `+N more` count). It tells you to leave the files out with a `.gitignore` entry, or to pass `--exclude`. The warning does not include the file's bytes.
+
+A lockfile that is binary or not UTF-8 still stops the command. That message names the file and tells you to leave it out the same way, or to replace it with a text lockfile. It does not include the file's bytes.
+
+```text
+warning [VG_WARN_NON_TEXT_FILE]: skipped 2 files that are binary or not UTF-8 (blob.ts, notes.md). Leave them out with a .gitignore entry, or pass --exclude.
 ```
 
 ---
