@@ -17,6 +17,7 @@ import {
   type WarningCode,
 } from '../../core-open/warnings.js';
 import { compareCodeUnits } from '../../core-open/utils/code-unit.js';
+import { readRootPackageIdentity, rootPackageIdentityMessage } from '../../core-open/utils/root-package-identity.js';
 
 export { describeUnrepresentableLicense } from './sbom-license.js';
 
@@ -564,11 +565,11 @@ export function flattenDependencies(
     const guessed = projectEcosystemGuessed(project.type);
     for (const dep of project.dependencies) {
       // Go always pins an exact version in go.mod, but the scanner's
-      // `resolvedVersion` runs it through `semver.clean` (for semver math
-      // elsewhere) and drops the `v` prefix go.sum's transitive entries keep
-      // — matching on `currentSpec` instead is what lets a direct Go
-      // dependency dedupe against its own go.sum-derived component instead
-      // of appearing as two, differently-versioned components.
+      // `resolvedVersion` drops the leading `v` (build metadata stays) while
+      // go.sum's transitive entries keep that `v` — matching on `currentSpec`
+      // instead is what lets a direct Go dependency dedupe against its own
+      // go.sum-derived component instead of appearing as two,
+      // differently-versioned components.
       const rawVersion = ecosystem === 'go' ? dep.currentSpec : (dep.resolvedVersion ?? dep.currentSpec);
       // A dependency with no lockfile/installed-tree resolution falls back
       // to its declared spec, which for npm/yarn/pnpm can be a semver range,
@@ -1084,6 +1085,10 @@ const exportCommand = new Command('export')
     const sbom = format === 'cyclonedx' ? toCycloneDx(artifact, lockfileGraph) : toSpdx(artifact, lockfileGraph);
     const coded: CodedWarning[] = [];
     const plain: string[] = [];
+    const rootIdentityWarning = rootPackageIdentityMessage(readRootPackageIdentity(path.resolve(opts.root)));
+    if (rootIdentityWarning) {
+      coded.push(codedWarning(WARNING_CODES.ROOT_PACKAGE_IDENTITY, rootIdentityWarning));
+    }
     for (const warning of [
       ...collectPurlWarnings(artifact, lockfileGraph),
       ...collectLicenseWarnings(artifact, lockfileGraph),
