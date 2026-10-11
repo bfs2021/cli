@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SecurityFinding } from '../../core-open/types.js';
 import type { ScanArtifact } from '../types.js';
-import { ADVISORY_CORPUS_FOOTER_ID, FIX_AVAILABLE_ATTR, formatHtmlReport } from './html.js';
+import { ADVISORY_CORPUS_FOOTER_ID, FIX_AVAILABLE_ATTR, FIX_AVAILABLE_ONLY_ID, formatHtmlReport } from './html.js';
 
 const TOKEN = ['ghp', '0123456789abcdefghijklmnopqrstuvwxyzA'].join('_');
 
@@ -293,8 +293,34 @@ describe('formatHtmlReport', () => {
     expect(again).not.toMatch(/<link[\s>]/i);
     expect(again).not.toMatch(/\ssrc\s*=/i);
     expect(again).not.toMatch(/<details/i);
-    expect(again).not.toMatch(/fix available only/i);
+    expect(again).toContain(`id="${FIX_AVAILABLE_ONLY_ID}"`);
+    expect(again).toMatch(/fix available only/i);
+    expect(again).not.toMatch(new RegExp(`id="${FIX_AVAILABLE_ONLY_ID}"[^>]*\\schecked`));
     expect(again).toContain(`<div id="${ADVISORY_CORPUS_FOOTER_ID}" hidden></div>`);
     expect(again.startsWith('<!doctype html>')).toBe(true);
+  });
+
+  it('ships an unchecked fix-available-only control and keeps every row in the page', () => {
+    const control = `<p id="fix-available-filter"><label for="${FIX_AVAILABLE_ONLY_ID}"><input type="checkbox" id="${FIX_AVAILABLE_ONLY_ID}"> Fix available only</label></p>`;
+    const rule = `body:has(#${FIX_AVAILABLE_ONLY_ID}:checked) tr[${FIX_AVAILABLE_ATTR}="no"] { display: none; }`;
+    const empty = formatHtmlReport(artifact());
+    const html = formatHtmlReport(sample());
+
+    expect(empty).toContain(control);
+    expect(html).toContain(control);
+    expect(empty).toContain(rule);
+    expect(html).toContain(rule);
+    expect(html).not.toMatch(new RegExp(`<input[^>]*id="${FIX_AVAILABLE_ONLY_ID}"[^>]*checked`));
+
+    const vulns = section(html, 'vulnerabilities');
+    const findings = section(html, 'findings');
+    expect(vulns).toContain(`${FIX_AVAILABLE_ATTR}="yes"`);
+    expect(vulns).toContain(`${FIX_AVAILABLE_ATTR}="no"`);
+    expect(vulns).toContain('GHSA-crit');
+    expect(vulns).toContain('GHSA-mod');
+    expect(findings).toContain('vibgrate/runtime-lag');
+    expect(html).not.toMatch(/<script/i);
+    expect(html.indexOf('id="summary"')).toBeLessThan(html.indexOf(`id="${FIX_AVAILABLE_ONLY_ID}"`));
+    expect(html.indexOf(`id="${FIX_AVAILABLE_ONLY_ID}"`)).toBeLessThan(html.indexOf('id="vulnerabilities"'));
   });
 });

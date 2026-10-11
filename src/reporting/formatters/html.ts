@@ -9,17 +9,29 @@ import type { Finding, ScanArtifact } from '../types.js';
  * Pure function of the artifact: stable sorts, no clock, no randomness, no
  * network, no external assets. Artifact strings are redacted, then escaped.
  *
- * Stable ids: `#summary`, `#vulnerabilities`, `#security`, `#findings`.
+ * Stable ids: `#summary`, `#vulnerabilities`, `#security`, `#findings`,
+ * `#fix-available-only`.
  *
- * Two extension points, unused today:
- * - Rows carry {@link FIX_AVAILABLE_ATTR} so a client-side "fix available
- *   only" filter can be added without changing the row model.
- * - {@link advisoryCorpusFooter} emits an empty `#advisory-corpus` mount for
- *   a later collapsible advisory-corpus metadata footer.
+ * The summary includes an unchecked "Fix available only" checkbox
+ * ({@link FIX_AVAILABLE_ONLY_ID}). Checking it hides rows whose
+ * {@link FIX_AVAILABLE_ATTR} is `no`. The generated markup still contains
+ * every row, so the same artifact stays byte-stable. The filter is a style
+ * rule in the page: no script, no network, no registry lookup.
+ *
+ * {@link advisoryCorpusFooter} emits an empty `#advisory-corpus` mount for
+ * a later collapsible advisory-corpus metadata footer.
  */
 
-/** Row attribute a later "fix available only" filter can select on. */
+/** Row attribute the "fix available only" filter selects on. `yes` when a fix hint exists. */
 export const FIX_AVAILABLE_ATTR = 'data-fix-available';
+
+/**
+ * Checkbox that hides rows with {@link FIX_AVAILABLE_ATTR} `no`.
+ * Generated pages leave it unchecked.
+ */
+export const FIX_AVAILABLE_ONLY_ID = 'fix-available-only';
+
+const FIX_AVAILABLE_FILTER_ID = 'fix-available-filter';
 
 /** Element id reserved for a later advisory-corpus metadata footer. */
 export const ADVISORY_CORPUS_FOOTER_ID = 'advisory-corpus';
@@ -75,6 +87,9 @@ export function formatHtmlReport(artifact: ScanArtifact): string {
   nav a { margin-right: 1rem; }
   a { color: inherit; }
   .absent { font-style: italic; }
+  #${FIX_AVAILABLE_FILTER_ID} { margin: 0.75rem 0 1rem; }
+  #${FIX_AVAILABLE_FILTER_ID} input { margin-right: 0.4rem; vertical-align: middle; }
+  body:has(#${FIX_AVAILABLE_ONLY_ID}:checked) tr[${FIX_AVAILABLE_ATTR}="no"] { display: none; }
 </style>
 </head>
 <body>
@@ -94,6 +109,7 @@ ${renderCounts('vuln-counts', VULN_SEVERITIES, vulnCounts)}
 <h3><a href="#security">Security</a></h3>
 ${renderCounts('security-counts', SECURITY_SEVERITIES, securityCounts)}
 ${fix === null ? '' : `<p id="fix-available">Fix available: ${fix}</p>\n`}
+${fixAvailableOnlyControl()}
 <nav aria-label="Report sections">
 <a href="#vulnerabilities">Vulnerabilities</a>
 <a href="#security">Security</a>
@@ -121,6 +137,14 @@ ${advisoryCorpusFooter()}
 /** Empty mount. A later change can fill this with a collapsible footer. */
 function advisoryCorpusFooter(): string {
   return `<div id="${ADVISORY_CORPUS_FOOTER_ID}" hidden></div>`;
+}
+
+/**
+ * Unchecked local filter. The style rule hides `data-fix-available="no"`
+ * rows only after the reader checks the box. Markup of the rows stays put.
+ */
+function fixAvailableOnlyControl(): string {
+  return `<p id="${FIX_AVAILABLE_FILTER_ID}"><label for="${FIX_AVAILABLE_ONLY_ID}"><input type="checkbox" id="${FIX_AVAILABLE_ONLY_ID}"> Fix available only</label></p>`;
 }
 
 function vulnerabilityEvaluated(artifact: ScanArtifact, vulnFindings: Finding[]): boolean {
