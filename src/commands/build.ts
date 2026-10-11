@@ -27,7 +27,7 @@ import { UnsafeRootError } from '../core-open/utils/root-safety.js';
 import { CliError, ExitCode, usageError } from '../util/exit.js';
 import { resolveSelfJsEntry } from '../util/cli-invocation.js';
 import { c, info, out, json } from '../util/output.js';
-import { formatWarningLine } from '../core-open/warnings.js';
+import { formatCoalescedPlainLines, formatCoalescedWarningLines } from '../core-open/warnings.js';
 import { printLogo } from '../util/logo.js';
 import { ProgressBar } from '../util/progress.js';
 import { applyGlobalOptions, readGlobal, type GlobalOpts } from '../cli-options.js';
@@ -344,12 +344,13 @@ export async function runBuild(
     .join('  ');
   info(`  → ${artifactList}`);
   if (result.warnings.length) {
-    for (const warning of result.codedWarnings) {
-      info(c.yellow(`  ${formatWarningLine(warning)}`));
+    for (const line of formatCoalescedWarningLines(result.codedWarnings)) {
+      info(c.yellow(`  ${line}`));
     }
     const stamped = new Set(result.codedWarnings.map((warning) => `${warning.message} [${warning.code}]`));
-    for (const line of result.warnings) {
-      if (!stamped.has(line)) info(c.yellow(`  warning: ${line}`));
+    const plain = result.warnings.filter((line) => !stamped.has(line));
+    for (const line of formatCoalescedPlainLines(plain)) {
+      info(c.yellow(`  ${line}`));
     }
     info(c.yellow(`  ${result.warnings.length} parse warning(s) — run with --json for detail`));
   }

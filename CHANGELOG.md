@@ -14,6 +14,8 @@ backward compatible.
 
 ### Changed
 
+- **Identical degrade warnings collapse on stderr.** When many files hit the same warning code and the same reason, human output from `vg build`, `vg scan`, `vg report`, and `vg sbom` prints one line with the count and up to five repo-relative paths, sorted. `vg build --json`, scan `degradations`, and SARIF still list every event. A warning that applies to one file is unchanged. (#312)
+
 - **Machine-readable output drops absolute home-directory paths (#282).**
   JSON, SARIF, and reports rewrite `/Users/<user>/` and `/home/<user>/`
   paths. A path inside the scan or build root is written relative to that

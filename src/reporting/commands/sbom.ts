@@ -10,8 +10,8 @@ import { componentLicense, extractedLicensingInfos, type ComponentLicense } from
 import { vexCommand } from './vex.js';
 import {
   codedWarning,
-  formatWarningLine,
-  sortCodedWarnings,
+  formatCoalescedPlainLines,
+  formatCoalescedWarningLines,
   WARNING_CODES,
   type CodedWarning,
   type WarningCode,
@@ -1104,11 +1104,11 @@ const exportCommand = new Command('export')
       if (code) coded.push(codedWarning(code, warning));
       else plain.push(warning);
     }
-    for (const warning of sortCodedWarnings(coded)) {
-      console.error(chalk.yellow(formatWarningLine(warning)));
+    for (const line of formatCoalescedWarningLines(coded)) {
+      console.error(chalk.yellow(line));
     }
-    for (const warning of plain) {
-      console.error(chalk.yellow(`warning: ${warning}`));
+    for (const line of formatCoalescedPlainLines(plain)) {
+      console.error(chalk.yellow(line));
     }
     const body = JSON.stringify(sbom, null, 2);
 

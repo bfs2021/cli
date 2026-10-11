@@ -58,7 +58,7 @@ import type {
 } from './types.js';
 import {
   codedWarning,
-  formatWarningLine,
+  formatCoalescedWarningLines,
   sortCodedWarnings,
   warningPathLabel,
   WARNING_CODES,
@@ -874,8 +874,8 @@ export async function runCoreScan(
   const sortedDegradations = sortCodedWarnings(degradations);
   if (sortedDegradations.length > 0) {
     artifact.degradations = sortedDegradations;
-    for (const warning of sortedDegradations) {
-      console.error(chalk.yellow(formatWarningLine(warning)));
+    for (const line of formatCoalescedWarningLines(sortedDegradations)) {
+      console.error(chalk.yellow(line));
     }
   }
 
