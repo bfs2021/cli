@@ -102,13 +102,15 @@ export function buildModuleResolver(root: string, relSet: Set<string>): ModuleRe
 
   function resolveWorkspace(source: string): string | null {
     if (!workspaces.size) return null;
-    // longest package-name match (so @org/a/b prefers @org/a/b over @org/a)
-    let best: { dirRel: string; rest: string } | null = null;
+    // Longest package-name match (`@org/a/b` beats `@org/a`). Compared on the
+    // name, not the directory path: a longer path must not beat a longer name,
+    // and Map iteration order (directory walk order) must not either.
+    // Duplicate bare names are already one directory — see loadWorkspacePackages.
+    let best: { name: string; dirRel: string; rest: string } | null = null;
     for (const [name, dirRel] of workspaces) {
-      if (source === name || source.startsWith(`${name}/`)) {
-        const rest = source === name ? '' : source.slice(name.length + 1);
-        if (!best || name.length > best.dirRel.length) best = { dirRel, rest };
-      }
+      if (source !== name && !source.startsWith(`${name}/`)) continue;
+      const rest = source === name ? '' : source.slice(name.length + 1);
+      if (!best || name.length > best.name.length) best = { name, dirRel, rest };
     }
     if (!best) return null;
     const base = best.rest ? posixJoin(best.dirRel, best.rest) : best.dirRel;
@@ -376,8 +378,55 @@ function readTsconfigChain(root: string, file: string, seen: Set<string>): TsPat
 
 // --- workspaces ---
 
-function loadWorkspacePackages(root: string): Map<string, string> {
+/**
+ * Identity of one workspace package, used when two manifests share a bare name.
+ *
+ * `dirRel` is the repo-relative directory (POSIX). `version` is the
+ * `package.json` version string, or `''` when the field is missing.
+ */
+export interface WorkspacePackageKey {
+  dirRel: string;
+  name: string;
+  version: string;
+}
+
+/**
+ * Content key for workspace packages. Code-unit order, not locale order and
+ * not directory-walk order.
+ *
+ * Path is first because a Package URL such as `pkg:npm/<name>@<version>` is
+ * the same for two copies of one name and version. Name and version still
+ * participate so the key stays complete when those differ and the paths tie.
+ * The smallest key wins a bare-name collision.
+ */
+export function compareWorkspacePackageKey(a: WorkspacePackageKey, b: WorkspacePackageKey): number {
+  return cmpText(a.dirRel, b.dirRel) || cmpText(a.name, b.name) || cmpText(a.version, b.version);
+}
+
+/** Code-unit order. `localeCompare` would follow the process locale. */
+function cmpText(a: string, b: string): number {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+}
+
+/**
+ * One directory per bare package name. Input order is irrelevant: candidates
+ * are sorted by {@link compareWorkspacePackageKey} and the first copy of each
+ * name is kept. Later copies (a different walk, or the same name declared
+ * twice) do not replace it.
+ */
+export function workspaceDirsByName(packages: readonly WorkspacePackageKey[]): Map<string, string> {
+  const sorted = [...packages].sort(compareWorkspacePackageKey);
   const map = new Map<string, string>();
+  for (const pkg of sorted) {
+    if (!pkg.name || map.has(pkg.name)) continue;
+    map.set(pkg.name, pkg.dirRel);
+  }
+  return map;
+}
+
+function loadWorkspacePackages(root: string): Map<string, string> {
   const globs: string[] = [];
 
   const rootPkg = path.join(root, 'package.json');
@@ -398,16 +447,21 @@ function loadWorkspacePackages(root: string): Map<string, string> {
     }
   }
 
+  const candidates: WorkspacePackageKey[] = [];
   for (const dir of expandWorkspaceGlobs(root, globs)) {
     const pj = path.join(dir, 'package.json');
     try {
-      const name = (JSON.parse(fs.readFileSync(pj, 'utf8')) as { name?: string }).name;
-      if (name) map.set(name, path.relative(root, dir).split(path.sep).join('/'));
+      const manifest = JSON.parse(fs.readFileSync(pj, 'utf8')) as { name?: unknown; version?: unknown };
+      const name = typeof manifest.name === 'string' ? manifest.name : '';
+      if (!name) continue;
+      const version = typeof manifest.version === 'string' ? manifest.version : '';
+      const dirRel = path.relative(root, dir).split(path.sep).join('/');
+      candidates.push({ dirRel, name, version });
     } catch {
-      /* ignore */
+      /* unreadable manifest — skip */
     }
   }
-  return map;
+  return workspaceDirsByName(candidates);
 }
 
 /** Resolve simple workspace globs (`packages/*`, `apps/*`, `libs/**`) to dirs containing package.json. */
@@ -424,7 +478,10 @@ function expandWorkspaceGlobs(root: string, globs: string[]): string[] {
     }
     collectPackageDirs(baseDir, recurse ? 4 : 1, out);
   }
-  return [...out];
+  // Absolute paths under one root sort the same as repo-relative paths.
+  // The collision winner is chosen later; this only keeps the list itself
+  // off filesystem enumeration order.
+  return [...out].sort(cmpText);
 }
 
 function collectPackageDirs(dir: string, depth: number, out: Set<string>): void {

@@ -42,6 +42,8 @@ backward compatible.
 
 ### Fixed
 
+- **Workspace imports of a duplicated package name stay on one directory.** When two workspace manifests declare the same bare name, `vg build` resolves that name to the copy with the smallest content key: repo-relative path, then name, then the version string. A later path does not win because the directory walk reached it last, and a higher version does not override a smaller path. Dependency edges in `graph.json` for that import stay put across runs. (#307)
+
 - **A key or value `vg` does not accept in `driftBudget` or `review` stops the command.**
   A misspelt key, a value of the wrong type, or a `driftBudget` that sets no
   limit exits with an error. The error names the file and, when the file makes
