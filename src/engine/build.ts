@@ -52,6 +52,7 @@ import type { ResolveResult } from './resolve.js';
 import { fileRolesFromParses } from './ast-roles.js';
 import type { AstRoleHit } from '../core-open/scanners/architecture/ast-roles.js';
 import { stampWarning, WARNING_CODES, type CodedWarning } from '../core-open/warnings.js';
+import { collapseNonTextWarnings, inspectUtf8 } from '../core-open/utils/text-bytes.js';
 import { isParseFailureWarning } from './parse-warning.js';
 import { assembleEngineWarnings } from './warning-codes.js';
 
@@ -211,6 +212,17 @@ export async function buildGraph(options: BuildOptions): Promise<BuildResult> {
   const toParse: DiscoveredFile[] = [];
   const reused: FileParse[] = [];
   const buildWarnings: string[] = [];
+  // A binary `.gitignore` contributes no rules. Say so once, with the path
+  // only — the bytes are not ignore syntax and must not be echoed.
+  try {
+    const gitignorePath = path.join(root, '.gitignore');
+    if (fs.existsSync(gitignorePath)) {
+      const inspected = inspectUtf8(fs.readFileSync(gitignorePath));
+      if (!inspected.ok) buildWarnings.push(stampWarning(WARNING_CODES.NON_TEXT_FILE, '.gitignore'));
+    }
+  } catch {
+    // Unreadable .gitignore: discover already continued without its rules.
+  }
   /** Files skipped for size — in fileStats under a sentinel hash, never in the manifest. */
   const oversizeRels = new Set<string>();
   let statHits = 0;
@@ -278,13 +290,21 @@ export async function buildGraph(options: BuildOptions): Promise<BuildResult> {
     for (const p of pendingHash) {
       const r = byRel.get(p.file.rel);
       if (!r || !r.ok) continue;
-      hashes.set(p.file.rel, r.hash);
       fileStats.push({
         rel: p.file.rel,
         size: p.size,
         mtimeMs: p.mtimeMs,
         hash: r.hash,
       });
+      // Binary and non-UTF-8 files stay in the freshness snapshot (so a
+      // probe does not report them as newly added) but are not parsed and
+      // are not handed to the TypeScript program. `hashes` is the parsed
+      // corpus; leaving them out is what keeps tsc from opening the bytes.
+      if (r.nonText) {
+        buildWarnings.push(stampWarning(WARNING_CODES.NON_TEXT_FILE, p.file.rel));
+        continue;
+      }
+      hashes.set(p.file.rel, r.hash);
       const cached = cache.get(p.file.rel, r.hash, p.file.lang.id);
       if (cached) {
         reused.push(cached);
@@ -342,6 +362,7 @@ export async function buildGraph(options: BuildOptions): Promise<BuildResult> {
     exclude,
     paths: options.paths,
   });
+  for (const rel of manifests.skippedNonText) warnings.push(stampWarning(WARNING_CODES.NON_TEXT_FILE, rel));
   const rootIdentityWarning = rootPackageIdentityMessage(readRootPackageIdentity(root));
   if (rootIdentityWarning) {
     warnings.push(stampWarning(WARNING_CODES.ROOT_PACKAGE_IDENTITY, rootIdentityWarning));
@@ -535,7 +556,9 @@ export async function buildGraph(options: BuildOptions): Promise<BuildResult> {
       /* skip unreadable docs */
     }
   }
-  const docNodes = documentNodesFromDocs(docs);
+  const skippedDocs: string[] = [];
+  const docNodes = documentNodesFromDocs(docs, skippedDocs);
+  for (const rel of skippedDocs) warnings.push(stampWarning(WARNING_CODES.NON_TEXT_FILE, rel));
   if (docNodes.length) nodes = [...nodes, ...docNodes];
 
   // Structural extraction over the same discovered set (engine/toolchain/).
@@ -682,7 +705,7 @@ export async function buildGraph(options: BuildOptions): Promise<BuildResult> {
 
   timer.end('total');
   const stages = timer.snapshot();
-  const assembled = assembleEngineWarnings(warnings);
+  const assembled = assembleEngineWarnings(collapseNonTextWarnings(warnings));
 
   return {
     graph,
