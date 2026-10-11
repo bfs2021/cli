@@ -9,19 +9,22 @@ import type { Finding, ScanArtifact } from '../types.js';
  * Pure function of the artifact: stable sorts, no clock, no randomness, no
  * network, no external assets. Artifact strings are redacted, then escaped.
  *
- * Stable ids: `#summary`, `#vulnerabilities`, `#security`, `#findings`.
+ * Stable ids: `#summary`, `#vulnerabilities`, `#security`, `#findings`,
+ * `#advisory-corpus`.
  *
- * Two extension points, unused today:
- * - Rows carry {@link FIX_AVAILABLE_ATTR} so a client-side "fix available
- *   only" filter can be added without changing the row model.
- * - {@link advisoryCorpusFooter} emits an empty `#advisory-corpus` mount for
- *   a later collapsible advisory-corpus metadata footer.
+ * Rows carry {@link FIX_AVAILABLE_ATTR} so a client-side "fix available
+ * only" filter can be added without changing the row model.
+ * {@link advisoryCorpusFooter} is a collapsed footer after the finding
+ * tables. It records advisory-database provenance already stored on
+ * `extended.vulnerabilities`: `source` (online OSV, offline manifest,
+ * unreachable, or none), advisory count, affected-package count, and
+ * severity counts. The artifact has no separate corpus-version field.
  */
 
 /** Row attribute a later "fix available only" filter can select on. */
 export const FIX_AVAILABLE_ATTR = 'data-fix-available';
 
-/** Element id reserved for a later advisory-corpus metadata footer. */
+/** Collapsed footer id for advisory-database provenance. */
 export const ADVISORY_CORPUS_FOOTER_ID = 'advisory-corpus';
 
 const VULN_RULE_ID = 'vibgrate/vulnerability';
@@ -75,6 +78,8 @@ export function formatHtmlReport(artifact: ScanArtifact): string {
   nav a { margin-right: 1rem; }
   a { color: inherit; }
   .absent { font-style: italic; }
+  #${ADVISORY_CORPUS_FOOTER_ID} { margin-top: 2.5rem; }
+  #${ADVISORY_CORPUS_FOOTER_ID} summary { font-weight: 600; }
 </style>
 </head>
 <body>
@@ -98,6 +103,7 @@ ${fix === null ? '' : `<p id="fix-available">Fix available: ${fix}</p>\n`}
 <a href="#vulnerabilities">Vulnerabilities</a>
 <a href="#security">Security</a>
 <a href="#findings">Findings</a>
+<a href="#${ADVISORY_CORPUS_FOOTER_ID}">Advisory data</a>
 </nav>
 </section>
 <section id="vulnerabilities">
@@ -112,15 +118,44 @@ ${securityEvaluated ? renderSecurityTable(securityRows) : '<p class="absent">Not
 <h2>Findings</h2>
 ${renderFindingTable(otherRows)}
 </section>
-${advisoryCorpusFooter()}
+${advisoryCorpusFooter(artifact)}
 </body>
 </html>
 `;
 }
 
-/** Empty mount. A later change can fill this with a collapsible footer. */
-function advisoryCorpusFooter(): string {
-  return `<div id="${ADVISORY_CORPUS_FOOTER_ID}" hidden></div>`;
+/**
+ * Collapsed provenance for the vulnerability database. Counts are a result
+ * only when `source` is not `unreachable` — a zero there would read as clean.
+ * Severity order is fixed, so object key order cannot change the bytes.
+ */
+function advisoryCorpusFooter(artifact: ScanArtifact): string {
+  const vulns = artifact.extended?.vulnerabilities;
+  const open = `<details id="${ADVISORY_CORPUS_FOOTER_ID}">\n<summary>Advisory data</summary>\n`;
+  if (!vulns) {
+    return `${open}<p class="absent">Not scanned</p>\n</details>`;
+  }
+  const rows = [`<dt>Source</dt><dd>${sourceText(vulns.source)}</dd>`];
+  if (vulns.source !== 'unreachable') {
+    rows.push(`<dt>Advisories</dt><dd>${scoreText(vulns.totalAdvisories)}</dd>`);
+    const packageCount = Array.isArray(vulns.packages) ? vulns.packages.length : undefined;
+    rows.push(`<dt>Packages</dt><dd>${scoreText(packageCount)}</dd>`);
+    rows.push(`<dt>Severity</dt><dd>${severityLine(vulns.severityCounts)}</dd>`);
+  }
+  return `${open}<dl>\n${rows.join('\n')}\n</dl>\n</details>`;
+}
+
+function sourceText(value: unknown): string {
+  if (typeof value !== 'string' || value.trim() === '') return 'n/a';
+  return text(value.trim());
+}
+
+/** Fixed severity order. A missing count is `n/a`, never a fabricated zero. */
+function severityLine(counts: unknown): string {
+  const record = counts && typeof counts === 'object' && !Array.isArray(counts)
+    ? counts as Record<string, unknown>
+    : {};
+  return VULN_SEVERITIES.map((name) => `${name} ${scoreText(record[name])}`).join(', ');
 }
 
 function vulnerabilityEvaluated(artifact: ScanArtifact, vulnFindings: Finding[]): boolean {

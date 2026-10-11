@@ -501,6 +501,7 @@ external files. The page opens with a summary:
 - Counts by severity for vulnerability findings and for security findings. A check that did not run stays "Not scanned" rather than a row of zeros. A check that finished with nothing to report shows zeros.
 - When a finding carries `details.fixedVersions`, how many of those findings name a fix.
 - Links to the full tables under the summary: vulnerabilities, security findings, and the other findings.
+- Advisory-database provenance is a collapsed footer after those tables (`#advisory-corpus`), not a banner above the findings. It reads `extended.vulnerabilities`: `source` (`osv`, `manifest`, `unreachable`, or `none`), `totalAdvisories`, how many `packages` are listed, and `severityCounts` (critical, high, moderate, low, unknown). The scan artifact does not store a separate corpus version; `source` is the recorded database (online OSV, or an offline package-version manifest). A missing vulnerability block says "Not scanned". `source: "unreachable"` does not print zero counts.
 
 The same artifact always produces the same page. Save it with a shell redirect:
 
@@ -596,7 +597,7 @@ When set:
 
 ##### HTML (`formatHtmlReport`)
 
-`vg report --format html` writes one self-contained page from the same artifact. It does not call the network and does not load external files. The page opens with the summary listed above (DriftScore, severity counts, a fix-available count when a finding carries `details.fixedVersions`, and links to the tables), then the full vulnerability, security, and other-finding tables. A check that did not run stays "Not scanned". A missing score is `n/a`. The same artifact always produces the same page.
+`vg report --format html` writes one self-contained page from the same artifact. It does not call the network and does not load external files. The page opens with the summary listed above (DriftScore, severity counts, a fix-available count when a finding carries `details.fixedVersions`, and links to the tables), then the full vulnerability, security, and other-finding tables. Advisory-database provenance is the collapsed `#advisory-corpus` footer after those tables: `extended.vulnerabilities.source`, the advisory count, the affected-package count, and severity counts. A check that did not run stays "Not scanned". A missing score is `n/a`. The same artifact always produces the same page.
 
 ##### Differences
 
@@ -609,7 +610,7 @@ When set:
 - DriftScore: Markdown puts the lower-is-better gloss in the opening cell. Text puts the score in **DriftScore Summary** without that gloss.
 - VCS: Markdown uses separate VCS, Branch, and Commit rows, and Commit requires `vcs.sha`. Text uses one line and can show `shortSha` without requiring `sha`.
 - Runtime wording: Markdown always says `major(s)`. Text says `major` or `majors`.
-- HTML is the browser page: the summary above, then the vulnerability, security, and other-finding tables. It does not print Markdown's recommended-standards section or the text inventory.
+- HTML is the browser page: the summary above, then the vulnerability, security, and other-finding tables, then the collapsed `#advisory-corpus` footer for advisory-database provenance. It does not print Markdown's recommended-standards section or the text inventory.
 
 ##### JSON
 
