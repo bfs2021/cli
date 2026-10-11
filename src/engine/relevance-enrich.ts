@@ -39,6 +39,7 @@
  * pure-JS msgpackr, fresh Packr per encode/decode — no platform variance.
  */
 import * as fs from 'node:fs';
+import { writeAtomicSync } from '../util/atomic-file.js';
 import * as path from 'node:path';
 import * as zlib from 'node:zlib';
 import { Packr } from 'msgpackr';
@@ -112,10 +113,7 @@ function writeSidecar(file: string, meta: { provider: string; corpusHash: string
     } satisfies TagsHeader);
     const lenBuf = Buffer.alloc(4);
     lenBuf.writeUInt32LE(header.length);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    const tmp = `${file}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, Buffer.concat([MAGIC, lenBuf, Buffer.from(header), Buffer.from(payload)]));
-    fs.renameSync(tmp, file);
+    writeAtomicSync(file, Buffer.concat([MAGIC, lenBuf, Buffer.from(header), Buffer.from(payload)]));
   } catch {
     // Best-effort: a full disk or read-only store never fails a query.
   }

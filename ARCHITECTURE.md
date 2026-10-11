@@ -106,6 +106,12 @@ meaningful.
 - **No ambient nondeterminism** — no `Date.now()`, no unseeded `Math.random()`
   (use `engine/rng.ts`), and no reliance on filesystem enumeration order
   (`engine/discover.ts` sorts).
+- **Atomic artifact writes** — files under `.vibgrate/` and user-requested
+  outputs are written to a temp in the same directory (`util/atomic-file.ts`)
+  and renamed into place. An interrupted run cannot truncate the previous
+  file. The next write removes leftover `.vg-partial.*` temps in that
+  directory, sorted by name, and does not touch other names. Temp names are
+  not part of the artifact bytes.
 - **Parallel but ordered** — the worker pool (`engine/pool.ts` +
   `engine/parse-worker.ts`) parses files concurrently for speed, then results are
   re-ordered deterministically before they enter the graph.

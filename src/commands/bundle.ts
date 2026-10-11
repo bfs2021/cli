@@ -14,6 +14,7 @@ import { VERSION } from '../version.js';
 import { applyGlobalOptions, readGlobal } from '../cli-options.js';
 import { rootOf } from './util.js';
 import { CliError, ExitCode } from '../util/exit.js';
+import { writeAtomicSync } from '../util/atomic-file.js';
 import { c, info, json } from '../util/output.js';
 
 /**
@@ -67,19 +68,19 @@ export function registerBundle(program: Command): void {
       // global store holds only that (store-mode builds skip the JSON write).
       const graphSrc = resolveGraphPath(root, global.graph);
       if (fs.existsSync(graphSrc)) {
-        fs.copyFileSync(graphSrc, path.join(outDir, 'graph.json'));
+        writeAtomicSync(path.join(outDir, 'graph.json'), fs.readFileSync(graphSrc));
         included.push('graph.json');
       } else {
         const graph = loadGraphFileWithSnapshot(graphSrc);
         if (graph) {
-          fs.writeFileSync(path.join(outDir, 'graph.json'), serializeGraph(graph));
+          writeAtomicSync(path.join(outDir, 'graph.json'), serializeGraph(graph));
           included.push('graph.json');
         }
       }
 
       const cat = catalogPath(root);
       if (fs.existsSync(cat)) {
-        fs.copyFileSync(cat, path.join(outDir, 'vibgrate.lib.json'));
+        writeAtomicSync(path.join(outDir, 'vibgrate.lib.json'), fs.readFileSync(cat));
         included.push('vibgrate.lib.json');
         if (fs.existsSync(libDir(root))) {
           fs.cpSync(libDir(root), path.join(outDir, 'lib'), { recursive: true });
@@ -95,7 +96,7 @@ export function registerBundle(program: Command): void {
         included,
         usage: 'Run `vg build --grammars <this dir>/grammars` to build fully offline.',
       };
-      fs.writeFileSync(path.join(outDir, 'MANIFEST.json'), `${stableStringify(manifest, 2)}\n`);
+      writeAtomicSync(path.join(outDir, 'MANIFEST.json'), `${stableStringify(manifest, 2)}\n`);
 
       if (global.json) {
         json({ out: path.relative(root, outDir), ...manifest });

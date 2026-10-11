@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { writeAtomicSync } from '../util/atomic-file.js';
 import { stableStringify } from './serialize.js';
 import type { CasStore } from './cas.js';
 import type { FileParse } from './types.js';
@@ -140,8 +141,7 @@ export function loadCache(
         .map((rel) => data.entries[rel]!.parse);
     },
     save() {
-      fs.mkdirSync(cacheDir(root), { recursive: true });
-      fs.writeFileSync(file, stableStringify(data, 0));
+      writeAtomicSync(file, stableStringify(data, 0));
     },
   };
 }

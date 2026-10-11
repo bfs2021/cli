@@ -1,4 +1,3 @@
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Command } from 'commander';
 import { exportGraph, formatForExt, type ExportFormat } from '../engine/export.js';
@@ -7,6 +6,7 @@ import { discoverModels } from '../engine/models.js';
 import { applyGlobalOptions, readGlobal } from '../cli-options.js';
 import { requireGraph, rootOf } from './util.js';
 import { usageError } from '../util/exit.js';
+import { writeAtomicSync } from '../util/atomic-file.js';
 import { c, info, out } from '../util/output.js';
 
 /**
@@ -48,8 +48,7 @@ export function registerExport(program: Command): void {
         out(content.trimEnd());
         return;
       }
-      fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
-      fs.writeFileSync(file, content);
+      writeAtomicSync(path.resolve(file), content);
       info(`${c.green('✔')} wrote ${file} ${c.dim(`(${format})`)}`);
     });
   applyGlobalOptions(cmd);

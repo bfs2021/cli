@@ -8,6 +8,7 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { writeAtomicSync } from '../../../util/atomic-file.js';
 import { codecFor, sortKeys, type FlatCatalog } from './formats.js';
 
 export const PATH_TOKENS = ['{language}', '{namespace}'] as const;
@@ -96,8 +97,7 @@ export function writeCatalog(
   const changed = existing !== encoded;
 
   if (changed && !opts.dryRun) {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, encoded, 'utf8');
+    writeAtomicSync(file, encoded);
   }
 
   return { file, changed, bytes: Buffer.byteLength(encoded, 'utf8') };

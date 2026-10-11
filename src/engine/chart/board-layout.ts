@@ -4,6 +4,7 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { writeAtomicSync } from '../../util/atomic-file.js';
 
 export const BOARD_LAYOUT_MAGIC = 'vg.arch.board.v1' as const;
 export const BOARD_LAYOUT_FILE = 'board.arch.json';
@@ -81,10 +82,10 @@ export function readBoardLayout(root: string): ArchBoardLayout | null {
 
 export function writeBoardLayout(root: string, layout: ArchBoardLayout): ArchBoardLayout {
   const clean = parseBoardLayout(layout) ?? defaultBoardLayout();
-  const dir = path.dirname(boardLayoutPath(root));
-  fs.mkdirSync(dir, { recursive: true });
-  const tmp = boardLayoutPath(root) + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(clean, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
-  fs.renameSync(tmp, boardLayoutPath(root));
+  const file = boardLayoutPath(root);
+  writeAtomicSync(file, JSON.stringify(clean, null, 2) + '\n', {
+    mode: 0o600,
+    legacyTempNames: [`${path.basename(file)}.tmp`],
+  });
   return clean;
 }

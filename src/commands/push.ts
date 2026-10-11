@@ -1,5 +1,5 @@
-import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { writeAtomicSync } from '../util/atomic-file.js';
 import { Command } from 'commander';
 import { buildEnvelope } from '../engine/push.js';
 import { stableStringify } from '../engine/serialize.js';
@@ -26,8 +26,7 @@ export function registerPush(program: Command): void {
       const envelope = buildEnvelope(root, graph, opts.scanIngestId);
 
       if (opts.out) {
-        fs.mkdirSync(path.dirname(path.resolve(opts.out)), { recursive: true });
-        fs.writeFileSync(opts.out, `${stableStringify(envelope, 2)}\n`);
+        writeAtomicSync(path.resolve(opts.out), `${stableStringify(envelope, 2)}\n`);
         info(`${c.green('✔')} wrote redacted envelope → ${opts.out}`);
       }
 

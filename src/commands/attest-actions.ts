@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { writeAtomicSync } from '../util/atomic-file.js';
 import * as crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { loadGraph } from '../engine/load.js';
@@ -62,9 +63,8 @@ export async function signGraphAttestation(
     // First use with no key: mint one at the default path (loud — it must be kept
     // and gitignored to re-sign reproducibly).
     const kp = generateKeypair();
-    fs.mkdirSync(path.dirname(keyPath), { recursive: true });
-    fs.writeFileSync(keyPath, kp.privatePem, { mode: 0o600 });
-    fs.writeFileSync(`${keyPath}.pub`, kp.publicPem);
+    writeAtomicSync(keyPath, kp.privatePem, { mode: 0o600 });
+    writeAtomicSync(`${keyPath}.pub`, kp.publicPem);
     keyGeneratedAt = keyPath;
     notices.push(
       `minted a new Ed25519 signing key at ${rel(root, keyPath)} (keyid ${kp.keyid}) — ` +

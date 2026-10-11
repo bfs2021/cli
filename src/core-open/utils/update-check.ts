@@ -5,6 +5,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import semver from 'semver';
+import { writeAtomic } from '../../util/atomic-file.js';
 import { VERSION } from '../version.js';
 
 const REGISTRY_URL = 'https://registry.npmjs.org/@vibgrate%2fcli/latest';
@@ -122,8 +123,7 @@ async function readCache(): Promise<CachedCheck | null> {
 
 async function writeCache(data: CachedCheck): Promise<void> {
   try {
-    await fs.mkdir(CACHE_DIR, { recursive: true });
-    await fs.writeFile(CACHE_FILE, JSON.stringify(data), 'utf-8');
+    await writeAtomic(CACHE_FILE, JSON.stringify(data));
   } catch {
     // Non-critical — silently ignore cache write failures
   }

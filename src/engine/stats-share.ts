@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { writeAtomicSync } from '../util/atomic-file.js';
 import { cacheDir } from './cache.js';
 import { VERSION } from '../version.js';
 import { resolveIngestHost } from '../reporting/regions.js';
@@ -120,8 +121,7 @@ export function installId(env: NodeJS.ProcessEnv = process.env): string {
   }
   const id = randomUuid();
   try {
-    fs.mkdirSync(INSTALL_ID_DIR, { recursive: true });
-    fs.writeFileSync(INSTALL_ID_FILE, id + '\n', { mode: 0o600 });
+    writeAtomicSync(INSTALL_ID_FILE, id + '\n', { mode: 0o600 });
   } catch {
     /* home dir read-only — use the ephemeral id for this process */
   }
@@ -162,8 +162,7 @@ function readOffset(root: string): number {
 
 function writeOffset(root: string, offset: number): void {
   try {
-    fs.mkdirSync(cacheDir(root), { recursive: true });
-    fs.writeFileSync(offsetPath(root), JSON.stringify({ offset }) + '\n');
+    writeAtomicSync(offsetPath(root), JSON.stringify({ offset }) + '\n');
   } catch {
     /* best-effort; a lost offset just means one batch may re-send */
   }

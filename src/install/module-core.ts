@@ -15,6 +15,7 @@
  * haile-module.ts) — this file is mechanism only.
  */
 import * as fs from 'node:fs';
+import { writeAtomicSync } from '../util/atomic-file.js';
 import { redactForDisplay } from '../core-open/utils/redact.js';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -83,8 +84,7 @@ export function readConsent(): ConsentState {
 
 export function writeConsent(state: ConsentState): void {
   try {
-    fs.mkdirSync(path.dirname(stateFile()), { recursive: true });
-    fs.writeFileSync(stateFile(), JSON.stringify(state));
+    writeAtomicSync(stateFile(), JSON.stringify(state));
   } catch {
     /* consent persistence is best-effort */
   }
@@ -150,7 +150,7 @@ export function ensureModuleEsmPackageJson(moduleDir: string): void {
     const body: Record<string, unknown> = { private: true, type: 'module' };
     if (name) body.name = name;
     if (version) body.version = version;
-    fs.writeFileSync(pkgPath, `${JSON.stringify(body)}\n`);
+    writeAtomicSync(pkgPath, `${JSON.stringify(body)}\n`);
   } catch {
     /* best-effort: a missing marker is a Node warning, not a failed command */
   }
@@ -275,15 +275,14 @@ export async function installModule(mod: ModuleDescriptor, opts: InstallOptions 
       if (!rel) continue;
       const target = path.join(dir, rel);
       if (!target.startsWith(dir + path.sep) && target !== dir) throw new Error(`unsafe extract path: ${rel}`);
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, e.body);
+      writeAtomicSync(target, e.body);
       wrote += 1;
     }
     if (!wrote || !fs.existsSync(path.join(dir, 'index.js'))) {
       fs.rmSync(dir, { recursive: true, force: true });
       return { status: 'unavailable', detail: 'package layout not recognized (no dist/index.js)' };
     }
-    fs.writeFileSync(path.join(dir, '.module.json'), JSON.stringify({ name: mod.npmName, version }));
+    writeAtomicSync(path.join(dir, '.module.json'), JSON.stringify({ name: mod.npmName, version }));
     ensureModuleEsmPackageJson(dir);
     mod.onChanged?.();
     return { status: 'installed', version };

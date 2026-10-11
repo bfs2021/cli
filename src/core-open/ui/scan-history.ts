@@ -3,6 +3,7 @@
 // and re-run the vendor script. Apache-2.0.
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { writeAtomic } from '../../util/atomic-file.js';
 
 // ── Scan history for ETA estimation ──
 
@@ -80,8 +81,7 @@ export async function saveScanHistory(
   }
 
   try {
-    await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(filePath, JSON.stringify(history, null, 2) + '\n', 'utf8');
+    await writeAtomic(filePath, JSON.stringify(history, null, 2) + '\n');
   } catch {
     // Non-fatal — history is best-effort
   }

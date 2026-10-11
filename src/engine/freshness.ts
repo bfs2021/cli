@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import { writeAtomicSync } from '../util/atomic-file.js';
 import * as path from 'node:path';
 import { discover, mergeExcludes } from './discover.js';
 import { discoverDocs } from './docs-ingest.js';
@@ -80,8 +81,7 @@ export function writeSnapshot(
   for (const f of fileStats) files[f.rel] = { size: f.size, mtimeMs: f.mtimeMs, hash: f.hash };
   const snapshot: SnapshotFile = { version: SNAPSHOT_VERSION, corpusHash, scope: pruneScope(scope), files };
   try {
-    fs.mkdirSync(cacheDir(root), { recursive: true });
-    fs.writeFileSync(snapshotPath(root), stableStringify(snapshot, 0));
+    writeAtomicSync(snapshotPath(root), stableStringify(snapshot, 0));
   } catch {
     /* read-only checkout etc. — freshness just stays unavailable */
   }
@@ -197,7 +197,7 @@ export function probeFreshness(root: string): ProbeResult | null {
   // triggers a rebuild that rewrites the snapshot wholesale anyway.
   if (absorbed && !hasDrift(drift)) {
     try {
-      fs.writeFileSync(snapshotPath(root), stableStringify(snapshot, 0));
+      writeAtomicSync(snapshotPath(root), stableStringify(snapshot, 0));
     } catch {
       /* best-effort */
     }

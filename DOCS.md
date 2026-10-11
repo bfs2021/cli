@@ -2767,6 +2767,8 @@ Maps source code into a graph artifact, enabling all downstream queries (`vg sho
 
 **Local by default — no git churn.** The first time vg writes into `.vibgrate/` it also creates `.vibgrate/.gitignore`, keeping the graph artifacts (`graph.json`, `graph.html`, `GRAPH_REPORT.md`, `facts.jsonl`, `mcp-navigation.json`) and the cache out of git — so builds, auto-refreshes, and MCP use never leave your branch dirty. Run `vg share` when you want the map committed for your team (it rewrites that ignore file). vg never touches an existing `.vibgrate/.gitignore`, so edit it (or leave it empty) to manage the ignores yourself.
 
+**Interrupted runs leave the previous file.** `vg` writes those artifacts, and any file you name with `--out`, to a temporary file in the same directory and then renames it into place. Stopping a run (Ctrl-C, a CI timeout, an out-of-memory kill) does not replace `graph.json`, `baseline.json`, `scan_result.json`, a report, or an SBOM with a partial file. The previous file stays as it was and can still be parsed. The next run deletes leftover temps named `.vg-partial.*` in that directory, in sorted order, and does not delete anything else. If a write fails, the message names the file and the reason (permission denied, disk full, and so on) and tells you to check the path and permissions, free disk space if it is full, then re-run the command. A finished run still writes the same bytes it did before.
+
 Maven `import` edges, and the Gradle files that stay document nodes, are in [Maven and Gradle manifests](#maven-and-gradle-manifests). How a GitHub Actions `uses:` pin is copied into the map: [Action pins in the code map](./docs/ci/github-actions.md#action-pins-in-the-code-map).
 
 #### Sign and check the map

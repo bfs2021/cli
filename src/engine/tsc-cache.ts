@@ -2,6 +2,7 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import ts from 'typescript';
+import { writeAtomicSync } from '../util/atomic-file.js';
 import { cacheDir } from './cache.js';
 import { stableStringify } from './serialize.js';
 import type { TsFilePartial } from './ts-resolver.js';
@@ -116,8 +117,7 @@ export function loadTscCache(root: string, opts: { toolVersion: string; disabled
     },
     save() {
       if (opts.disabled) return;
-      fs.mkdirSync(cacheDir(root), { recursive: true });
-      fs.writeFileSync(file, stableStringify(data, 0));
+      writeAtomicSync(file, stableStringify(data, 0));
     },
   };
 }

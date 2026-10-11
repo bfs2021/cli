@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { writeAtomicSync } from '../util/atomic-file.js';
 import { stableStringify } from './serialize.js';
 import { hashString } from './hash.js';
 import { inventory, installedTreeVersion, type DriftInventory } from './drift.js';
@@ -64,7 +65,7 @@ export function loadCatalog(root: string): LibCatalog {
 }
 
 export function saveCatalog(root: string, catalog: LibCatalog): void {
-  fs.writeFileSync(catalogPath(root), `${stableStringify(catalog, 2)}\n`);
+  writeAtomicSync(catalogPath(root), `${stableStringify(catalog, 2)}\n`);
 }
 
 /** Resolve a fuzzy name to a catalog entry (exact id, name, or substring). */
@@ -221,9 +222,8 @@ export async function addLibrary(source: string, opts: AddOptions): Promise<LibE
   const id = libId(name);
   const version = opts.version ?? installedVersion(root, name) ?? '*';
 
-  fs.mkdirSync(libDir(root), { recursive: true });
   const docFileAbs = path.join(libDir(root), `${id}.md`);
-  fs.writeFileSync(docFileAbs, content);
+  writeAtomicSync(docFileAbs, content);
 
   const entry: LibEntry = {
     id,

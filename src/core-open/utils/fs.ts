@@ -18,6 +18,7 @@ import {
   type WalkBudgetState,
 } from './root-safety.js';
 import { emitSkippedSymlinkNotice, rememberSkippedSymlink } from './skipped-symlinks.js';
+import { writeAtomic } from '../../util/atomic-file.js';
 
 
 const execFileAsync = promisify(execFile);
@@ -1157,11 +1158,9 @@ export async function ensureDir(dir: string): Promise<void> {
 }
 
 export async function writeJsonFile(filePath: string, data: unknown): Promise<void> {
-  await ensureDir(path.dirname(filePath));
-  await fs.writeFile(filePath, JSON.stringify(data, null, 2) + '\n', 'utf8');
+  await writeAtomic(filePath, JSON.stringify(data, null, 2) + '\n');
 }
 
 export async function writeTextFile(filePath: string, content: string): Promise<void> {
-  await ensureDir(path.dirname(filePath));
-  await fs.writeFile(filePath, content, 'utf8');
+  await writeAtomic(filePath, content);
 }

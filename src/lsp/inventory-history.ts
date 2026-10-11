@@ -18,6 +18,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { writeAtomicSync } from '../util/atomic-file.js';
 import { ensureVibgrateGitignore } from '../engine/artifacts.js';
 
 export interface InventorySnapshot {
@@ -56,7 +57,7 @@ export function readInventory(root: string): InventorySnapshot | null {
 export function recordInventory(root: string, snap: InventorySnapshot): void {
   try {
     ensureVibgrateGitignore(root);
-    fs.writeFileSync(inventoryPath(root), `${JSON.stringify(snap)}\n`);
+    writeAtomicSync(inventoryPath(root), `${JSON.stringify(snap)}\n`);
   } catch {
     /* best-effort — a read-only workspace just gets no markers next scan */
   }

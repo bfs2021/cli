@@ -14,6 +14,7 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { writeAtomicSync } from '../util/atomic-file.js';
 import { Command } from 'commander';
 import { type HcsEngine, loadHcsEngine, resetHcsEngineCache } from '../engine/hcs-provider.js';
 import { HCS_MODULE_NAME, ensureHcsModule } from '../install/hcs-module.js';
@@ -114,7 +115,7 @@ function writeOutput(outFile: string | undefined, content: string): void {
   const outPath = path.resolve(outFile);
   const dir = path.dirname(outPath);
   if (!fs.existsSync(dir)) throw usageError(`output directory does not exist: ${dir}`);
-  fs.writeFileSync(outPath, content.endsWith('\n') ? content : content + '\n', 'utf-8');
+  writeAtomicSync(outPath, content.endsWith('\n') ? content : content + '\n');
   info(c.dim(`wrote ${outPath}`));
 }
 

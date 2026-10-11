@@ -28,6 +28,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { writeAtomicSync } from '../util/atomic-file.js';
 import type { KeyObject } from 'node:crypto';
 import type { Command } from 'commander';
 import { applyGlobalOptions, readGlobal } from '../cli-options.js';
@@ -205,8 +206,7 @@ export function registerReview(program: Command): void {
         // would mean a CI step that redirects stdout silently gets the document
         // twice, so the terminal gets the human summary instead.
         const target = path.resolve(root, opts.out);
-        fs.mkdirSync(path.dirname(target), { recursive: true });
-        fs.writeFileSync(target, `${rendered}\n`, 'utf8');
+        writeAtomicSync(target, `${rendered}\n`);
         if (!global.quiet) {
           info(formatText(result));
           info(c.dim(`  ${format} written to ${opts.out}`));
@@ -547,7 +547,7 @@ export function registerReview(program: Command): void {
       const emit = (doc: ReviewDoc): void => {
         const text = asJson ? `${JSON.stringify(doc, null, 2)}\n` : renderReviewDocMarkdown(doc);
         if (opts.out) {
-          fs.writeFileSync(path.resolve(mainRoot, opts.out), text);
+          writeAtomicSync(path.resolve(mainRoot, opts.out), text);
           if (!global.quiet) info(c.dim(`  review document written to ${opts.out}`));
         } else {
           out(text.replace(/\n$/, ''));
@@ -1037,7 +1037,7 @@ function writeAgentContext(result: RunReviewResult, opts: ReviewOpts, quiet: boo
     // Only the managed block is ever rewritten, so instructions a human wrote
     // in the same file survive regeneration untouched.
     const existing = fs.existsSync(abs) ? fs.readFileSync(abs, 'utf8') : '';
-    fs.writeFileSync(abs, injectContextBlock(existing, renderContext(input)), 'utf8');
+    writeAtomicSync(abs, injectContextBlock(existing, renderContext(input)));
     if (!quiet) info(c.dim(`  managed review block updated in ${target}`));
   }
 }

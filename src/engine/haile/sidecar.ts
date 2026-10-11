@@ -2,6 +2,7 @@
 
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
+import { writeAtomicSync } from '../../util/atomic-file.js';
 import * as path from 'node:path';
 import type { VgGraph } from '../../schema.js';
 import { ensureModuleEsmPackageJson, kernelDisabled } from '../../install/module-core.js';
@@ -77,10 +78,7 @@ export function serializeSidecar(sidecar: HaileSidecar): string {
 export function writeSidecarDocument(sidecar: HaileSidecar, graphPath: string, dest?: string): string | null {
   try {
     const file = dest ?? haileSidecarPathFor(graphPath);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    const tmp = `${file}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, serializeSidecar(sidecar));
-    fs.renameSync(tmp, file);
+    writeAtomicSync(file, serializeSidecar(sidecar));
     return file;
   } catch {
     return null;

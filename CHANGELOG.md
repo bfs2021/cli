@@ -42,6 +42,16 @@ backward compatible.
 
 ### Fixed
 
+- **Interrupted writes no longer leave a truncated artifact.** Graph, baseline,
+  scan and report outputs, SBOM exports, and the other files `vg` writes under
+  `.vibgrate/` (and files you name with `--out`) are written to a temporary
+  file in the same directory and renamed into place. A killed run leaves the
+  previous file intact and parseable. The next run removes leftover
+  `.vg-partial.*` temps in that directory, and only those, in sorted order.
+  A failed write names the file, why it failed, and to check the path,
+  permissions, and free disk space, then re-run. Successful output bytes are
+  unchanged. (#357)
+
 - **A key or value `vg` does not accept in `driftBudget` or `review` stops the command.**
   A misspelt key, a value of the wrong type, or a `driftBudget` that sets no
   limit exits with an error. The error names the file and, when the file makes

@@ -1,8 +1,8 @@
 // VENDORED from @vibgrate/core-open (packages/vibgrate-core-open) by
 // scripts/vendor-core-open.mjs. Do not edit here — change the source package
 // and re-run the vendor script. Apache-2.0.
-import { writeFileSync, mkdirSync } from 'node:fs';
-import { dirname, basename } from 'node:path';
+import { basename } from 'node:path';
+import { writeAtomicSync } from '../../util/atomic-file.js';
 
 /**
  * Semantic progress-event recorder for the web CLI simulator.
@@ -78,8 +78,7 @@ export class ProgressTrace {
       events: this.events,
     };
     try {
-      mkdirSync(dirname(this.outPath), { recursive: true });
-      writeFileSync(this.outPath, JSON.stringify(doc));
+      writeAtomicSync(this.outPath, JSON.stringify(doc));
     } catch {
       // Tracing must never break a real scan; swallow write errors.
     }

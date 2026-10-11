@@ -2,6 +2,7 @@
 // scripts/vendor-core-open.mjs. Do not edit here — change the source package
 // and re-run the vendor script. Apache-2.0.
 import * as fs from 'node:fs/promises';
+import { writeAtomic } from '../../util/atomic-file.js';
 import * as path from 'node:path';
 import * as semver from 'semver';
 import { XMLParser } from 'fast-xml-parser';
@@ -543,9 +544,8 @@ async function readCache(cacheDir: string): Promise<VersionTimelines | null> {
 
 async function writeCache(cacheDir: string, timelines: VersionTimelines): Promise<void> {
   try {
-    await fs.mkdir(cacheDir, { recursive: true });
     const envelope: CacheEnvelope = { schema: CACHE_SCHEMA, timelines };
-    await fs.writeFile(path.join(cacheDir, CACHE_FILENAME), JSON.stringify(envelope, null, 2));
+    await writeAtomic(path.join(cacheDir, CACHE_FILENAME), JSON.stringify(envelope, null, 2));
   } catch {
     // Caching is best-effort; a read-only or privacy-restricted FS just skips it.
   }

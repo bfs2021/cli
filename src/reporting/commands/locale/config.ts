@@ -8,6 +8,7 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { writeAtomicSync } from '../../../util/atomic-file.js';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 
 export const LOCALE_CONFIG_FILENAMES = ['vibgrate.locale.yaml', '.vibgrate/locale.yaml'] as const;
@@ -97,7 +98,7 @@ export function serializeLocaleConfig(config: LocaleConfig): string {
 export function writeLocaleConfig(cwd: string, config: LocaleConfig, filename?: string): string {
   const target = filename ?? path.join(cwd, LOCALE_CONFIG_FILENAMES[0]);
   fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, serializeLocaleConfig(config), 'utf8');
+  writeAtomicSync(target, serializeLocaleConfig(config));
   return target;
 }
 

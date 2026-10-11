@@ -18,6 +18,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { writeAtomicSync } from '../util/atomic-file.js';
 import { ensureVibgrateGitignore } from '../engine/artifacts.js';
 
 export interface ScoreHistoryEntry {
@@ -112,18 +113,21 @@ export function recordScore(root: string, entry: ScoreHistoryEntry): void {
       }
     }
     const file = historyPath(root);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
     // First writer into .vibgrate/ in this repo creates its .gitignore (create-once,
     // never overwritten) — so this file is protected even when `vg lsp` runs before
     // any `vg scan`/`vg build`/`vg install`.
     ensureVibgrateGitignore(root);
-    fs.appendFileSync(file, `${JSON.stringify(entry)}\n`);
+    // Rewrite the whole file via temp + rename. appendFile would leave a torn
+    // last line if the process died mid-write, and the compaction rewrite used
+    // to truncate the history in place.
+    const prior = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+    writeAtomicSync(file, `${prior}${JSON.stringify(entry)}\n`);
 
     // Bound the file. Rewrite is rare (every ~500 recorded changes).
     const all = readHistory(root);
     if (all.length > MAX_ENTRIES) {
       const kept = all.slice(-KEEP_ENTRIES);
-      fs.writeFileSync(file, kept.map((e) => JSON.stringify(e)).join('\n') + '\n');
+      writeAtomicSync(file, kept.map((e) => JSON.stringify(e)).join('\n') + '\n');
     }
   } catch {
     /* best-effort only */

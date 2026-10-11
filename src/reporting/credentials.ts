@@ -21,6 +21,7 @@
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import { writeAtomicSync } from '../util/atomic-file.js';
 import { findGitRoot } from './utils/gitignore.js';
 
 export interface StoredCredentials {
@@ -111,16 +112,9 @@ export function writeStoredCredentials(
   opts: CredentialsLocationOpts = {},
 ): void {
   const file = credentialsPath(opts);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  // Created 0600 from the first byte — a default-umask write would leave the
-  // token world-readable until the later chmod lands.
-  fs.writeFileSync(file, JSON.stringify(creds, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
-  // Best-effort: restrict to the owner (no-op on platforms without POSIX perms).
-  try {
-    fs.chmodSync(file, 0o600);
-  } catch {
-    /* ignore */
-  }
+  // 0600 from the first byte the destination name points at. The temp is
+  // chmod'd before rename, so a crash cannot leave the token world-readable.
+  writeAtomicSync(file, JSON.stringify(creds, null, 2) + '\n', { mode: 0o600 });
 }
 
 export function clearStoredCredentials(opts: CredentialsLocationOpts = {}): boolean {

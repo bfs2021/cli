@@ -30,6 +30,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { writeAtomicSync } from '../util/atomic-file.js';
 import { VERSION } from '../version.js';
 
 /** Verdict for the native backend on this machine. */
@@ -121,8 +122,7 @@ function readVerdict(dir: string): StoredVerdict | null {
 
 function writeVerdict(dir: string, verdict: StoredVerdict): void {
   try {
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(verdictPath(dir), JSON.stringify(verdict, null, 2) + '\n', 'utf8');
+    writeAtomicSync(verdictPath(dir), JSON.stringify(verdict, null, 2) + '\n');
   } catch {
     // A read-only cache costs a probe per run, not correctness.
   }
