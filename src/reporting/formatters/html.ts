@@ -1,4 +1,5 @@
 import { fixAvailableHint } from '../../core-open/formatters/fix-hint.js';
+import { dedupeLicenseFindings } from '../../core-open/licenses/dedupe.js';
 import { redactForDisplay } from '../../core-open/utils/redact.js';
 import type { SecurityFinding } from '../../core-open/types.js';
 import type { Finding, ScanArtifact } from '../types.js';
@@ -43,7 +44,7 @@ const VULN_RANK: Record<VulnSeverityName, number> = {
 const LEVEL_RANK: Record<string, number> = { error: 0, warning: 1, note: 2 };
 
 export function formatHtmlReport(artifact: ScanArtifact): string {
-  const findings = Array.isArray(artifact.findings) ? artifact.findings : [];
+  const findings = dedupeLicenseFindings(Array.isArray(artifact.findings) ? artifact.findings : []);
   const vulnFindings = findings.filter((f) => f.ruleId === VULN_RULE_ID);
   const otherFindings = findings.filter((f) => f.ruleId !== VULN_RULE_ID);
   const security = securityFindings(artifact);

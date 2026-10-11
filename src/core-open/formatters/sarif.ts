@@ -4,6 +4,7 @@
 import { createHash } from 'node:crypto';
 import { baselineSuppressionId } from '../baseline-suppressions.js';
 import type { BaselineSuppression, ScanArtifact, Finding, SecurityFinding, SecuritySection, SecuritySeverity } from '../types.js';
+import { dedupeLicenseFindings } from '../licenses/dedupe.js';
 import { portableValue } from '../utils/portable-path.js';
 
 /**
@@ -26,8 +27,9 @@ const FINDING_FINGERPRINT_KEY = 'vg/finding-id/v1';
 export function formatSarif(artifact: ScanArtifact, root?: string): object {
   artifact = portableValue(artifact, root);
   const suppressed = suppressionIndex(artifact);
-  const rules = buildRules(artifact.findings);
-  const results = artifact.findings.map((f) => toSarifResult(f, suppressed.get(suppressionKey(f.ruleId, f.location))));
+  const findings = dedupeLicenseFindings(artifact.findings);
+  const rules = buildRules(findings);
+  const results = findings.map((f) => toSarifResult(f, suppressed.get(suppressionKey(f.ruleId, f.location))));
 
   const runs: object[] = [
     {

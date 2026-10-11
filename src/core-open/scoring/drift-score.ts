@@ -4,6 +4,7 @@
 import * as crypto from 'node:crypto';
 import type { ProjectScan, DriftScore, Finding, RiskLevel, VibgrateConfig } from '../types.js';
 import { licenseParseDiagnostic } from '../licenses/diagnostic.js';
+import { compareLicenseFindings, dedupeLicenseFindings } from '../licenses/dedupe.js';
 import { WARNING_CODES } from '../warnings.js';
 import { normalizeLicenseSourcePath } from '../licenses/dependency-license.js';
 import { aggregateDependencyDrift } from './dependency-drift-v3.js';
@@ -389,17 +390,11 @@ export function generateFindings(
 
     // A non-empty license that does not resolve, or an expression with an
     // unresolved constituent, is a data-quality finding. An explicit
-    // NOASSERTION / empty declaration is not. Sort so the same manifest
-    // always emits the same order.
+    // NOASSERTION / empty declaration is not. Rows are ordered by package,
+    // then license id, then source path. A later row with the same component,
+    // license id, and path is dropped below.
     const licenseFindings: Finding[] = [];
-    const licenseDeps = [...project.dependencies].sort(
-      (a, b) =>
-        a.package.localeCompare(b.package) ||
-        (a.license?.raw ?? '').localeCompare(b.license?.raw ?? '') ||
-        a.section.localeCompare(b.section) ||
-        (a.license?.sourcePath ?? '').localeCompare(b.license?.sourcePath ?? ''),
-    );
-    for (const dep of licenseDeps) {
+    for (const dep of project.dependencies) {
       // Location is the manifest path the scanner recorded, when it recorded one.
       const sourcePath = normalizeLicenseSourcePath(dep.license?.sourcePath);
       const location = sourcePath ?? project.path;
@@ -415,10 +410,11 @@ export function generateFindings(
           : { raw: diag.raw, warnCode: WARNING_CODES.LICENSE_UNPARSEABLE },
       });
     }
+    licenseFindings.sort(compareLicenseFindings);
     findings.push(...licenseFindings);
   }
 
-  return findings;
+  return dedupeLicenseFindings(findings);
 }
 
 /**

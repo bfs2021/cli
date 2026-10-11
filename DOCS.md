@@ -1829,7 +1829,9 @@ and no license is filled in from a guess.
 
 Document-level license-parse failures are unchanged. A scan finding whose
 rule is `vibgrate/license-parse-failed` is repeated on the CycloneDX metadata
-`properties` and as an SPDX document annotation.
+`properties` and as an SPDX document annotation. The same package, the same
+license id, and the same source path are included once. A different id or a
+different path is kept.
 
 The license on a shared `name@version` is the license from the scan row that
 was kept (the first project that declared that version). A lockfile-only
@@ -5786,7 +5788,7 @@ Stderr lines look like `warning [VG_WARN_PARSE_FAILED]: …`. The code is the to
 
 `vg sbom export` prints the code on stderr. CycloneDX adds a `vibgrate:warningCode` property next to the existing warning property. SPDX adds an annotation whose comment is `warningCode=VG_WARN_…`. The warning sentences already stored on the document stay as they are.
 
-License findings keep the rule id `vibgrate/license-parse-failed` and also carry `warnCode`. CVSS findings keep `cvss-vector-parse-failed` and also carry `warnCode`.
+License findings keep the rule id `vibgrate/license-parse-failed` and also carry `warnCode`. Two license findings are the same finding when the package name, the license id, and the source path all match. The license id is the canonical SPDX id or `LicenseRef-…` when the declaration resolves to one, the normalized expression when the declaration is an expression, and the declared text when it does not resolve. The source path is the manifest or license file when the scan recorded one, and the project path when it did not. `vg scan` JSON, the human report, and SARIF each emit that row once. Within a project the rows are ordered by package, then license id, then source path. A different license id or a different path stays a separate row. CVSS findings keep `cvss-vector-parse-failed` and also carry `warnCode`.
 
 A truncated or invalid lockfile stops the command. Warning codes cover conditions that let the command continue.
 

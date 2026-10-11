@@ -2,6 +2,7 @@ import chalk from 'chalk';
 import type { ScanArtifact, ExtendedScanResults, InventoryItem, ServiceDependencyItem, ArchitectureResult } from '../types.js';
 import { baselineSuppressionLabel } from '../../core-open/baseline-suppressions.js';
 import { VERSION } from '../version.js';
+import { dedupeLicenseFindings } from '../../core-open/licenses/dedupe.js';
 import { humanFindingText } from '../../core-open/formatters/fix-hint.js';
 import { findingRuleLabel, formatDegradationLines } from '../../core-open/warnings.js';
 import { driftBar } from '../../core-open/ui/bar.js';
@@ -89,11 +90,12 @@ export function formatText(artifact: ScanArtifact): string {
     lines.push('');
   }
 
-  // Findings
-  if (artifact.findings.length > 0) {
-    const errors = artifact.findings.filter((f) => f.level === 'error');
-    const warnings = artifact.findings.filter((f) => f.level === 'warning');
-    const notes = artifact.findings.filter((f) => f.level === 'note');
+  // Findings. License rows are collapsed before this list is printed.
+  const findings = dedupeLicenseFindings(artifact.findings);
+  if (findings.length > 0) {
+    const errors = findings.filter((f) => f.level === 'error');
+    const warnings = findings.filter((f) => f.level === 'warning');
+    const notes = findings.filter((f) => f.level === 'note');
     const summary = [
       errors.length > 0 ? chalk.red(`${errors.length} error${errors.length !== 1 ? 's' : ''}`) : '',
       warnings.length > 0 ? chalk.yellow(`${warnings.length} warning${warnings.length !== 1 ? 's' : ''}`) : '',
@@ -101,7 +103,7 @@ export function formatText(artifact: ScanArtifact): string {
     ].filter(Boolean).join(chalk.dim(', '));
 
     lines.push(chalk.bold.underline(`  Findings`) + chalk.dim(` (${summary})`));
-    for (const f of artifact.findings) {
+    for (const f of findings) {
       const icon = f.level === 'error' ? chalk.red('✖') : f.level === 'warning' ? chalk.yellow('⚠') : chalk.blue('ℹ');
       const shown = humanFindingText(f);
       lines.push(`    ${icon} ${shown.message}`);
