@@ -42,6 +42,57 @@ backward compatible.
 
 ### Fixed
 
+- **`vg evidence verify` reports a truncated or unreadable bundle as an error.**
+  A bundle whose envelope or `result.json` is cut off, is not JSON, or is not
+  an evidence document this version can read exits 1. The message says what
+  failed and how to restore the bundle. It does not print a stack or the
+  file's contents. A readable bundle still reports `verified`, `unverified`,
+  or `failed`.
+
+- **`vg evidence release` rejects an invalid SPDX or CycloneDX SBOM.** A
+  `--from` file that is truncated, not valid JSON, or missing a required
+  field exits `1`. The message names the file and the expected format, and
+  says to regenerate the SBOM. It does not include the document or a home
+  directory. A component or package missing `name` fails the command instead
+  of being dropped. The same check applies to an SBOM attached to an image.
+
+- **Interrupted or failed `vg build` and `vg scan` stop their parse workers.**
+  Ctrl-C, a worker failure, and a normal finish all shut the parse pool down,
+  so Node workers are not left running afterwards. A worker that fails still
+  prints what happened and how to re-run (`--jobs 1` or `--exclude`).
+
+- **`vg build` and `vg scan` name a file when its parse fails.** A supported-language file the parser cannot read produces a warning with the file path, the language, and what to do next: correct the file or exclude the path. The map continues without that file's symbols. The same tree prints the same warning. The warning does not include a stack trace. (#289)
+
+- **A truncated or syntactically invalid lockfile stops `vg scan` and `vg build` (#310).**
+  The check runs before a dependency graph is built and before source files are
+  parsed, so parse workers are not started and a partial map is not written.
+  The error names each bad file, in path order, including lockfiles the walk
+  otherwise skips (for example `bun.lock`, `mix.lock`, and `Cargo.lock`). It
+  tells you to regenerate the file with your package manager and does not
+  include the file's contents. The process exits non-zero. A valid lockfile is
+  scanned and built as before. An empty `go.sum` or `go.work.sum` is valid:
+  the module has no dependencies.
+
+- **A root `package.json` with no `name`, no `version`, or neither no longer stops `vg build`, `vg scan`, or `vg sbom export`.** The root component name falls back to the directory name. A missing version is omitted. Each command prints one `VG_WARN_ROOT_PACKAGE_IDENTITY` warning, and dependencies are still resolved. The fallback does not use an absolute path. (#359)
+
+- **`vg scan --format json` and `vg sbom export` keep SemVer build metadata.**
+  A lockfile or manifest version such as `1.2.3+build.7` is recorded with
+  the `+` suffix. A Go `v2.0.0+incompatible` require is recorded as
+  `2.0.0+incompatible` in scan JSON (the leading `v` is still dropped) and
+  as `v2.0.0+incompatible` in the SBOM, matching `go.sum`. Range checks
+  still ignore the suffix. (#298)
+
+- **Machine-readable output no longer follows the process locale (#410).**
+  String keys in scan JSON, SARIF, and SBOM — purls, package names, versions,
+  and the project names in `vibgrate:projects` — compare by UTF-16 code unit.
+  `LANG` and `LC_ALL` do not change those documents. Lockfiles are visited in
+  that same order of project path, and the first path wins when two lockfiles
+  repeat one identity. The package-name tie-break on dependency rows inside a
+  project uses the same comparison. SARIF results follow that finding order.
+  Degrade-and-continue warnings are ordered by code, then message.
+
+- **`vg build` and `vg scan` skip binary and non-UTF-8 files instead of crashing.** A file with a NUL byte, or bytes that are not UTF-8, is left out of the map and out of text parsers. One warning names the count, the first few paths, and how to ignore the files with a `.gitignore` entry or `--exclude`. The warning does not include file contents. A lockfile that is binary or not UTF-8 still stops the command, and that message does not include the file's bytes either.
+
 - **A key or value `vg` does not accept in `driftBudget` or `review` stops the command.**
   A misspelt key, a value of the wrong type, or a `driftBudget` that sets no
   limit exits with an error. The error names the file and, when the file makes
