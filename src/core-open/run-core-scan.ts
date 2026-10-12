@@ -37,12 +37,12 @@ import { formatSarif } from './formatters/sarif.js';
 import { formatMarkdown } from './formatters/markdown.js';
 import { loadConfig, appendExcludePatterns } from './config.js';
 import { pathExists, readJsonFile, writeJsonFile, writeTextFile, ensureDir, FileCache, quickTreeCount } from './utils/fs.js';
-import { skippedSymlinkWarning } from './utils/skipped-symlinks.js';
+import { formatNonTextWarning } from './utils/text-bytes.js';
 import { portableValue } from './utils/portable-path.js';
 import { assertSafeWalkRoot } from './utils/root-safety.js';
 import { detectVcs } from './utils/vcs.js';
 import { isCiEnvironment, hasVibgrateWorkflow } from './utils/ci-env.js';
-import { resolveRepositoryName } from './utils/repository-name.js';
+import { readRootPackageIdentity, rootPackageIdentityMessage } from './utils/root-package-identity.js';
 import { ScanProgress } from './ui/progress.js';
 import { loadScanHistory, saveScanHistory, estimateTotalDuration, estimateStepDurations } from './ui/scan-history.js';
 import { parseDsn } from './utils/dsn.js';
@@ -66,6 +66,7 @@ import {
   type CodedWarning,
 } from './warnings.js';
 import type { RuntimeCatalog } from './runtimes/types.js';
+import { compareCodeUnits } from './utils/code-unit.js';
 
 /**
  * Shared context handed to the advanced-analysis hook (see {@link AdvancedScanHook}).
@@ -773,9 +774,12 @@ export async function runCoreScan(
   progress.finish();
 
   const degradations: CodedWarning[] = [];
-  const stuckPaths = [...fileCache.stuckPaths].sort((a, b) => a.localeCompare(b));
-  const skippedLarge = [...fileCache.skippedLargeFiles].sort((a, b) => a.localeCompare(b));
-  const symlinkSkip = skippedSymlinkWarning(fileCache.skippedSymlinks);
+  const rootIdentityWarning = rootPackageIdentityMessage(readRootPackageIdentity(rootDir));
+  if (rootIdentityWarning) {
+    degradations.push(codedWarning(WARNING_CODES.ROOT_PACKAGE_IDENTITY, rootIdentityWarning));
+  }
+  const stuckPaths = [...fileCache.stuckPaths].sort(compareCodeUnits);
+  const skippedLarge = [...fileCache.skippedLargeFiles].sort(compareCodeUnits);
   const timeoutSeconds = Math.round(projectScanTimeoutMs / 1000);
 
   // The walk already wrote this one line. Recording it here puts the same
@@ -811,6 +815,11 @@ export async function runCoreScan(
     }
   }
 
+  const nonTextMessage = formatNonTextWarning(fileCache.skippedNonTextFiles);
+  if (nonTextMessage) {
+    degradations.push(codedWarning(WARNING_CODES.NON_TEXT_FILE, nonTextMessage));
+  }
+
   fileCache.clear();
 
   if (allProjects.length === 0) {
@@ -818,7 +827,7 @@ export async function runCoreScan(
   }
 
   const durationMs = Date.now() - scanStart;
-  const repository = await buildRepositoryInfo(rootDir, vcs.remoteUrl, extended.buildDeploy?.ci, opts.repositoryName);
+  const repository = buildRepositoryInfo(rootDir, vcs.remoteUrl, extended.buildDeploy?.ci, opts.repositoryName);
   // Project size rollup (micro/small/standard → billable count). Open: it is
   // categorisation, not pricing — the commercial rates live server-side.
   const billing = summarizeBilling(allProjects);
@@ -1006,21 +1015,10 @@ export async function runCoreScan(
   return artifact;
 }
 
-async function buildRepositoryInfo(rootDir: string, remoteUrl: string | undefined, ciSystems: string[] | undefined, nameOverride?: string): Promise<RepositoryInfo> {
-  const name = nameOverride?.trim() ? nameOverride.trim() : await resolveRepositoryName(rootDir);
-  let version: string | undefined;
-
-  const packageJsonPath = path.join(rootDir, 'package.json');
-  if (await pathExists(packageJsonPath)) {
-    try {
-      const packageJson = await readJsonFile<{ version?: string }>(packageJsonPath);
-      if (typeof packageJson.version === 'string' && packageJson.version.trim()) {
-        version = packageJson.version.trim();
-      }
-    } catch {
-      // ignore
-    }
-  }
+function buildRepositoryInfo(rootDir: string, remoteUrl: string | undefined, ciSystems: string[] | undefined, nameOverride?: string): RepositoryInfo {
+  const identity = readRootPackageIdentity(rootDir);
+  const name = nameOverride?.trim() ? nameOverride.trim() : identity.name;
+  const version = identity.version ?? undefined;
 
   return {
     name,

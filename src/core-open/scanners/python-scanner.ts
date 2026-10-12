@@ -4,6 +4,7 @@
 import * as path from 'node:path';
 import * as semver from 'semver';
 import { readTextFile, readJsonFile, pathExists, FileCache } from '../utils/fs.js';
+import { recordedSemver, splitBuildMetadata } from '../utils/recorded-semver.js';
 import { rethrowLockfileParseError } from '../utils/lockfile-parse.js';
 import { loadPythonLockIndex, type PythonLockIndex } from './python-lockfile.js';
 import type { LockfileIo } from './npm-lockfile.js';
@@ -13,6 +14,7 @@ import { latestStable, runtimeEolStatus, extractCycle, eolDate } from '../runtim
 import { BUNDLED_RUNTIME_CATALOG } from '../runtimes/snapshot.js';
 import type { RuntimeCatalog } from '../runtimes/types.js';
 import type { ProjectScan, DependencyRow, DetectedFramework } from '../types.js';
+import { compareCodeUnits } from '../utils/code-unit.js';
 
 /** Well-known Python frameworks / libraries to track */
 const KNOWN_PYTHON_FRAMEWORKS: Record<string, string> = {
@@ -181,12 +183,15 @@ function extractPinnedVersion(spec: string): string | null {
  * Convert a PEP 440 version to semver where possible (best-effort).
  */
 function pep440ToSemver(ver: string): string | null {
-  let v = ver.replace(/^[vV]/, '').trim();
-  if (/(?:a\d|b\d|rc\d|alpha|beta|dev|post)/i.test(v)) return null;
-  const parts = v.split('.');
+  const stripped = ver.replace(/^[vV]/, '').trim();
+  // A `+local` suffix is build metadata, not a PEP 440 pre-release. Test the
+  // numeric core only, or `+post.1` / `+build.7` is rejected or truncated.
+  const { core, build } = splitBuildMetadata(stripped);
+  if (/(?:a\d|b\d|rc\d|alpha|beta|dev|post)/i.test(core)) return null;
+  const parts = core.split('.');
   while (parts.length < 3) parts.push('0');
-  v = parts.slice(0, 3).join('.');
-  return semver.valid(v);
+  const v = parts.slice(0, 3).join('.');
+  return recordedSemver(build ? `${v}${build}` : v);
 }
 
 // ── File parsers ──
@@ -548,7 +553,7 @@ async function scanOnePythonProject(
     const order = { 'major-behind': 0, 'minor-behind': 1, 'current': 2, 'unknown': 3 };
     const diff = (order[a.drift] ?? 9) - (order[b.drift] ?? 9);
     if (diff !== 0) return diff;
-    return a.package.localeCompare(b.package);
+    return compareCodeUnits(a.package, b.package);
   });
 
   // Count files (use cached walk to avoid redundant I/O)
