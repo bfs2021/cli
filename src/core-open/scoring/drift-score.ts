@@ -4,6 +4,7 @@
 import * as crypto from 'node:crypto';
 import type { ProjectScan, DriftScore, Finding, RiskLevel, VibgrateConfig } from '../types.js';
 import { licenseParseDiagnostic } from '../licenses/diagnostic.js';
+import { dedupeLicenseFindings, licenseFindingEqualityKey, setLicenseFindingKey } from '../licenses/dedupe-findings.js';
 import { WARNING_CODES } from '../warnings.js';
 import { normalizeLicenseSourcePath } from '../licenses/dependency-license.js';
 import { aggregateDependencyDrift } from './dependency-drift-v3.js';
@@ -391,7 +392,8 @@ export function generateFindings(
     // A non-empty license that does not resolve, or an expression with an
     // unresolved constituent, is a data-quality finding. An explicit
     // NOASSERTION / empty declaration is not. Code-unit order, so the same
-    // manifest emits the same findings under every locale.
+    // manifest emits the same findings under every locale. Identical rows
+    // are collapsed on the way out.
     const licenseFindings: Finding[] = [];
     const licenseDeps = [...project.dependencies].sort(
       (a, b) =>
@@ -406,7 +408,7 @@ export function generateFindings(
       const location = sourcePath ?? project.path;
       const diag = licenseParseDiagnostic(dep.license?.raw, location, dep.package);
       if (!diag) continue;
-      licenseFindings.push({
+      const finding: Finding = {
         ruleId: diag.code,
         level: 'warning',
         message: diag.message,
@@ -414,12 +416,20 @@ export function generateFindings(
         details: sourcePath
           ? { raw: diag.raw, sourcePath, warnCode: WARNING_CODES.LICENSE_UNPARSEABLE }
           : { raw: diag.raw, warnCode: WARNING_CODES.LICENSE_UNPARSEABLE },
-      });
+      };
+      setLicenseFindingKey(finding, licenseFindingEqualityKey({
+        projectType: project.type,
+        packageName: dep.package,
+        resolvedVersion: dep.resolvedVersion,
+        licenseRaw: diag.raw,
+        sourcePath: location,
+      }));
+      licenseFindings.push(finding);
     }
     findings.push(...licenseFindings);
   }
 
-  return findings;
+  return dedupeLicenseFindings(findings);
 }
 
 /**

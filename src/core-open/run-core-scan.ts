@@ -31,6 +31,7 @@ import { ComposerCache } from './scanners/composer-cache.js';
 import { PubCache } from './scanners/pub-cache.js';
 import { Semaphore } from './utils/semaphore.js';
 import { computeDriftScore, generateFindings, computeProjectId, computeSolutionId } from './scoring/drift-score.js';
+import { dedupeLicenseFindings } from './licenses/dedupe-findings.js';
 import { compareBaselineFindings } from './baseline-suppressions.js';
 import { formatText } from './formatters/text.js';
 import { formatSarif } from './formatters/sarif.js';
@@ -752,7 +753,8 @@ export async function runCoreScan(
 
   // ── Step: Findings ──
   progress.startStep('findings');
-  const findings = [...generateFindings(allProjects, config), ...vulnFindings];
+  // Same package, license id, and path is one finding in text, JSON, and SARIF.
+  const findings = dedupeLicenseFindings([...generateFindings(allProjects, config), ...vulnFindings]);
   const warnCount = findings.filter((f) => f.level === 'warning').length;
   const errCount = findings.filter((f) => f.level === 'error').length;
   const noteCount = findings.filter((f) => f.level === 'note').length;

@@ -178,6 +178,7 @@ const releaseCmd = new Command('release')
       buildkitMetadata: opts.buildkitMetadata ? path.resolve(rootDir, opts.buildkitMetadata) : undefined,
       provenance: opts.provenance ? path.resolve(rootDir, opts.provenance) : undefined,
       image: opts.image,
+      onWarning: (message) => console.error(chalk.yellow(`warning: ${message}`)),
     });
     const p = await freezeRelease(rootDir, release);
     console.log(chalk.green('✔') + ` froze ${chalk.bold(`${product.id}@${version}`)} — ${release.components.length} components, immutable at ${path.relative(rootDir, p)}`);
@@ -432,7 +433,13 @@ const watchCmd = new Command('watch')
     const releasesByProduct = await releasesByProductMap(rootDir, products);
 
     const compMap = new Map<string, FrozenComponent>();
-    for (const list of releasesByProduct.values()) for (const rel of list) for (const c of rel.components) compMap.set(`${c.ecosystem ?? ''}|${c.name}|${c.version}`, c);
+    for (const list of releasesByProduct.values()) {
+      for (const rel of list) {
+        for (const c of rel.components) {
+          compMap.set(`${c.purl ?? ''}\0${c.cpe ?? ''}\0${c.ecosystem ?? ''}\0${c.type ?? ''}\0${c.name}\0${c.version}`, c);
+        }
+      }
+    }
     const components = [...compMap.values()];
     if (components.length === 0) throw new CliError('no frozen releases to watch — freeze a release first with `vg evidence release`', ExitCode.NOT_FOUND);
 

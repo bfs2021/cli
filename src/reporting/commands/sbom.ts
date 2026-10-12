@@ -4,6 +4,7 @@ import chalk from 'chalk';
 import { pathExists, readJsonFile, writeTextFile } from '../utils/fs.js';
 import type { DependencyRow, Finding, ProjectScan, ScanArtifact } from '../types.js';
 import { LICENSE_PARSE_FAILED } from '../../core-open/licenses/diagnostic.js';
+import { digestIdentity, orderComponentDigests, toCycloneHashes, toSpdxChecksums, type ComponentDigest } from '../../engine/component-digests.js';
 import { fullDependencyGraph, type LockfileComponent, type LockfileGraph } from '../../engine/lockfile.js';
 import { ECOSYSTEMS, type Ecosystem } from '../../engine/drift.js';
 import { componentLicense, extractedLicensingInfos, type ComponentLicense } from './sbom-license.js';
@@ -41,6 +42,8 @@ interface FlattenedDependency {
   license?: DependencyRow['license'];
   /** Facts that were dropped or guessed. Empty when the merge kept everything it was given. */
   mergeWarnings: string[];
+  /** Lockfile digests for this component, already sorted. Empty when none were recorded. */
+  digests: ComponentDigest[];
 }
 
 /**
@@ -468,7 +471,7 @@ function sbomSerialSeed(format: string, artifact: ScanArtifact, deps: FlattenedD
     artifact.vibgrateVersion ?? '',
     ...deps.map(
       (d) =>
-        `${d.ecosystem}|${d.package}|${d.version}|${d.currentSpec}|${d.project}|${d.projects.join(',')}|${d.drift}|${d.majorsBehind ?? ''}|${d.scope}|${d.license?.raw ?? ''}|${d.license?.spdxId ?? ''}|${d.mergeWarnings.join(',')}`,
+        `${d.ecosystem}|${d.package}|${d.version}|${d.currentSpec}|${d.project}|${d.projects.join(',')}|${d.drift}|${d.majorsBehind ?? ''}|${d.scope}|${d.license?.raw ?? ''}|${d.license?.spdxId ?? ''}|${d.mergeWarnings.join(',')}|${digestIdentity(d.digests)}`,
     ),
     ...(graph?.rootDependsOn.length ? [`root>${uniqSorted(graph.rootDependsOn).join(',')}`] : []),
     ...edgeLines,
@@ -599,6 +602,7 @@ export function flattenDependencies(
         ecosystem,
         license: dep.license,
         mergeWarnings: [],
+        digests: [],
       };
       if (guessed) {
         addMergeWarnings(row, [describeUnknownEcosystem(project.type, project.name, dep.package, version)]);
@@ -615,6 +619,7 @@ export function flattenDependencies(
     if (existing) {
       if (dep.projects?.length) addProjects(existing, dep.projects);
       if (dep.mergeWarnings?.length) addMergeWarnings(existing, dep.mergeWarnings);
+      if (dep.digests?.length) existing.digests = orderComponentDigests([...existing.digests, ...dep.digests]);
       continue;
     }
     const projects = dep.projects?.length ? sortedUnique(dep.projects) : [artifact.rootPath];
@@ -629,6 +634,7 @@ export function flattenDependencies(
       scope: 'transitive',
       ecosystem,
       mergeWarnings: [],
+      digests: orderComponentDigests(dep.digests ?? []),
     };
     if (dep.mergeWarnings?.length) addMergeWarnings(row, dep.mergeWarnings);
     index.set(key, row);
@@ -675,6 +681,37 @@ interface MergedComponentAcc {
  * path that has a lockfile, when the root has none). It is not copied onto
  * every other component.
  */
+function copyLockfileComponent(component: LockfileComponent): LockfileComponent {
+  const digests = orderComponentDigests(component.digests ?? []);
+  return {
+    package: component.package,
+    version: component.version,
+    ...(digests.length ? { digests } : {}),
+  };
+}
+
+function unionLockfileDigests(kept: LockfileComponent, incoming: LockfileComponent): LockfileComponent {
+  return copyLockfileComponent({
+    package: kept.package,
+    version: kept.version,
+    digests: [...(kept.digests ?? []), ...(incoming.digests ?? [])],
+  });
+}
+
+/** CycloneDX `hashes`, omitted when the component has no digest. Order is algorithm name, then value. */
+function cycloneDigestField(digests: readonly ComponentDigest[]): { hashes: Array<{ alg: string; content: string }> } | Record<string, never> {
+  const hashes = toCycloneHashes(digests);
+  return hashes.length ? { hashes } : {};
+}
+
+/** SPDX `checksums`, omitted when the component has no digest. Order is algorithm name, then value. */
+function spdxDigestField(
+  digests: readonly ComponentDigest[],
+): { checksums: Array<{ algorithm: string; checksumValue: string }> } | Record<string, never> {
+  const checksums = toSpdxChecksums(digests);
+  return checksums.length ? { checksums } : {};
+}
+
 export function collectLockfileGraph(artifact: ScanArtifact, root: string): LockfileGraph | undefined {
   const projectsByPath = new Map<string, ProjectScan[]>();
   for (const project of artifact.projects) {
@@ -708,7 +745,7 @@ export function collectLockfileGraph(artifact: ScanArtifact, root: string): Lock
           mergeWarnings.push(describeUnknownEcosystem(project.type, project.name, component.package, component.version));
         }
         byIdentity.set(key, {
-          component,
+          component: copyLockfileComponent(component),
           ecosystem,
           projects: new Set(names),
           winningProject: names[0] || artifact.rootPath,
@@ -718,6 +755,7 @@ export function collectLockfileGraph(artifact: ScanArtifact, root: string): Lock
         });
         continue;
       }
+      if (component.digests?.length) existing.component = unionLockfileDigests(existing.component, component);
       for (const name of names) existing.projects.add(name);
       for (const project of guessedProjects) {
         const warning = describeUnknownEcosystem(project.type, project.name, component.package, component.version);
@@ -747,6 +785,7 @@ export function collectLockfileGraph(artifact: ScanArtifact, root: string): Lock
     .map((acc) => ({
       package: acc.component.package,
       version: acc.component.version,
+      ...(acc.component.digests?.length ? { digests: acc.component.digests } : {}),
       ecosystem: acc.ecosystem,
       projects: sortedUnique(acc.projects),
       winningProject: acc.winningProject,
@@ -861,6 +900,7 @@ export function toCycloneDx(artifact: ScanArtifact, graph?: LockfileGraph): Reco
         name: dep.package,
         version: dep.version,
         ...(purl ? { purl } : {}),
+        ...cycloneDigestField(dep.digests),
         ...(license.cycloneLicenses ? { licenses: license.cycloneLicenses } : {}),
         properties,
       };
@@ -924,6 +964,7 @@ export function toSpdx(artifact: ScanArtifact, graph?: LockfileGraph): Record<st
         versionInfo: dep.version,
         downloadLocation: 'NOASSERTION',
         filesAnalyzed: false,
+        ...spdxDigestField(dep.digests),
         licenseConcluded: 'NOASSERTION',
         licenseDeclared: license.licenseDeclared,
         ...(purl
