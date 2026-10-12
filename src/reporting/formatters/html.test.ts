@@ -48,6 +48,25 @@ function section(html: string, id: string): string {
   return html.slice(start, end);
 }
 
+function footer(html: string): string {
+  const start = html.indexOf(`<footer id="${ADVISORY_CORPUS_FOOTER_ID}">`);
+  const end = html.indexOf('</footer>', start);
+  if (start < 0 || end < 0) throw new Error('missing advisory footer');
+  return html.slice(start, end + '</footer>'.length);
+}
+
+function vulnResult(
+  source: 'osv' | 'manifest' | 'unreachable' | 'none',
+  totalAdvisories: number,
+): NonNullable<ScanArtifact['extended']>['vulnerabilities'] {
+  return {
+    source,
+    packages: [],
+    totalAdvisories,
+    severityCounts: { low: 0, moderate: 0, high: 0, critical: 0, unknown: 0 },
+  };
+}
+
 function sample(): ScanArtifact {
   return artifact({
     drift: {
@@ -230,6 +249,9 @@ describe('formatHtmlReport', () => {
     expect(section(html, 'vulnerabilities')).toContain('Not scanned');
     expect(section(html, 'security')).toContain('Not scanned');
     expect(section(html, 'findings')).toContain('None');
+    expect(block(html, 'advisory-source')).toBe('<p id="advisory-source" class="absent">Not scanned</p>');
+    expect(footer(html)).toContain('<summary>Advisory data: Not scanned</summary>');
+    expect(footer(html)).not.toContain('id="advisory-count"');
   });
 
   it('renders real zeros when a vulnerability check finished with nothing to report', () => {
@@ -246,6 +268,9 @@ describe('formatHtmlReport', () => {
     expect(block(html, 'vuln-counts')).toContain('data-evaluated="yes"');
     expect(block(html, 'vuln-counts')).toContain('critical 0');
     expect(section(html, 'vulnerabilities')).toContain('None');
+    expect(block(html, 'advisory-source')).toBe('<dd id="advisory-source">No packages to check</dd>');
+    expect(block(html, 'advisory-count')).toBe('<dd id="advisory-count">0</dd>');
+    expect(footer(html)).toContain('<summary>Advisory data: No packages to check, 0 advisories</summary>');
   });
 
   it('leaves an unfinished vulnerability check blank instead of zero', () => {
@@ -261,6 +286,10 @@ describe('formatHtmlReport', () => {
     }));
     expect(block(html, 'vuln-counts')).toContain('Not scanned');
     expect(html).not.toContain('critical 0');
+    expect(block(html, 'advisory-source')).toBe('<p id="advisory-source" class="absent">Not checked</p>');
+    expect(footer(html)).toContain('<summary>Advisory data: Not checked</summary>');
+    expect(footer(html)).not.toContain('id="advisory-count"');
+    expect(footer(html)).not.toContain('0 advisories');
   });
 
   it('shows a zero fix rollup when the field is present and no version is listed', () => {
@@ -276,6 +305,54 @@ describe('formatHtmlReport', () => {
       ],
     }));
     expect(block(html, 'fix-available')).toBe('<p id="fix-available">Fix available: 0</p>');
+  });
+
+  it('names a finished advisory source and keeps a missing total absent', () => {
+    const osv = formatHtmlReport(artifact({
+      findings: [{
+        ruleId: 'vibgrate/vulnerability',
+        level: 'error',
+        message: 'critical row',
+        location: 'left-pad',
+        details: { severity: 'critical', package: 'left-pad', advisoryId: 'GHSA-crit' },
+      }],
+      extended: { vulnerabilities: vulnResult('osv', 1) },
+    }));
+    expect(footer(osv)).toContain('<summary>Advisory data: OSV, 1 advisory</summary>');
+    expect(block(osv, 'advisory-source')).toBe('<dd id="advisory-source">OSV</dd>');
+    expect(block(osv, 'advisory-count')).toBe('<dd id="advisory-count">1</dd>');
+
+    const manifest = formatHtmlReport(artifact({
+      extended: { vulnerabilities: vulnResult('manifest', 2) },
+    }));
+    expect(block(manifest, 'advisory-source')).toBe('<dd id="advisory-source">Offline package-version manifest</dd>');
+    expect(block(manifest, 'advisory-count')).toBe('<dd id="advisory-count">2</dd>');
+
+    const missingTotal = vulnResult('osv', 0);
+    delete (missingTotal as { totalAdvisories?: number }).totalAdvisories;
+    const omitted = formatHtmlReport(artifact({ extended: { vulnerabilities: missingTotal } }));
+    expect(footer(omitted)).toContain('<summary>Advisory data: OSV</summary>');
+    expect(footer(omitted)).not.toContain('id="advisory-count"');
+    expect(footer(omitted)).not.toContain('0 advisories');
+  });
+
+  it('does not echo an unknown advisory source', () => {
+    const hostile = `<img src=x onerror=alert(1)> ${TOKEN}`;
+    const recorded = vulnResult('osv', 4);
+    (recorded as { source: string }).source = hostile;
+    const html = formatHtmlReport(artifact({ extended: { vulnerabilities: recorded } }));
+    expect(block(html, 'advisory-source')).toBe('<p id="advisory-source" class="absent">Not scanned</p>');
+    expect(html).not.toContain(TOKEN);
+    expect(html).not.toContain('<img');
+    expect(html).not.toContain('onerror');
+    expect(footer(html)).not.toContain('4');
+  });
+
+  it('says the advisory source was not recorded when findings have no source', () => {
+    const html = formatHtmlReport(sample());
+    expect(block(html, 'advisory-source')).toBe('<p id="advisory-source" class="absent">Not recorded</p>');
+    expect(footer(html)).not.toContain('id="advisory-count"');
+    expect(html.indexOf('id="findings"')).toBeLessThan(html.indexOf(`id="${ADVISORY_CORPUS_FOOTER_ID}"`));
   });
 
   it('adds an unchecked fix-available-only toggle and still emits every row', () => {
@@ -317,10 +394,12 @@ describe('formatHtmlReport', () => {
     expect(again).not.toMatch(/<script/i);
     expect(again).not.toMatch(/<link[\s>]/i);
     expect(again).not.toMatch(/\ssrc\s*=/i);
-    expect(again).not.toMatch(/<details/i);
+    expect(again.match(/<details/gi)).toEqual(['<details']);
+    expect(again).not.toMatch(/<details[^>]*\bopen\b/i);
+    expect(footer(again)).toContain(`<footer id="${ADVISORY_CORPUS_FOOTER_ID}">`);
+    expect(footer(again)).toContain('<summary>Advisory data: Not recorded</summary>');
     expect(again).toContain('Fix available only');
     expect(again).toContain(`<input id="${FIX_AVAILABLE_ONLY_ID}" type="checkbox">`);
-    expect(again).toContain(`<div id="${ADVISORY_CORPUS_FOOTER_ID}" hidden></div>`);
     expect(again.startsWith('<!doctype html>')).toBe(true);
   });
 });

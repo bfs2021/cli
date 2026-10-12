@@ -40,7 +40,7 @@ summary:
 | `drift-score` | DriftScore, 0-100 (lower is better). Empty when drift could not be measured, never `0` |
 | `risk-level` | `low`, `moderate` or `high` |
 | `score-delta` | Change since the baseline (positive = worse). Empty without a baseline |
-| `summary-file` | Path of the JSON the scan wrote (`vibgrate-summary.json`) |
+| `summary-file` | Path of the JSON the scan wrote (`vibgrate-summary.json`). The file includes `driftBudget` (`source`, `mode`, `withinBudget`, `blocking`, `rules`) when a budget was set, or `null` when none was. `--drift-budget` and `--drift-worsening` are marked `source: "flags"` |
 
 ```yaml
 - id: drift

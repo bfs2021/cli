@@ -21,6 +21,10 @@ import {
  * built-in SKIP_DIRS set consistent with the scanner. Results are returned
  * sorted by relative POSIX path so the build is order-independent of the
  * filesystem.
+ *
+ * Archive files are not language sources, so this walk never opens them.
+ * A ZIP package-version manifest is the scan path that inflates an archive;
+ * that read is capped in `core-open/utils/archive-limits.ts`.
  */
 
 // Directories never worth walking — dependency trees, build output, and

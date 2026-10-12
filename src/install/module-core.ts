@@ -15,10 +15,16 @@
  * haile-module.ts) — this file is mechanism only.
  */
 import * as fs from 'node:fs';
+import {
+  ArchiveLimitError,
+  archiveBytesMessage,
+  archiveEntriesMessage,
+  gunzipBounded,
+  resolveArchiveLimits,
+} from '../core-open/utils/archive-limits.js';
 import { redactForDisplay } from '../core-open/utils/redact.js';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import * as zlib from 'node:zlib';
 import { createHash } from 'node:crypto';
 
 const DEFAULT_REGISTRY = 'https://registry.npmjs.org';
@@ -182,16 +188,37 @@ export function verifyIntegrity(buf: Buffer, integrity?: string, shasum?: string
  * headers + GNU longname). Returns file entries only. No symlinks, no device
  * nodes, and every emitted path is validated against traversal.
  */
-export function untar(data: Buffer): Array<{ name: string; body: Buffer }> {
+export function untar(data: Buffer, archivePath = 'tarball'): Array<{ name: string; body: Buffer }> {
+  const limits = resolveArchiveLimits();
   const out: Array<{ name: string; body: Buffer }> = [];
   let offset = 0;
   let pendingName: string | null = null;
+  let seen = 0;
   while (offset + 512 <= data.length) {
     const block = data.subarray(offset, offset + 512);
     offset += 512;
     if (block.every((b) => b === 0)) continue; // end-of-archive padding
+    seen += 1;
+    if (limits.maxEntries > 0 && seen > limits.maxEntries) {
+      throw new ArchiveLimitError(
+        archiveEntriesMessage(archivePath, seen, limits.maxEntries),
+        archivePath,
+        limits.maxEntries,
+        'entries',
+      );
+    }
     const rawName = block.subarray(0, 100).toString('utf8').replace(/\0.*$/, '');
     const size = parseInt(block.subarray(124, 136).toString('utf8').replace(/\0.*$/, '').trim() || '0', 8);
+    if (!Number.isFinite(size) || size < 0) throw new Error(`invalid tar entry size in ${archivePath}`);
+    if (limits.maxUncompressedBytes > 0 && size > limits.maxUncompressedBytes) {
+      throw new ArchiveLimitError(
+        archiveBytesMessage(archivePath, size, limits.maxUncompressedBytes),
+        archivePath,
+        limits.maxUncompressedBytes,
+        'bytes',
+      );
+    }
+    if (size > data.length - offset) throw new Error(`truncated tar entry in ${archivePath}`);
     const type = String.fromCharCode(block[156]!);
     const prefix = block.subarray(345, 500).toString('utf8').replace(/\0.*$/, '');
     const body = data.subarray(offset, offset + size);
@@ -263,7 +290,8 @@ export async function installModule(mod: ModuleDescriptor, opts: InstallOptions 
     const gz = Buffer.from(await tarRes.arrayBuffer());
     verifyIntegrity(gz, dist.integrity, dist.shasum);
 
-    const entries = untar(zlib.gunzipSync(gz));
+    const archivePath = `${mod.npmName} tarball`;
+    const entries = untar(gunzipBounded(gz, archivePath), archivePath);
     const dir = mod.dir();
     fs.rmSync(dir, { recursive: true, force: true });
     fs.mkdirSync(dir, { recursive: true });
@@ -288,7 +316,11 @@ export async function installModule(mod: ModuleDescriptor, opts: InstallOptions 
     mod.onChanged?.();
     return { status: 'installed', version };
   } catch (e) {
-    return { status: 'unavailable', detail: redactForDisplay(String((e as Error).message ?? e)).slice(0, 200) };
+    const message = redactForDisplay(String((e as Error).message ?? e));
+    // A limit error is already a short, fixed sentence. Keep the remedy;
+    // other failures stay capped so a registry body cannot flood the line.
+    const detail = e instanceof ArchiveLimitError ? message : message.slice(0, 200);
+    return { status: 'unavailable', detail };
   }
 }
 

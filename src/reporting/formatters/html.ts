@@ -9,16 +9,19 @@ import type { Finding, ScanArtifact } from '../types.js';
  * Pure function of the artifact: stable sorts, no clock, no randomness, no
  * network, no external assets. Artifact strings are redacted, then escaped.
  *
- * Stable ids: `#summary`, `#vulnerabilities`, `#security`, `#findings`.
+ * Stable ids: `#summary`, `#vulnerabilities`, `#security`, `#findings`,
+ * `#advisory-corpus`.
  *
- * {@link FIX_AVAILABLE_ONLY_ID} is an unchecked checkbox. Checking it hides
- * rows whose {@link FIX_AVAILABLE_ATTR} is `no`. The page file always contains
- * every row, so the default (unfiltered) document stays a pure function of the
- * artifact. The checkbox is presentation only: no network, no external file.
+ * Rows carry {@link FIX_AVAILABLE_ATTR}. {@link FIX_AVAILABLE_ONLY_ID} is an
+ * unchecked checkbox. Checking it hides rows whose attribute is `no`. The
+ * page file always contains every row, so the default document stays a pure
+ * function of the artifact. The checkbox is presentation only: no network,
+ * no external file.
  *
- * One extension point, unused today:
- * - {@link advisoryCorpusFooter} emits an empty `#advisory-corpus` mount for
- *   a later collapsible advisory-corpus metadata footer.
+ * {@link advisoryCorpusFooter} fills `#advisory-corpus` with a collapsed
+ * footer. It names the advisory source recorded on the artifact, and it says
+ * "Not scanned", "Not checked", or "Not recorded" when that fact is absent.
+ * A missing advisory total is omitted rather than printed as zero.
  */
 
 /** Row attribute the Fix available only checkbox selects on. `yes` or `no`. */
@@ -30,7 +33,7 @@ export const FIX_AVAILABLE_ATTR = 'data-fix-available';
  */
 export const FIX_AVAILABLE_ONLY_ID = 'fix-available-only';
 
-/** Element id reserved for a later advisory-corpus metadata footer. */
+/** Element id of the collapsed advisory-data footer. */
 export const ADVISORY_CORPUS_FOOTER_ID = 'advisory-corpus';
 
 const VULN_RULE_ID = 'vibgrate/vulnerability';
@@ -85,6 +88,8 @@ export function formatHtmlReport(artifact: ScanArtifact): string {
   a { color: inherit; }
   .absent { font-style: italic; }
   body:has(#${FIX_AVAILABLE_ONLY_ID}:checked) tr[${FIX_AVAILABLE_ATTR}="no"] { display: none; }
+  #${ADVISORY_CORPUS_FOOTER_ID} { margin-top: 2.5rem; font-size: 0.85rem; }
+  #${ADVISORY_CORPUS_FOOTER_ID} summary { cursor: pointer; }
 </style>
 </head>
 <body>
@@ -122,10 +127,92 @@ ${securityEvaluated ? renderSecurityTable(securityRows) : '<p class="absent">Not
 <h2>Findings</h2>
 ${renderFindingTable(otherRows)}
 </section>
-${advisoryCorpusFooter()}
+${advisoryCorpusFooter(artifact)}
 </body>
 </html>
 `;
+}
+
+const ADVISORY_SOURCES = ['osv', 'manifest', 'unreachable', 'none'] as const;
+type AdvisorySourceName = (typeof ADVISORY_SOURCES)[number];
+
+const ADVISORY_SOURCE_LABEL: Record<AdvisorySourceName, string> = {
+  osv: 'OSV',
+  manifest: 'Offline package-version manifest',
+  unreachable: 'Not checked',
+  none: 'No packages to check',
+};
+
+/**
+ * Collapsed footer. Closed by default so the finding tables stay first.
+ * Known sources are the only strings copied from the artifact. An unknown
+ * source value is not echoed.
+ */
+function advisoryCorpusFooter(artifact: ScanArtifact): string {
+  const view = advisoryCorpusView(artifact);
+  const summary = view.count === null
+    ? `Advisory data: ${view.label}`
+    : `Advisory data: ${view.label}, ${advisoryCountPhrase(view.count)}`;
+  const body = view.absent
+    ? `<p id="advisory-source" class="absent">${text(view.label)}</p>`
+    : advisoryCorpusList(view.label, view.count);
+  return `<footer id="${ADVISORY_CORPUS_FOOTER_ID}">
+<details>
+<summary>${text(summary)}</summary>
+${body}
+</details>
+</footer>`;
+}
+
+function advisoryCorpusList(label: string, count: number | null): string {
+  const countRow = count === null
+    ? ''
+    : `<dt>Advisories</dt><dd id="advisory-count">${count}</dd>\n`;
+  return `<dl>
+<dt>Source</dt><dd id="advisory-source">${text(label)}</dd>
+${countRow}</dl>`;
+}
+
+interface AdvisoryCorpusView {
+  label: string;
+  /** Null when the artifact does not record a finished total. Never a stand-in zero. */
+  count: number | null;
+  absent: boolean;
+}
+
+function advisoryCorpusView(artifact: ScanArtifact): AdvisoryCorpusView {
+  const recorded = artifact.extended?.vulnerabilities;
+  const source = advisorySourceName(recorded?.source);
+  if (source === 'unreachable') {
+    return { label: ADVISORY_SOURCE_LABEL.unreachable, count: null, absent: true };
+  }
+  if (source === 'osv' || source === 'manifest' || source === 'none') {
+    return {
+      label: ADVISORY_SOURCE_LABEL[source],
+      count: advisoryTotal(recorded?.totalAdvisories),
+      absent: false,
+    };
+  }
+  const findings = Array.isArray(artifact.findings) ? artifact.findings : [];
+  if (findings.some((finding) => finding.ruleId === VULN_RULE_ID)) {
+    return { label: 'Not recorded', count: null, absent: true };
+  }
+  return { label: 'Not scanned', count: null, absent: true };
+}
+
+function advisorySourceName(value: unknown): AdvisorySourceName | null {
+  if (typeof value !== 'string') return null;
+  return (ADVISORY_SOURCES as readonly string[]).includes(value) ? (value as AdvisorySourceName) : null;
+}
+
+/** A non-negative integer is a real total, including 0. Anything else is absent. */
+function advisoryTotal(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) return null;
+  return value;
+}
+
+function advisoryCountPhrase(count: number): string {
+  return count === 1 ? '1 advisory' : `${count} advisories`;
 }
 
 /**
@@ -135,11 +222,6 @@ ${advisoryCorpusFooter()}
  */
 function fixAvailableOnlyControl(): string {
   return `<p id="fix-filter"><label><input id="${FIX_AVAILABLE_ONLY_ID}" type="checkbox"> Fix available only</label></p>\n`;
-}
-
-/** Empty mount. A later change can fill this with a collapsible footer. */
-function advisoryCorpusFooter(): string {
-  return `<div id="${ADVISORY_CORPUS_FOOTER_ID}" hidden></div>`;
 }
 
 function vulnerabilityEvaluated(artifact: ScanArtifact, vulnFindings: Finding[]): boolean {

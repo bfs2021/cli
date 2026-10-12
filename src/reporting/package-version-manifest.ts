@@ -1,7 +1,6 @@
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import * as path from 'node:path';
-import * as os from 'node:os';
-import { spawn } from 'node:child_process';
+import { ArchiveLimitError, readBoundedArchive, readZipMember } from '../core-open/utils/archive-limits.js';
 
 export interface EcosystemVersionEntry {
   latest?: string;
@@ -107,12 +106,7 @@ function zipNotUsable(resolved: string): PackageManifestError {
   );
 }
 
-function unzipMissing(resolved: string): PackageManifestError {
-  return new PackageManifestError(
-    `Package manifest is not readable: ${resolved}. Reading a ZIP manifest needs the unzip command. Pass a JSON package-version manifest to --package-manifest, or install unzip.`,
-    'unreadable',
-  );
-}
+const ZIP_MANIFEST_NAMES = ['package-versions.json', 'manifest.json', 'index.json'] as const;
 
 function ioFailure(err: unknown, resolved: string): PackageManifestError {
   const code = errnoCode(err);
@@ -120,22 +114,8 @@ function ioFailure(err: unknown, resolved: string): PackageManifestError {
   return notReadable(resolved);
 }
 
-function runCommand(cmd: string, args: string[]): Promise<void> {
-  return new Promise((resolve, reject) => {
-    // windowsHide: also runs from console-less hosts (vgd background
-    // rebuilds) — never flash a console window on Windows.
-    // stdout/stderr are discarded. A failing unzip must not echo archive
-    // bytes or tool output into the error the user sees.
-    const child = spawn(cmd, args, { stdio: 'ignore', windowsHide: true });
-    child.on('error', reject);
-    child.on('close', (code) => {
-      if (code !== 0) {
-        reject(Object.assign(new Error(`${cmd} failed`), { code: 'EUNZIP' }));
-        return;
-      }
-      resolve();
-    });
-  });
+function limitError(err: ArchiveLimitError): PackageManifestError {
+  return new PackageManifestError(err.message, 'unusable');
 }
 
 function parseManifestObject(text: string, source: string): PackageVersionManifest {
@@ -160,37 +140,23 @@ function parseManifestObject(text: string, source: string): PackageVersionManife
 }
 
 async function loadManifestFromZip(zipPath: string): Promise<PackageVersionManifest> {
-  let tmpDir: string;
+  // On-disk size is refused before the file is read. Entry count and declared
+  // uncompressed size are refused before any member is inflated.
+  let buf: Buffer;
   try {
-    tmpDir = await mkdtemp(path.join(os.tmpdir(), 'vibgrate-manifest-'));
-  } catch {
-    throw notReadable(zipPath);
+    buf = await readBoundedArchive(zipPath);
+  } catch (err) {
+    if (err instanceof ArchiveLimitError) throw limitError(err);
+    throw err;
   }
+  let body: Buffer;
   try {
-    try {
-      await runCommand('unzip', ['-qq', zipPath, '-d', tmpDir]);
-    } catch (err) {
-      if (errnoCode(err) === 'ENOENT') throw unzipMissing(zipPath);
-      throw zipNotUsable(zipPath);
-    }
-
-    const candidates = [
-      path.join(tmpDir, 'package-versions.json'),
-      path.join(tmpDir, 'manifest.json'),
-      path.join(tmpDir, 'index.json'),
-    ];
-    for (const candidate of candidates) {
-      try {
-        const text = await readFile(candidate, 'utf8');
-        return parseManifestObject(text, zipPath);
-      } catch {
-        // Missing or unusable candidate — try the next well-known name.
-      }
-    }
+    body = readZipMember(buf, zipPath, ZIP_MANIFEST_NAMES);
+  } catch (err) {
+    if (err instanceof ArchiveLimitError) throw limitError(err);
     throw zipNotUsable(zipPath);
-  } finally {
-    await rm(tmpDir, { recursive: true, force: true });
   }
+  return parseManifestObject(body.toString('utf8'), zipPath);
 }
 
 async function loadResolved(resolved: string): Promise<PackageVersionManifest> {

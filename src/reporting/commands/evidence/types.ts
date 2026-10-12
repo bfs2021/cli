@@ -109,10 +109,17 @@ export interface FrozenComponent {
   name: string;
   /** The exact shipped/resolved version (never a range). */
   version: string;
-  /** package-url, when derivable. */
+  /** package-url, when the input document carried one. */
   purl?: string;
-  /** Ecosystem, e.g. npm / PyPI / Maven — drives OSV matching. */
+  /** Ecosystem, e.g. npm / PyPI / Maven — drives OSV matching. Absent when the component has no package URL. */
   ecosystem?: string;
+  /**
+   * CycloneDX `type`, or the SPDX purpose, when the component has no package URL.
+   * With `name` and `version` this is the identity of a component that also has no CPE.
+   */
+  type?: string;
+  /** CPE 2.2 or 2.3, when the document carried one and no package URL. */
+  cpe?: string;
 }
 
 /**

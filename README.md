@@ -585,7 +585,7 @@ vg scan --baseline .vibgrate/baseline.json --drift-budget 40 --drift-worsening 5
 
 - `--drift-budget <score>` fails the build if drift exceeds your budget.
 - `--drift-worsening <percent>` fails the build if drift worsens by more than X% vs baseline.
-- `--summary-out <file>` writes a small JSON summary (`driftScore`, `riskLevel`, change since `--baseline`) that a CI step can read, even when a gate fails the run. An unmeasured score is `null`, never `0`. The full artifact carries the same `drift.*` fields plus the per-component scores: [DOCS.md](./DOCS.md#score-fields-in-the-json-artifact).
+- `--summary-out <file>` writes a small JSON summary (`driftScore`, `riskLevel`, change since `--baseline`, and the `driftBudget` verdict) that a CI step can read, even when a gate fails the run. `driftBudget` is `null` when no budget is set. `--drift-budget` and `--drift-worsening` are recorded with `source` `flags`. An unmeasured score is `null`, never `0`. The full artifact carries the same `drift.*` fields plus the per-component scores: [DOCS.md](./DOCS.md#score-fields-in-the-json-artifact).
 - `--junit <file>` writes a deterministic JUnit XML summary of findings and those gates, next to `--format` (JSON or SARIF). The exit code is unchanged; see [DOCS.md](./DOCS.md#junit).
 
 ```bash
@@ -631,7 +631,7 @@ vg vex                          # generate an OpenVEX document for attestation
 
 Match a component on its package URL (`purl` in CycloneDX, the `purl` externalRef in SPDX). Scan JSON uses the same coordinates (`projects[].type`, `dependencies[].package`, `resolvedVersion`, and `extended.vulnerabilities.packages[]`) and does not repeat the purl string. These files have no CPE field. The CLI does not invent one, and a CPE from another cataloger does not replace the purl. Fields and a local example: [DOCS.md](./DOCS.md#component-identity).
 
-CycloneDX `hashes` and SPDX `checksums` are omitted, and a scan dependency has no digest field. `serialNumber`, `documentNamespace`, `projectId`, and `solutionId` are identifiers. Lockfile integrity values are not copied into the document. Fields and a local example: [DOCS.md](./DOCS.md#package-digests).
+When a lockfile records package digests, CycloneDX `hashes` and SPDX `checksums` list them sorted by algorithm name, then by digest value. A package with no recorded digest omits the array. A scan dependency has no digest field. `serialNumber`, `documentNamespace`, `projectId`, and `solutionId` are identifiers. Fields and a local example: [DOCS.md](./DOCS.md#package-digests).
 
 `--format` is `cyclonedx` (the default) or `spdx`. How the same scan differs between those files — purl placement, the dependency graph, licenses, tool metadata, and the document id — is in [Choosing CycloneDX or SPDX](./DOCS.md#choosing-cyclonedx-or-spdx).
 
