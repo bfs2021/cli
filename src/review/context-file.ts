@@ -18,8 +18,8 @@
  * an existing CLAUDE.md / AGENTS.md without disturbing anything a human wrote.
  */
 
+import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { writeAtomicSync } from '../util/atomic-file.js';
 import { describePattern } from './dimensions.js';
 import type { DominanceVote } from './dominance.js';
 import type { ReviewReceipt } from './schemas.js';
@@ -153,7 +153,8 @@ export function renderContext(input: ContextInput): string {
 /** Write `.vibgrate/review-context.md`, creating the directory if needed. */
 export function writeContextFile(root: string, input: ContextInput): string {
   const target = path.join(root, CONTEXT_PATH);
-  writeAtomicSync(target, `${renderContext(input)}\n`);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, `${renderContext(input)}\n`, 'utf8');
   return CONTEXT_PATH;
 }
 

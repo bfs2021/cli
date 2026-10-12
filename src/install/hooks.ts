@@ -1,6 +1,5 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { writeAtomicSync } from '../util/atomic-file.js';
 
 /**
  * PreToolUse hook wiring for Claude Code (`vg install claude --hooks`): merge
@@ -213,5 +212,6 @@ export function uninstallClaudeHooks(root: string): HookInstallResult {
 }
 
 function writeSettings(file: string, settings: Record<string, unknown>): void {
-  writeAtomicSync(file, `${JSON.stringify(settings, null, 2)}\n`);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify(settings, null, 2)}\n`);
 }

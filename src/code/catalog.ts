@@ -14,7 +14,6 @@
  */
 
 import * as fs from 'node:fs';
-import { writeAtomicSync } from '../util/atomic-file.js';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
@@ -204,7 +203,9 @@ function readCache(): CacheShape | null {
 
 function writeCache(models: CatalogModel[], ts: number): void {
   try {
-    writeAtomicSync(catalogCachePath(), JSON.stringify({ ts, models }));
+    const file = catalogCachePath();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ ts, models }));
   } catch {
     /* cache is best-effort */
   }

@@ -2,8 +2,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import type { HailePolicy } from './haile/types.js';
 import * as path from 'node:path';
+import { artifactWriteError, writeAtomicSync } from '../util/atomic-file.js';
 import { portableValue } from '../core-open/utils/portable-path.js';
-import { writeAtomicSync } from '../util/atomic-file.js';
 import { serializeGraph } from './serialize.js';
 import { mapFileExists, snapshotPathFor, writeGraphSnapshot } from './snapshot.js';
 import { renderReport } from './report.js';
@@ -197,7 +197,7 @@ export function ensureVibgrateGitignore(root: string): void {
   const file = path.join(vibgrateDir(root), '.gitignore');
   fs.mkdirSync(vibgrateDir(root), { recursive: true });
   if (!fs.existsSync(file)) {
-    writeAtomicSync(file, `${DEFAULT_GITIGNORE.join('\n')}\n`);
+    commitArtifact(file, `${DEFAULT_GITIGNORE.join('\n')}\n`);
     return;
   }
   // A vg-authored .gitignore written before an entry joined DEFAULT_GITIGNORE
@@ -211,7 +211,16 @@ export function ensureVibgrateGitignore(root: string): void {
   const have = new Set(existing.split(/\r?\n/).map((l) => l.trim()));
   const missing = DEFAULT_GITIGNORE.filter((entry) => !entry.startsWith('#') && !have.has(entry));
   if (missing.length) {
-    writeAtomicSync(file, `${existing.replace(/\n*$/, '\n')}${missing.join('\n')}\n`);
+    commitArtifact(file, `${existing.replace(/\n*$/, '\n')}${missing.join('\n')}\n`);
+  }
+}
+
+/** Temp + rename. A failed write leaves any previous bytes in place. */
+function commitArtifact(file: string, data: string): void {
+  try {
+    writeAtomicSync(file, data);
+  } catch (err) {
+    throw artifactWriteError(file, err);
   }
 }
 
@@ -274,11 +283,11 @@ export function writeArtifacts(graph: VgGraph, options: WriteOptions): WrittenAr
   }
 
   if (!storeMode || !fs.existsSync(snapshotPathFor(graphPath))) {
-    // Temp + rename in the same directory: `vg serve` hot-reloads the map on
-    // mtime change, so a rebuild — including its own in-process auto-refresh —
-    // must never expose a half-written file to a concurrent reader. An
-    // interrupted write leaves the previous map in place.
-    writeAtomicSync(graphPath, serializeGraph(graph, { root: options.root }));
+    // Temp + rename: `vg serve` hot-reloads the map on mtime change, so a
+    // rebuild — including its own in-process auto-refresh — must never
+    // expose a half-written file to a concurrent reader. An interrupted
+    // write leaves the previous map in place.
+    commitArtifact(graphPath, serializeGraph(graph, { root: options.root }));
     // Binary sidecar cache for fast loads; best-effort, JSON stays canonical.
     writeGraphSnapshot(graphPath, graph);
   }
@@ -289,20 +298,20 @@ export function writeArtifacts(graph: VgGraph, options: WriteOptions): WrittenAr
 
   if (options.report !== false) {
     const reportPath = path.join(companions, 'GRAPH_REPORT.md');
-    writeAtomicSync(reportPath, renderReport(graph, options.root));
+    commitArtifact(reportPath, renderReport(graph, options.root));
     written.reportPath = reportPath;
   }
 
   if (options.html !== false) {
     const htmlPath = path.join(companions, 'graph.html');
-    writeAtomicSync(htmlPath, renderHtml(graph, options.root));
+    commitArtifact(htmlPath, renderHtml(graph, options.root));
     written.htmlPath = htmlPath;
   }
 
   // facts.jsonl (deterministic NDJSON) when facts were derived.
   if (graph.facts && graph.facts.length) {
     const factsPath = path.join(companions, 'facts.jsonl');
-    writeAtomicSync(factsPath, graph.facts.map((f) => JSON.stringify(f)).join('\n') + '\n');
+    commitArtifact(factsPath, graph.facts.map((f) => JSON.stringify(f)).join('\n') + '\n');
     written.factsPath = factsPath;
   }
 

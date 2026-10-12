@@ -13,7 +13,6 @@
  */
 
 import * as fs from 'node:fs';
-import { writeAtomicSync } from '../util/atomic-file.js';
 import * as path from 'node:path';
 import { hashBytes, hashString, canonicalize } from '../engine/hash.js';
 import { cacheDir } from '../engine/cache.js';
@@ -138,7 +137,8 @@ export function loadScanCache(root: string, key: ScanCacheKey): ScanCacheEntry |
 /** Best-effort write (a read-only checkout etc. just means no cache next time). */
 export function writeScanCache(root: string, key: ScanCacheKey, artifact: ScanArtifact): void {
   try {
-    writeAtomicSync(
+    fs.mkdirSync(cacheDir(root), { recursive: true });
+    fs.writeFileSync(
       cachePath(root),
       stableStringify(
         { version: CACHE_VERSION, manifestHash: key.manifestHash, toolVersion: key.toolVersion, offline: key.offline, artifact },

@@ -12,7 +12,6 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { writeAtomicSync } from '../../util/atomic-file.js';
 import { ARCHITECTURE_CONFIG_FILE } from './policy-config.js';
 import type { HaileSidecar } from './types.js';
 import { ARCH_POLICY_SCHEMA, DEFAULT_POLICY, POLICIES, type HailePolicy } from './types.js';
@@ -92,6 +91,7 @@ export function seedArchitecturePolicy(opts: SeedArchitecturePolicyOptions): See
   if (fs.existsSync(target)) {
     return { written: false, path: ARCHITECTURE_CONFIG_FILE, policy, observed, reason: 'already-present' };
   }
-  writeAtomicSync(target, renderArchitecturePolicy(policy));
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, renderArchitecturePolicy(policy), 'utf8');
   return { written: true, path: ARCHITECTURE_CONFIG_FILE, policy, observed, reason: 'written' };
 }

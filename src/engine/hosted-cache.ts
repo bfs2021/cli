@@ -12,7 +12,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
-import { writeAtomicSync } from '../util/atomic-file.js';
 import { cacheDir } from './cache.js';
 import { fetchHostedDocs, hostedBase, type HostedDocsRequest, type HostedDocsResult, type HostedOptions } from './hosted.js';
 
@@ -68,7 +67,8 @@ function saveFile(root: string, file: CacheFile): void {
         delete file.entries[k];
       }
     }
-    writeAtomicSync(cachePath(root), JSON.stringify(file));
+    fs.mkdirSync(cacheDir(root), { recursive: true });
+    fs.writeFileSync(cachePath(root), JSON.stringify(file));
   } catch {
     /* a failed cache write must never fail the lookup */
   }

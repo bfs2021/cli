@@ -3,7 +3,6 @@ import { createRequire } from 'node:module';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { writeAtomicSync } from '../util/atomic-file.js';
 import { hashString } from './hash.js';
 import { cacheDir } from './cache.js';
 import { openVectorCas, VECTOR_TEXT_VERSION, type CasStore } from './cas.js';
@@ -859,7 +858,10 @@ function writeBinaryCache(file: string, cache: EmbedCache): void {
     Buffer.from(floats.buffer, floats.byteOffset, floats.byteLength).copy(out, o);
   }
 
-  writeAtomicSync(file, out);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.tmp.${process.pid}`;
+  fs.writeFileSync(tmp, out);
+  fs.renameSync(tmp, file);
 }
 
 /** Best-effort drop of the old model-named JSON caches under `.vibgrate/cache/`. */

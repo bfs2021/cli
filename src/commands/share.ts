@@ -5,7 +5,6 @@ import { Command } from 'commander';
 import { applyGlobalOptions, readGlobal } from '../cli-options.js';
 import { rootOf } from './util.js';
 import { CliError, ExitCode } from '../util/exit.js';
-import { writeAtomicSync } from '../util/atomic-file.js';
 import { c, info } from '../util/output.js';
 
 /**
@@ -65,7 +64,7 @@ function writeVibgrateGitignore(root: string, reports: boolean): void {
   fs.mkdirSync(dir, { recursive: true });
   const lines = ['# Managed by `vg share` — keep graph.json committed, ignore the rest', 'cache/', 'facts.jsonl', 'graph.snap'];
   if (!reports) lines.push('graph.html', 'GRAPH_REPORT.md');
-  writeAtomicSync(path.join(dir, '.gitignore'), `${lines.join('\n')}\n`);
+  fs.writeFileSync(path.join(dir, '.gitignore'), `${lines.join('\n')}\n`);
 }
 
 function writeGitAttributes(root: string): void {
@@ -74,7 +73,7 @@ function writeGitAttributes(root: string): void {
   let content = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
   if (!content.split('\n').some((l) => l.trim() === line)) {
     content = content.length ? `${content.replace(/\s*$/, '')}\n${line}\n` : `${line}\n`;
-    writeAtomicSync(file, content);
+    fs.writeFileSync(file, content);
   }
 }
 
@@ -102,7 +101,8 @@ function installPreCommitHook(root: string): void {
   if (re.test(content)) content = content.replace(re, block);
   else content = `${content.replace(/\s*$/, '')}\n\n${block}\n`;
   if (!content.startsWith('#!')) content = `#!/bin/sh\n${content}`;
-  writeAtomicSync(file, content, { mode: 0o755 });
+  fs.writeFileSync(file, content);
+  fs.chmodSync(file, 0o755);
 }
 
 function undo(root: string): void {
@@ -112,7 +112,7 @@ function undo(root: string): void {
     const re = new RegExp(`\\n*${escapeRe(HOOK_BEGIN)}[\\s\\S]*?${escapeRe(HOOK_END)}\\n*`);
     const next = fs.readFileSync(hookFile, 'utf8').replace(re, '\n');
     if (next.trim() === '#!/bin/sh') fs.rmSync(hookFile);
-    else writeAtomicSync(hookFile, next, { mode: 0o755 });
+    else fs.writeFileSync(hookFile, next);
   }
   // Remove .gitattributes line.
   const attr = path.join(root, '.gitattributes');
@@ -122,7 +122,7 @@ function undo(root: string): void {
       .split('\n')
       .filter((l) => l.trim() !== '.vibgrate/graph.json merge=vg')
       .join('\n');
-    writeAtomicSync(attr, next);
+    fs.writeFileSync(attr, next);
   }
   // Drop git config (ignore errors if absent).
   try {

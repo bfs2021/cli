@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import { writeAtomicSync } from '../util/atomic-file.js';
+import * as fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import { Command } from 'commander';
 import { buildGraph } from '../engine/build.js';
@@ -474,7 +474,8 @@ function writeExport(graph: Parameters<typeof serializeGraph>[0], target: string
         ExitCode.USAGE_ERROR,
       );
   }
-  writeAtomicSync(path.resolve(target), content);
+  fs.mkdirSync(path.dirname(path.resolve(target)), { recursive: true });
+  fs.writeFileSync(target, content);
 }
 
 function collect(value: string, prev: string[]): string[] {

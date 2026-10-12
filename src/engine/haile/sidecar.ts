@@ -2,8 +2,8 @@
 
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
-import { writeAtomicSync } from '../../util/atomic-file.js';
 import * as path from 'node:path';
+import { writeAtomicSync } from '../../util/atomic-file.js';
 import type { VgGraph } from '../../schema.js';
 import { ensureModuleEsmPackageJson, kernelDisabled } from '../../install/module-core.js';
 import { haileModuleDir, haileModulePathOverride } from './haile-provider.js';

@@ -13,7 +13,6 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { atomicTempPath, cleanupStrayAtomicTemps, discardAtomicTemp } from '../util/atomic-file.js';
 import { cacheDir } from './cache.js';
 import { loadGraphFileWithSnapshot } from './snapshot.js';
 import { assertReadableGraph } from './serialize.js';
@@ -43,13 +42,16 @@ export function indexDbPath(root: string): string {
 /** Write (replace) the SQLite index from a built graph. Never throws to callers. */
 export function writeGraphIndex(root: string, graph: VgGraph): IndexWriteResult {
   const file = indexDbPath(root);
-  let tmp: string | undefined;
   try {
      
     const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite');
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    cleanupStrayAtomicTemps(path.dirname(file), path.basename(file));
-    tmp = atomicTempPath(file);
+    const tmp = `${file}.${process.pid}.tmp`;
+    try {
+      if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+    } catch {
+      /* ignore */
+    }
 
     const db = new DatabaseSync(tmp);
     db.exec(`
@@ -156,7 +158,6 @@ export function writeGraphIndex(root: string, graph: VgGraph): IndexWriteResult 
     fs.renameSync(tmp, file);
     return { path: file, nodes: graph.nodes.length, edges: graph.edges.length, ok: true };
   } catch (err) {
-    if (tmp) discardAtomicTemp(tmp);
     return {
       path: file,
       nodes: 0,

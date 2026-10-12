@@ -1,6 +1,5 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { writeAtomicSync } from '../util/atomic-file.js';
 import type { Area, GraphNode, VgGraph } from '../schema.js';
 import { versionMarker } from './content.js';
 import { readDataConfigSync } from '../core-open/config.js';
@@ -189,7 +188,7 @@ export function writeAreaSkills(root: string, graph: VgGraph): AreaSkillChanges 
         if (current !== null && !/<!--\s*vg:v\d+\b/.test(current)) continue; // user took ownership
         if (current === content) continue; // deterministic content — no churn
         fs.mkdirSync(path.dirname(skillFile), { recursive: true });
-        writeAtomicSync(skillFile, content);
+        fs.writeFileSync(skillFile, content);
         changes.written.push(path.join(base, dir, 'SKILL.md'));
       } catch {
         /* unwritable — skip, never fail the build over a skill file */

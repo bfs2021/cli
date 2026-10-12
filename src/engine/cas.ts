@@ -1,5 +1,4 @@
 import * as fs from 'node:fs';
-import { writeAtomicSync } from '../util/atomic-file.js';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { Packr } from 'msgpackr';
@@ -379,12 +378,22 @@ function safeSegment(id: string): string {
   return id.replace(/\//g, '__').replace(/[^A-Za-z0-9._@+-]+/g, '_') || 'unnamed';
 }
 
+let tmpSeq = 0;
+
 /** Temp + rename so a concurrent reader never sees a torn object. Returns success. */
 function writeAtomic(file: string, data: Buffer): boolean {
+  const tmp = `${file}.${process.pid}.${++tmpSeq}.tmp`;
   try {
-    writeAtomicSync(file, data);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(tmp, data);
+    fs.renameSync(tmp, file);
     return true;
   } catch {
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {
+      /* best-effort */
+    }
     return false;
   }
 }

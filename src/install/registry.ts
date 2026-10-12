@@ -1,7 +1,6 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { writeAtomicSync } from '../util/atomic-file.js';
 import {
   skillMarkdown,
   nudgeMarkdown,
@@ -323,7 +322,8 @@ export function isAssistantInstalled(a: Assistant, root: string): boolean {
 // --- writers ---
 
 function writeFileEnsured(file: string, content: string): void {
-  writeAtomicSync(file, content);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, content);
 }
 
 /**
@@ -532,11 +532,12 @@ function writeNudge(file: string, target: NudgeTarget, smallRepo: boolean, clien
 }
 
 function upsertBlock(file: string, block: string): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
   let existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
   const re = new RegExp(`${escapeRe(NUDGE_BEGIN)}[\\s\\S]*?${escapeRe(NUDGE_END)}`);
   if (re.test(existing)) existing = existing.replace(re, block);
   else existing = existing.length ? `${existing.replace(/\s*$/, '')}\n\n${block}\n` : `${block}\n`;
-  writeAtomicSync(file, existing);
+  fs.writeFileSync(file, existing);
 }
 
 function removeBlock(file: string): boolean {
@@ -544,7 +545,7 @@ function removeBlock(file: string): boolean {
   const existing = fs.readFileSync(file, 'utf8');
   const re = new RegExp(`\\n*${escapeRe(NUDGE_BEGIN)}[\\s\\S]*?${escapeRe(NUDGE_END)}\\n*`);
   if (!re.test(existing)) return false;
-  writeAtomicSync(file, existing.replace(re, '\n'));
+  fs.writeFileSync(file, existing.replace(re, '\n'));
   return true;
 }
 

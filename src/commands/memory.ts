@@ -1,6 +1,5 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { writeAtomicSync } from '../util/atomic-file.js';
 import { Command } from 'commander';
 import { applyGlobalOptions, readGlobal, type GlobalOpts } from '../cli-options.js';
 import { rootOf } from './util.js';
@@ -141,7 +140,8 @@ export function registerServeMemory(serve: Command): void {
       const count = jsonl ? jsonl.trimEnd().split('\n').length : 0;
       if (file) {
         const target = path.resolve(rootOf(global), file);
-        writeAtomicSync(target, jsonl, { mode: 0o600 });
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, jsonl, { mode: 0o600 });
         if (global.json) json({ ok: true, file: target, count });
         else info(`${c.cyan('vg serve memory export')} · wrote ${count} memories → ${target}`);
         return;

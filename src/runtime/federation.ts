@@ -13,7 +13,6 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { writeAtomicSync } from '../util/atomic-file.js';
 import { repositoryIdFromRoot, globalGraphPath, globalGraphPathForRef } from './paths.js';
 import { detectGitRef } from './git-ref.js';
 import { isSkippedDirName } from '../engine/discover.js';
@@ -303,6 +302,7 @@ export function federationFromWorkspaceRoots(
 export function writeFederationFile(primaryRoot: string, federation: FederatedWorkspace): string {
   const primary = path.resolve(primaryRoot);
   const file = federationPath(primary);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
   const body: FederationFile = {
     schemaVersion: FEDERATION_SCHEMA_VERSION,
     members: federation.members.map((m) => ({
@@ -320,6 +320,6 @@ export function writeFederationFile(primaryRoot: string, federation: FederatedWo
       toRoot: path.relative(primary, b.toRoot) || '.',
     }));
   }
-  writeAtomicSync(file, `${JSON.stringify(body, null, 2)}\n`);
+  fs.writeFileSync(file, `${JSON.stringify(body, null, 2)}\n`, 'utf8');
   return file;
 }

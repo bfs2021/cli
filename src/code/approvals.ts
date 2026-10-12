@@ -17,7 +17,6 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { writeAtomicSync } from '../util/atomic-file.js';
 import { ensureVibgrateGitignore } from '../engine/artifacts.js';
 import type { MutatingAction, PatchFileAction } from './tools.js';
 
@@ -116,7 +115,7 @@ export function saveApprovalRules(root: string, rules: ApprovalRule[]): boolean 
     // developer's standing consents must not ride into the team's repo.
     ensureVibgrateGitignore(root);
     const sorted = dedupe(rules).slice().sort((a, b) => ruleKey(a).localeCompare(ruleKey(b)));
-    writeAtomicSync(approvalsPath(root), `${JSON.stringify({ rules: sorted }, null, 2)}\n`);
+    fs.writeFileSync(approvalsPath(root), `${JSON.stringify({ rules: sorted }, null, 2)}\n`);
     return true;
   } catch {
     return false;

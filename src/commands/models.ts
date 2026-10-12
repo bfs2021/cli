@@ -36,7 +36,6 @@ import { applyRecommendedDefaultMode } from '../runtime/local-inference-status.j
 import { freeBytesOnVolume, weightStoreDir } from '../runtime/weight-store.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { writeAtomicSync } from '../util/atomic-file.js';
 import { applyGlobalOptions, readGlobal } from '../cli-options.js';
 import { rootOf } from './util.js';
 import { CliError, ExitCode } from '../util/exit.js';
@@ -756,7 +755,8 @@ export function registerModels(program: Command): void {
 
       if (opts.out) {
         const outPath = path.resolve(opts.out);
-        writeAtomicSync(outPath, `${JSON.stringify(report, null, 2)}\n`);
+        fs.mkdirSync(path.dirname(outPath), { recursive: true });
+        fs.writeFileSync(outPath, `${JSON.stringify(report, null, 2)}\n`);
         if (!global.json) info(c.dim(`  wrote ${outPath}`));
       }
 

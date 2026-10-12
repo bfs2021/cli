@@ -2,6 +2,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { CliError } from '../util/exit.js';
+import { setAtomicWriteFaultForTests } from '../util/atomic-file.js';
 import {
   companionArtifactDir,
   defaultGraphPath,
@@ -195,6 +197,53 @@ describe('HAILE classify file via writeArtifacts', () => {
       else process.env.VIBGRATE_NO_KERNEL = prevNo;
       if (prevArchPath === undefined) delete process.env.VIBGRATE_ARCH_PATH;
       else process.env.VIBGRATE_ARCH_PATH = prevArchPath;
+    }
+  });
+});
+
+describe('writeArtifacts atomic replace', () => {
+  it('an interrupted graph write leaves the previous map parseable', () => {
+    const root = tmpDir();
+    const graphPath = path.join(root, '.vibgrate', 'graph.json');
+    const prevNo = process.env.VIBGRATE_NO_KERNEL;
+    process.env.VIBGRATE_NO_KERNEL = '1';
+    try {
+      writeArtifacts(tinyGraph(), { root, html: false, report: true, graphPath });
+      const reportPath = path.join(root, '.vibgrate', 'GRAPH_REPORT.md');
+      expect(fs.existsSync(reportPath)).toBe(true);
+      const prior = '{"kept":true,"nodes":[]}\n';
+      fs.writeFileSync(graphPath, prior);
+      const reportPrior = fs.readFileSync(reportPath);
+
+      setAtomicWriteFaultForTests((tmp, data) => {
+        if (tmp.includes(`${path.sep}.graph.json.`) && tmp.endsWith('.vg-tmp')) {
+          const text = typeof data === 'string' ? data : Buffer.from(data as Uint8Array).toString('utf8');
+          fs.writeFileSync(tmp, text.slice(0, 10));
+          throw Object.assign(new Error('aborted mid-write'), { code: 'EIO' });
+        }
+        if (typeof data === 'string') fs.writeFileSync(tmp, data);
+        else fs.writeFileSync(tmp, data);
+      });
+
+      let caught: unknown;
+      try {
+        writeArtifacts(tinyGraph(), { root, html: false, report: true, graphPath });
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(CliError);
+      expect((caught as CliError).message).toContain(graphPath);
+      expect((caught as CliError).message).not.toContain('.vg-tmp');
+      expect(fs.readFileSync(graphPath, 'utf8')).toBe(prior);
+      expect(JSON.parse(fs.readFileSync(graphPath, 'utf8'))).toEqual({ kept: true, nodes: [] });
+      expect(fs.readFileSync(reportPath).equals(reportPrior)).toBe(true);
+      const names = fs.readdirSync(path.dirname(graphPath));
+      expect(names.filter((name) => name.endsWith('.vg-tmp') || name.endsWith('.tmp'))).toEqual([]);
+    } finally {
+      setAtomicWriteFaultForTests(null);
+      if (prevNo === undefined) delete process.env.VIBGRATE_NO_KERNEL;
+      else process.env.VIBGRATE_NO_KERNEL = prevNo;
     }
   });
 });

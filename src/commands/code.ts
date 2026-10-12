@@ -1,5 +1,4 @@
 import * as fs from 'node:fs';
-import { writeAtomicSync } from '../util/atomic-file.js';
 import * as readline from 'node:readline';
 import { Command } from 'commander';
 import { resolveProviders } from '../code/router.js';
@@ -1184,7 +1183,7 @@ export function registerCode(program: Command): void {
       // `--out` writes the machine-readable result to a file (CI/benchmarks),
       // independent of what goes to the terminal.
       if (opts.out) {
-        writeAtomicSync(opts.out, JSON.stringify(result, null, 2) + '\n');
+        fs.writeFileSync(opts.out, JSON.stringify(result, null, 2) + '\n');
       }
       if (global.json) {
         json(result);

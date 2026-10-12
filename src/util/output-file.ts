@@ -83,7 +83,7 @@ export function writeOutputFileSync(
   opts?: OutputWriteOptions,
 ): void {
   try {
-    writeAtomicSync(filePath, data, { wrapError: false });
+    writeAtomicSync(filePath, data);
   } catch (err) {
     rethrowOutputWrite(filePath, err, opts);
   }
@@ -93,7 +93,7 @@ export function writeOutputFileSync(
 export async function writeJsonOutputFile(filePath: string, value: unknown, opts?: OutputWriteOptions): Promise<void> {
   const text = serializeJsonOutput(filePath, value, { ...opts, space: opts?.space ?? 2 });
   try {
-    await writeAtomic(filePath, `${text}\n`, { wrapError: false });
+    await writeAtomic(filePath, `${text}\n`);
   } catch (err) {
     rethrowOutputWrite(filePath, err, opts);
   }

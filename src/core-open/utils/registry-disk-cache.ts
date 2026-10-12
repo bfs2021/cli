@@ -3,7 +3,6 @@
 // and re-run the vendor script. Apache-2.0.
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { writeAtomic } from '../../util/atomic-file.js';
 import { REGISTRY_META_TTL_MS, registryMetaCacheDir } from './user-cache.js';
 
 const DISK_CACHE_VERSION = 1;
@@ -77,10 +76,13 @@ export class RegistryDiskCache<T> {
     const file = this.cacheFile(key);
     if (!file || !this.cacheDir) return;
     const entry: DiskEntry<T> = { v: DISK_CACHE_VERSION, fetchedAt: this.now(), meta };
+    const tmp = `${file}.${process.pid}.tmp`;
     try {
-      await writeAtomic(file, JSON.stringify(entry));
+      await fs.mkdir(this.cacheDir, { recursive: true });
+      await fs.writeFile(tmp, JSON.stringify(entry));
+      await fs.rename(tmp, file);
     } catch {
-      /* best-effort */
+      await fs.unlink(tmp).catch(() => undefined);
     }
   }
 

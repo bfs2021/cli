@@ -13,7 +13,6 @@ import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 import { dssePae, DSSE_PAYLOAD_TYPE, keyId, generateKeypair, type DsseEnvelope } from '../../../engine/attest.js';
 import { CliError, ExitCode } from '../../../util/exit.js';
-import { writeAtomicSync } from '../../../util/atomic-file.js';
 import { rethrowOutputWrite, serializeJsonOutput, writeOutputFileSync } from '../../../util/output-file.js';
 import { exposureSubjectDigest } from './exposure.js';
 import type { Advisory, ExposureResult, Regime, Release } from './types.js';
@@ -389,8 +388,9 @@ export function resolveSigningKey(root: string, explicit?: string): { key: crypt
   if (!fs.existsSync(keyPath)) {
     if (chosen) throw new CliError(`signing key not found: ${chosen}`, ExitCode.USAGE_ERROR);
     const kp = generateKeypair();
-    writeAtomicSync(keyPath, kp.privatePem, { mode: 0o600 });
-    writeAtomicSync(`${keyPath}.pub`, kp.publicPem);
+    fs.mkdirSync(path.dirname(keyPath), { recursive: true });
+    fs.writeFileSync(keyPath, kp.privatePem, { mode: 0o600 });
+    fs.writeFileSync(`${keyPath}.pub`, kp.publicPem);
     minted = true;
   }
   let key: crypto.KeyObject;

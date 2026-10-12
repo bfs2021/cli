@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
-import { writeAtomicSync } from '../util/atomic-file.js';
 import * as zlib from 'node:zlib';
+import { writeAtomicSync } from '../util/atomic-file.js';
 import { Packr } from 'msgpackr';
 import { assertReadableGraph, parseGraph, unreadableGraphError } from './serialize.js';
 import { VERSION } from '../version.js';
