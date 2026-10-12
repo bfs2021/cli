@@ -21,8 +21,21 @@ import { emitSkippedSymlinkNotice, rememberSkippedSymlink } from './skipped-syml
 import { inspectUtf8, NonTextFileError } from './text-bytes.js';
 import { lockfileKind, LockfileParseError } from './lockfile-parse.js';
 import { warningPathLabel } from '../warnings.js';
-import { artifactWriteError, writeAtomic } from '../../util/atomic-file.js';
+import { artifactWriteMessage, writeAtomic } from './atomic-file.js';
 
+type WriteFailure = (filePath: string, cause: unknown) => Error;
+
+let wrapWriteFailure: WriteFailure = (filePath, cause) =>
+  new Error(artifactWriteMessage(filePath, cause));
+
+/**
+ * The CLI installs this so a failed artifact write exits as its own error
+ * type. Core-open stays free of that type and throws a plain Error until
+ * a wrapper is set.
+ */
+export function setWriteFailureWrapper(wrapper: WriteFailure): void {
+  wrapWriteFailure = wrapper;
+}
 
 const execFileAsync = promisify(execFile);
 
@@ -1233,7 +1246,7 @@ export async function writeJsonFile(filePath: string, data: unknown): Promise<vo
   try {
     await writeAtomic(filePath, body);
   } catch (err) {
-    throw artifactWriteError(filePath, err);
+    throw wrapWriteFailure(filePath, err);
   }
 }
 
@@ -1241,6 +1254,6 @@ export async function writeTextFile(filePath: string, content: string): Promise<
   try {
     await writeAtomic(filePath, content);
   } catch (err) {
-    throw artifactWriteError(filePath, err);
+    throw wrapWriteFailure(filePath, err);
   }
 }
