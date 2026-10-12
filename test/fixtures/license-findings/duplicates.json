@@ -1,0 +1,122 @@
+{
+  "projects": [
+    {
+      "name": "web",
+      "path": "apps/web",
+      "type": "node",
+      "dependencies": [
+        {
+          "package": "alpha-bad",
+          "section": "devDependencies",
+          "version": "1.0.0",
+          "raw": "NotARealLicense-9",
+          "sourcePath": "apps/web/package.json"
+        },
+        {
+          "package": "alpha-bad",
+          "section": "dependencies",
+          "version": "1.0.0",
+          "raw": "NotARealLicense-9",
+          "sourcePath": "./apps/web/package.json"
+        },
+        {
+          "package": "alpha-bad",
+          "section": "optionalDependencies",
+          "version": "1.0.0",
+          "raw": "NotARealLicense-9",
+          "sourcePath": "apps\\web\\package.json"
+        },
+        {
+          "package": "alpha-bad",
+          "section": "peerDependencies",
+          "version": "1.0.0",
+          "raw": "MIT OR NotARealLicense-9",
+          "sourcePath": "apps/web/package.json"
+        },
+        {
+          "package": "alpha-bad",
+          "section": "dependencies",
+          "version": "1.0.0",
+          "raw": "MIT OR NotARealLicense-9",
+          "sourcePath": "apps/web/package.json"
+        },
+        {
+          "package": "alpha-bad",
+          "section": "dependencies",
+          "version": "1.0.0",
+          "raw": "Also-Not-SPDX",
+          "sourcePath": "apps/web/package.json"
+        },
+        {
+          "package": "alpha-bad",
+          "section": "dependencies",
+          "version": "1.0.0",
+          "raw": "NotARealLicense-9",
+          "sourcePath": "apps/web/LICENSE"
+        },
+        {
+          "package": "other-bad",
+          "section": "dependencies",
+          "version": "1.0.0",
+          "raw": "NotARealLicense-9",
+          "sourcePath": "apps/web/package.json"
+        },
+        {
+          "package": "beta-ok",
+          "section": "dependencies",
+          "version": "1.0.0",
+          "raw": "MIT",
+          "sourcePath": "apps/web/package.json"
+        },
+        {
+          "package": "ref-ok",
+          "section": "dependencies",
+          "version": "1.0.0",
+          "raw": "LicenseRef-Acme-1.0",
+          "sourcePath": "apps/web/package.json"
+        },
+        {
+          "package": "expr-ref",
+          "section": "devDependencies",
+          "version": "3.0.0",
+          "raw": "LicenseRef-Acme-1.0 OR NotARealLicense-9",
+          "sourcePath": "apps/web/package.json"
+        },
+        {
+          "package": "expr-ref",
+          "section": "dependencies",
+          "version": "1.0.0",
+          "raw": "LicenseRef-Acme-1.0 OR NotARealLicense-9",
+          "sourcePath": "apps/web/package.json"
+        }
+      ]
+    },
+    {
+      "name": "api",
+      "path": "apps/api",
+      "type": "node",
+      "dependencies": [
+        {
+          "package": "alpha-bad",
+          "section": "dependencies",
+          "version": "1.0.0",
+          "raw": "NotARealLicense-9",
+          "sourcePath": "apps/web/package.json"
+        },
+        {
+          "package": "gamma-bad",
+          "section": "dependencies",
+          "version": "1.0.0",
+          "raw": "Third-Not-SPDX",
+          "sourcePath": "apps/api/package.json"
+        },
+        {
+          "package": "gamma-bad",
+          "section": "devDependencies",
+          "version": "1.0.0",
+          "raw": "Third-Not-SPDX"
+        }
+      ]
+    }
+  ]
+}

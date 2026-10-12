@@ -25,6 +25,7 @@
 import { execFile } from 'node:child_process';
 import { CliError, ExitCode } from '../../../util/exit.js';
 import type { FrozenComponent, ReleaseBuild } from './types.js';
+import { readSpdxInput } from './sbom-input.js';
 
 // ── `--metadata-file` ──
 
@@ -241,37 +242,14 @@ export function isSpdxDocument(data: unknown): data is SpdxDocument {
   return typeof o.spdxVersion === 'string' || (typeof o.SPDXID === 'string' && Array.isArray(o.packages));
 }
 
-function ecosystemForPurl(purl: string): string | undefined {
-  const m = /^pkg:([^/]+)\//.exec(purl);
-  if (!m) return undefined;
-  const map: Record<string, string> = {
-    npm: 'npm', pypi: 'PyPI', maven: 'Maven', nuget: 'NuGet', golang: 'Go', cargo: 'crates.io', gem: 'RubyGems',
-    composer: 'Packagist', pub: 'Pub', hex: 'Hex', deb: 'Debian', apk: 'Alpine', rpm: 'RPM',
-  };
-  return map[m[1].toLowerCase()];
-}
-
 /**
- * SPDX 2.x `packages[]` → frozen components. The package that *describes the
- * image itself* (purpose `CONTAINER`, or a `pkg:oci/` purl) is not a component
- * of the release and is skipped; so is anything without a concrete version.
+ * SPDX 2.x `packages[]` and `files[]` → frozen components. The package that
+ * describes the image itself (purpose `CONTAINER`, or a `pkg:oci/` purl) is
+ * not a component of the release. A component with neither a package URL nor
+ * a CPE is kept when it has a name, a version, and a type. See `readSpdxInput`.
  */
 export function componentsFromSpdx(doc: SpdxDocument): FrozenComponent[] {
-  const out: FrozenComponent[] = [];
-  const seen = new Set<string>();
-  for (const pkg of doc.packages ?? []) {
-    const name = str(pkg.name);
-    const version = str(pkg.versionInfo);
-    if (!name || !version) continue;
-    const purl = pkg.externalRefs?.find((r) => r.referenceType === 'purl' && typeof r.referenceLocator === 'string')?.referenceLocator;
-    if (pkg.primaryPackagePurpose === 'CONTAINER' || purl?.startsWith('pkg:oci/')) continue;
-    const ecosystem = purl ? ecosystemForPurl(purl) : undefined;
-    const key = `${ecosystem ?? ''}|${name}|${version}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({ name, version, purl, ecosystem });
-  }
-  return out.sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version));
+  return readSpdxInput(doc, 'SBOM').components;
 }
 
 // ── Local image inspection (`docker`) ──

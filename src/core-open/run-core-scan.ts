@@ -31,6 +31,7 @@ import { ComposerCache } from './scanners/composer-cache.js';
 import { PubCache } from './scanners/pub-cache.js';
 import { Semaphore } from './utils/semaphore.js';
 import { computeDriftScore, generateFindings, computeProjectId, computeSolutionId } from './scoring/drift-score.js';
+import { dedupeLicenseFindings } from './licenses/dedupe-findings.js';
 import { compareBaselineFindings } from './baseline-suppressions.js';
 import { formatText } from './formatters/text.js';
 import { formatSarif } from './formatters/sarif.js';
@@ -50,6 +51,7 @@ import { loadPackageVersionManifest } from './package-version-manifest.js';
 import { generateWorkspaceRelationshipMermaid, generateProjectRelationshipMermaid, generateSolutionRelationshipMermaid } from './utils/mermaid.js';
 import { classifyProject, summarizeBilling } from './scanners/project-classification.js';
 import { collectVulnTargets, scanVulnerabilities, generateVulnerabilityFindings } from './scanners/vulnerability-scanner.js';
+import { findingsForDisplay, orderScanArtifactForEmit } from './findings-order.js';
 import { attributeVulnerabilities } from './scoring/vuln-attribution.js';
 import { gitHistoryAvailable, workingTreeDirty } from './utils/git-history.js';
 import { skippedSymlinkWarning } from './utils/skipped-symlinks.js';
@@ -145,7 +147,7 @@ async function discoverSolutions(rootDir: string, fileCache: FileCache): Promise
         path: relSolutionPath,
         name: solutionName,
         type: 'dotnet-sln',
-        projectPaths: [...projectPaths],
+        projectPaths: [...projectPaths].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
       });
     } catch {
       // ignore unreadable solution files
@@ -575,7 +577,13 @@ export async function runCoreScan(
       deduplicatedMap.set(dedupeKey(project), winner);
     }
   }
-  const allProjects: ProjectScan[] = [...deduplicatedMap.values()];
+  // Map insertion follows whichever scanner finished a directory first. Sort
+  // before diagrams and findings so a concurrent walk cannot reshuffle them.
+  const allProjects: ProjectScan[] = [...deduplicatedMap.values()].sort(
+    (a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)
+      || (a.type < b.type ? -1 : a.type > b.type ? 1 : 0)
+      || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
+  );
 
   // ── Compute per-project drift scores & project IDs ──
   const dsn = opts.dsn || process.env.VIBGRATE_DSN;
@@ -745,7 +753,8 @@ export async function runCoreScan(
 
   // ── Step: Findings ──
   progress.startStep('findings');
-  const findings = [...generateFindings(allProjects, config), ...vulnFindings];
+  // Same package, license id, and path is one finding in text, JSON, and SARIF.
+  const findings = dedupeLicenseFindings([...generateFindings(allProjects, config), ...vulnFindings]);
   const warnCount = findings.filter((f) => f.level === 'warning').length;
   const errCount = findings.filter((f) => f.level === 'error').length;
   const noteCount = findings.filter((f) => f.level === 'note').length;
@@ -890,9 +899,15 @@ export async function runCoreScan(
     }
   }
 
-  // JSON, SARIF, and the report share this copy. Home-directory prefixes are
-  // gone; paths inside the scan root are relative to it.
+  // Home-directory prefixes are gone; paths inside the scan root are relative
+  // to it. JSON then sorts findings. SARIF keeps the pre-sort copy.
   artifact = portableValue(artifact, rootDir);
+  // SARIF keeps drift findings ahead of vulnerability results, and within a
+  // package it keeps severity order. JSON (stdout and scan_result.json) sorts
+  // findings by path, rule, advisory id, and package URL so two runs agree
+  // even when directory walk order does not.
+  const sarifArtifact = artifact;
+  artifact = orderScanArtifactForEmit(artifact);
 
   if (!opts.noLocalArtifacts && !maxPrivacyMode) {
     const vibgrateDir = path.join(rootDir, '.vibgrate');
@@ -959,7 +974,7 @@ export async function runCoreScan(
       console.log(jsonStr);
     }
   } else if (opts.format === 'sarif') {
-    const sarif = formatSarif(artifact, rootDir);
+    const sarif = formatSarif(sarifArtifact, rootDir);
     const sarifStr = JSON.stringify(sarif, null, 2);
     if (opts.out) {
       await writeTextFile(path.resolve(opts.out), sarifStr);
@@ -998,7 +1013,7 @@ export async function runCoreScan(
       !!process.stdout.isTTY &&
       !isCiEnvironment() &&
       !(await hasVibgrateWorkflow(rootDir));
-    const text = formatText(artifact, {
+    const text = formatText({ ...artifact, findings: findingsForDisplay(artifact.findings) }, {
       ciHint: showCiHint,
       free: showUpsell,
       authenticated,
