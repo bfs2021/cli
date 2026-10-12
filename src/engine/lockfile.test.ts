@@ -381,101 +381,116 @@ describe('fullDependencyGraph', () => {
     write('uv.lock', ['[[package]]', 'name = "click"', 'version = "8.1.3"'].join('\n'));
     expect(fullDependencyGraph(root)?.ecosystem).toBe('pypi');
   });
+});
 
-  it('attaches multi-digest lists in algorithm-then-value order for the same lockfile facts', () => {
-    const sha256 = createHash('sha256').update('alpha').digest();
-    const sha512 = createHash('sha512').update('beta').digest();
-    const other = createHash('sha256').update('gamma').digest();
-    const hex256 = sha256.toString('hex');
-    const hexOther = other.toString('hex');
-    const smaller = hex256 < hexOther ? hex256 : hexOther;
-    const larger = hex256 < hexOther ? hexOther : hex256;
-    const sri = (alg: 'sha256' | 'sha512', buf: Buffer): string => `${alg}-${buf.toString('base64')}`;
-    const expected = [
-      { alg: 'SHA-256', content: smaller },
-      { alg: 'SHA-256', content: larger },
-      { alg: 'SHA-512', content: sha512.toString('hex') },
-    ];
+describe('lockfile package digests', () => {
+  const sha256 = createHash('sha256').update('alpha').digest('base64');
+  const sha512 = createHash('sha512').update('alpha').digest('base64');
+  const other256 = createHash('sha256').update('beta').digest('base64');
+  const cargo = 'a'.repeat(64);
+  const wheel = 'b'.repeat(64);
+  const goZip = createHash('sha256').update('module').digest('base64');
+  const goMod = createHash('sha256').update('gomod').digest('base64');
+  const token = 'super-secret-token';
 
-    const npmIntegrity = (first: string, second: string): string =>
+  it('keeps one npm component when two paths record different digests, sorted by algorithm', () => {
+    write(
+      'package-lock.json',
       JSON.stringify({
         packages: {
-          '': {},
-          'node_modules/left-pad': { version: '1.3.0', integrity: `${first} ${second}` },
+          '': { name: 'app' },
+          'node_modules/left-pad': {
+            version: '1.3.0',
+            resolved: `https://user:${token}@registry.example/left-pad.tgz`,
+            integrity: `sha512-${sha512} sha256-${sha256}`,
+          },
+          'node_modules/widget/node_modules/left-pad': {
+            version: '1.3.0',
+            integrity: `sha256-${other256}`,
+          },
         },
-      });
-    write('package-lock.json', npmIntegrity(sri('sha512', sha512), `${sri('sha256', sha256)} ${sri('sha256', other)}`));
-    const forward = fullDependencyGraph(root)?.components.find((c) => c.package === 'left-pad')?.hashes;
-    fs.rmSync(path.join(root, 'package-lock.json'));
-    write('package-lock.json', npmIntegrity(`${sri('sha256', other)} ${sri('sha256', sha256)}`, sri('sha512', sha512)));
-    const reversed = fullDependencyGraph(root)?.components.find((c) => c.package === 'left-pad')?.hashes;
-    expect(forward).toEqual(expected);
-    expect(reversed).toEqual(expected);
+      }),
+    );
+    const sha256Values = [other256, sha256].sort();
+    const component = fullDependencyGraph(root)?.components.find((row) => row.package === 'left-pad');
+    expect(component).toEqual({
+      package: 'left-pad',
+      version: '1.3.0',
+      digests: [
+        { alg: 'SHA-256', content: sha256Values[0] },
+        { alg: 'SHA-256', content: sha256Values[1] },
+        { alg: 'SHA-512', content: sha512 },
+      ],
+    });
+    expect(JSON.stringify(component)).not.toContain(token);
+  });
 
-    fs.rmSync(path.join(root, 'package-lock.json'));
-    const pnpm = (integrity: string): string =>
-      ['lockfileVersion: \'9.0\'', 'packages:', '  left-pad@1.3.0:', `    resolution: {integrity: ${integrity}}`].join('\n');
-    write('pnpm-lock.yaml', pnpm(`"${sri('sha512', sha512)} ${sri('sha256', sha256)}"`));
-    expect(fullDependencyGraph(root)?.components[0]?.hashes).toEqual([
-      { alg: 'SHA-256', content: hex256 },
-      { alg: 'SHA-512', content: sha512.toString('hex') },
+  it('reads pnpm, yarn, Cargo, go.sum, and uv digests without a second row per hash', () => {
+    write(
+      'pnpm-lock.yaml',
+      [
+        "lockfileVersion: '9.0'",
+        'packages:',
+        '  left-pad@1.3.0:',
+        `    resolution: {integrity: sha512-${sha512}, tarball: https://example.invalid/left-pad.tgz}`,
+        '',
+      ].join('\n'),
+    );
+    expect(fullDependencyGraph(root)?.components).toEqual([
+      { package: 'left-pad', version: '1.3.0', digests: [{ alg: 'SHA-512', content: sha512 }] },
     ]);
 
     fs.rmSync(path.join(root, 'pnpm-lock.yaml'));
     write(
       'yarn.lock',
-      ['left-pad@^1.3.0:', '  version "1.3.0"', `  integrity ${sri('sha512', sha512)}`, ''].join('\n'),
+      ['left-pad@^1.3.0:', '  version "1.3.0"', `  integrity sha256-${sha256}`, ''].join('\n'),
     );
     expect(fullDependencyGraph(root)?.components).toEqual([
-      { package: 'left-pad', version: '1.3.0', hashes: [{ alg: 'SHA-512', content: sha512.toString('hex') }] },
+      { package: 'left-pad', version: '1.3.0', digests: [{ alg: 'SHA-256', content: sha256 }] },
     ]);
 
     fs.rmSync(path.join(root, 'yarn.lock'));
     write(
       'Cargo.lock',
-      ['[[package]]', 'name = "memchr"', 'version = "2.7.4"', `checksum = "${hex256.toUpperCase()}"`, ''].join('\n'),
+      ['[[package]]', 'name = "memchr"', 'version = "2.7.4"', `checksum = "${cargo}"`, ''].join('\n'),
     );
-    expect(fullDependencyGraph(root)?.components[0]?.hashes).toEqual([{ alg: 'SHA-256', content: hex256 }]);
+    expect(fullDependencyGraph(root)?.components).toEqual([
+      { package: 'memchr', version: '2.7.4', digests: [{ alg: 'SHA-256', content: cargo }] },
+    ]);
 
     fs.rmSync(path.join(root, 'Cargo.lock'));
-    const zip = createHash('sha256').update('zip').digest();
-    const gomod = createHash('sha256').update('gomod').digest();
     write(
       'go.sum',
       [
-        `github.com/gin-contrib/sse v1.1.0 h1:${zip.toString('base64')}`,
-        `github.com/gin-contrib/sse v1.1.0/go.mod h1:${gomod.toString('base64')}`,
+        `github.com/gin-contrib/sse v1.1.0 h1:${goZip}`,
+        `github.com/gin-contrib/sse v1.1.0/go.mod h1:${goMod}`,
       ].join('\n'),
     );
     expect(fullDependencyGraph(root)?.components).toEqual([
-      {
-        package: 'github.com/gin-contrib/sse',
-        version: 'v1.1.0',
-        hashes: [{ alg: 'SHA-256', content: zip.toString('hex') }],
-      },
+      { package: 'github.com/gin-contrib/sse', version: 'v1.1.0', digests: [{ alg: 'SHA-256', content: goZip }] },
     ]);
 
     fs.rmSync(path.join(root, 'go.sum'));
-    const uv = (first: string, second: string): string =>
+    write(
+      'uv.lock',
       [
         '[[package]]',
         'name = "click"',
         'version = "8.1.3"',
-        'sdist = { url = "https://example.test/click.tar.gz", hash = "sha256:' + first + '" }',
-        'wheels = [',
-        '  { url = "https://example.test/click.whl", hash = "sha256:' + second + '" },',
-        ']',
+        `wheels = [{ hash = "sha256:${wheel}" }]`,
+        `sdist = { hash = "sha256:${cargo}" }`,
         '',
-      ].join('\n');
-    write('uv.lock', uv(larger, smaller));
-    const uvForward = fullDependencyGraph(root)?.components[0]?.hashes;
-    fs.rmSync(path.join(root, 'uv.lock'));
-    write('uv.lock', uv(smaller, larger));
-    const uvReversed = fullDependencyGraph(root)?.components[0]?.hashes;
-    expect(uvForward).toEqual([
-      { alg: 'SHA-256', content: smaller },
-      { alg: 'SHA-256', content: larger },
+      ].join('\n'),
+    );
+    expect(fullDependencyGraph(root)?.components).toEqual([
+      {
+        package: 'click',
+        version: '8.1.3',
+        digests: [
+          { alg: 'SHA-256', content: cargo },
+          { alg: 'SHA-256', content: wheel },
+        ],
+      },
     ]);
-    expect(uvReversed).toEqual(uvForward);
   });
 });

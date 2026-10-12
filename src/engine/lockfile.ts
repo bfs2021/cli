@@ -22,15 +22,15 @@ import {
   noteYarnLockText,
   type TomlLockKind,
 } from '../core-open/utils/lockfile-unknown.js';
-import type { DepRecord } from './drift.js';
 import {
-  mergePackageDigests,
-  parseCargoChecksum,
-  parseGoSumHash,
-  parseIntegrity,
-  parsePrefixedHashList,
-  type PackageDigest,
-} from './package-digest.js';
+  digestFromCargoChecksum,
+  digestFromGoSumHash,
+  digestsFromHashLabels,
+  digestsFromSri,
+  orderComponentDigests,
+  type ComponentDigest,
+} from './component-digests.js';
+import type { DepRecord } from './drift.js';
 
 /**
  * Read a lockfile that may be absent. A missing file is `undefined` (the
@@ -264,11 +264,10 @@ export interface LockfileComponent {
   package: string;
   version: string;
   /**
-   * Package digests copied from the lockfile, already sorted by algorithm
-   * name then hex value. Omitted when the lockfile recorded none that
-   * decoded. Not part of component identity.
+   * Package digests the lockfile recorded for this name and version.
+   * Omitted when it recorded none. Sorted by algorithm name, then value.
    */
-  hashes?: PackageDigest[];
+  digests?: ComponentDigest[];
 }
 
 /**
@@ -329,32 +328,18 @@ function sortComponents(map: Map<string, LockfileComponent>): LockfileComponent[
   return [...map.values()].sort((a, b) => a.package.localeCompare(b.package) || a.version.localeCompare(b.version));
 }
 
-/** Insert or union `hashes` onto the name@version already in the map. The stored list is sorted. */
-function assignComponent(map: Map<string, LockfileComponent>, component: LockfileComponent): void {
+/**
+ * One component per name and version. A second install path of the same
+ * version adds its digests; it does not add a second row. Digests are
+ * ordered here so a later reader does not depend on lockfile key order.
+ */
+function rememberComponent(map: Map<string, LockfileComponent>, component: LockfileComponent): void {
   const key = `${component.package}@${component.version}`;
   const existing = map.get(key);
-  const hashes = mergePackageDigests(existing?.hashes, component.hashes);
+  const digests = orderComponentDigests([...(existing?.digests ?? []), ...(component.digests ?? [])]);
   const next: LockfileComponent = { package: component.package, version: component.version };
-  if (hashes) next.hashes = hashes;
+  if (digests.length) next.digests = digests;
   map.set(key, next);
-}
-
-/** An `integrity` or `checksum` line. The value may be quoted and may hold several SRI tokens. */
-function integrityField(line: string): string | undefined {
-  const m = /^\s+(?:integrity|checksum)\s*:?\s+(.+?)\s*$/.exec(line);
-  if (!m) return undefined;
-  return m[1].replace(/^["']|["']$/g, '');
-}
-
-function integrityFromBlock(block: string): PackageDigest[] | undefined {
-  const found: PackageDigest[] = [];
-  const re = /integrity\s*:\s*(?:"([^"]+)"|'([^']+)'|([^\s,}]+))/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(block))) {
-    const value = m[1] ?? m[2] ?? m[3];
-    if (value) found.push(...parseIntegrity(value));
-  }
-  return mergePackageDigests(found);
 }
 
 function uniqSorted(keys: string[]): string[] {
@@ -414,8 +399,8 @@ function npmLockGraph(root: string): LockfileGraph | undefined {
       const name = typeof val?.name === 'string' ? val.name : m[1];
       const key = `${name}@${version}`;
       keyOf.set(p, key);
-      const hashes = typeof val.integrity === 'string' ? parseIntegrity(val.integrity) : undefined;
-      assignComponent(components, { package: name, version, hashes });
+      const digests = digestsFromSri(typeof val?.integrity === 'string' ? val.integrity : undefined);
+      rememberComponent(components, { package: name, version, ...(digests.length ? { digests } : {}) });
     }
   }
   if (!components.size) return undefined;
@@ -458,8 +443,8 @@ function walkNpmV1Tree(
 ): void {
   for (const [name, val] of Object.entries(deps)) {
     if (typeof val?.version === 'string') {
-      const hashes = typeof val.integrity === 'string' ? parseIntegrity(val.integrity) : undefined;
-      assignComponent(out, { package: name, version: val.version, hashes });
+      const digests = digestsFromSri(typeof val.integrity === 'string' ? val.integrity : undefined);
+      rememberComponent(out, { package: name, version: val.version, ...(digests.length ? { digests } : {}) });
     }
     if (val?.dependencies && typeof val.dependencies === 'object') {
       walkNpmV1Tree(val.dependencies as Record<string, { version?: string; integrity?: string; dependencies?: Record<string, unknown> }>, out);
@@ -481,28 +466,27 @@ function pnpmLockTree(root: string): LockfileComponent[] | undefined {
   const out = new Map<string, LockfileComponent>();
   const v9 = /^ {2}'?(@[^/'\n]+\/[^@/'\n]+|[^@/'\n]+)@([^:'\n(]+)(?:\([^)]*\))?'?:\s*$/;
   const v6 = /^ {2}\/(@[^/'\n]+\/[^@/'\n]+|[^@/'\n]+)\/([^:'\n(]+)(?:\([^)]*\))?:\s*$/;
-  let current: { name: string; version: string } | undefined;
-  const block: string[] = [];
-  const flush = (): void => {
-    if (!current) return;
-    assignComponent(out, {
-      package: current.name,
-      version: current.version,
-      hashes: integrityFromBlock(block.join('\n')),
-    });
-    current = undefined;
-    block.length = 0;
-  };
+  let current: LockfileComponent | undefined;
   for (const line of section.split('\n')) {
     const header = v9.exec(line) ?? v6.exec(line);
-    if (header?.[1] && header[2]) {
-      flush();
-      current = { name: header[1], version: header[2].trim() };
+    if (header) {
+      const name = header[1];
+      const version = header[2].trim();
+      if (name && version) {
+        rememberComponent(out, { package: name, version });
+        current = out.get(`${name}@${version}`);
+      } else {
+        current = undefined;
+      }
       continue;
     }
-    if (current) block.push(line);
+    if (!current) continue;
+    const integ = /integrity:\s*(?:"([^"]+)"|([^,}\n]+))/.exec(line);
+    const raw = (integ?.[1] ?? integ?.[2] ?? '').trim();
+    if (!raw) continue;
+    const digests = digestsFromSri(raw);
+    if (digests.length) rememberComponent(out, { package: current.package, version: current.version, digests });
   }
-  flush();
   return out.size ? sortComponents(out) : undefined;
 }
 
@@ -513,17 +497,12 @@ function yarnLockTree(root: string): LockfileComponent[] | undefined {
   reportLockfileFields(root, 'yarn.lock', (rel, notes) => noteYarnLockText(text, rel, notes));
   const out = new Map<string, LockfileComponent>();
   let pendingNames: string[] = [];
-  let pendingIntegrity: string | undefined;
-  let openKeys: string[] = [];
-  const applyIntegrity = (keys: string[], value: string | undefined): void => {
-    if (!value) return;
-    const hashes = parseIntegrity(value);
-    if (!hashes.length) return;
-    for (const key of keys) {
-      const at = key.lastIndexOf('@');
-      if (at <= 0) continue;
-      assignComponent(out, { package: key.slice(0, at), version: key.slice(at + 1), hashes });
-    }
+  let pendingDigests: ComponentDigest[] = [];
+  let open: Array<{ package: string; version: string }> = [];
+  const integrityOf = (line: string): ComponentDigest[] => {
+    const integ = /^\s+integrity:?\s+(.+?)\s*$/.exec(line);
+    if (!integ) return [];
+    return digestsFromSri(integ[1].replace(/^"|"$/g, ''));
   };
   for (const line of text.split('\n')) {
     if (line && !/^\s/.test(line) && !line.startsWith('#')) {
@@ -532,26 +511,30 @@ function yarnLockTree(root: string): LockfileComponent[] | undefined {
         .split(',')
         .map((spec) => yarnHeaderRealName(spec.trim().replace(/^"|"$/g, '')))
         .filter((n): n is string => Boolean(n));
-      pendingIntegrity = undefined;
-      openKeys = [];
+      pendingDigests = [];
+      open = [];
     } else if (pendingNames.length) {
-      const integrity = integrityField(line);
-      if (integrity) pendingIntegrity = integrity;
       const m = /^\s+version:?\s+"?([^"\s]+)"?/.exec(line);
       if (m) {
-        openKeys = [];
+        open = [];
         for (const name of pendingNames) {
-          const key = `${name}@${m[1]}`;
-          assignComponent(out, { package: name, version: m[1] });
-          openKeys.push(key);
+          rememberComponent(out, {
+            package: name,
+            version: m[1],
+            ...(pendingDigests.length ? { digests: pendingDigests } : {}),
+          });
+          open.push({ package: name, version: m[1] });
         }
-        applyIntegrity(openKeys, pendingIntegrity);
         pendingNames = [];
-        pendingIntegrity = undefined;
+        pendingDigests = [];
+        continue;
       }
-    } else if (openKeys.length) {
-      const integrity = integrityField(line);
-      if (integrity) applyIntegrity(openKeys, integrity);
+      const early = integrityOf(line);
+      if (early.length) pendingDigests = early;
+    } else if (open.length) {
+      const digests = integrityOf(line);
+      if (!digests.length) continue;
+      for (const item of open) rememberComponent(out, { ...item, digests });
     }
   }
   return out.size ? sortComponents(out) : undefined;
@@ -609,11 +592,10 @@ function cargoLockTree(root: string): LockfileComponent[] | undefined {
   for (const block of text.split(/\[\[package\]\]/)) {
     const nm = /(?:^|\n)\s*name\s*=\s*"([^"]+)"/.exec(block);
     const ver = /(?:^|\n)\s*version\s*=\s*"([^"]+)"/.exec(block);
-    if (nm && ver) {
-      const sum = /(?:^|\n)\s*checksum\s*=\s*"([^"]*)"/.exec(block);
-      const digest = sum ? parseCargoChecksum(sum[1]) : undefined;
-      assignComponent(out, { package: nm[1], version: ver[1], hashes: digest ? [digest] : undefined });
-    }
+    if (!nm || !ver) continue;
+    const sum = /(?:^|\n)\s*checksum\s*=\s*"([^"]+)"/.exec(block);
+    const digests = digestFromCargoChecksum(sum?.[1]);
+    rememberComponent(out, { package: nm[1], version: ver[1], ...(digests.length ? { digests } : {}) });
   }
   return out.size ? sortComponents(out) : undefined;
 }
@@ -622,9 +604,9 @@ function cargoLockTree(root: string): LockfileComponent[] | undefined {
  * `go.sum` — every `<module> <version> <hash>` line pins a resolved module;
  * each module appears twice (the module zip hash and a `/go.mod` hash for
  * its manifest), so only the bare (non-`/go.mod`) line is kept. The zip
- * line's `h1:` value is the component digest. The `/go.mod` hash is not a
- * second component and is not a second digest. No edges: go.sum records the
- * flattened build list, not which module required which.
+ * `h1:` value is that component's SHA-256 digest. The `/go.mod` hash is a
+ * different artifact and is not a second digest. No edges: go.sum records
+ * the flattened build list, not which module required which.
  */
 function goSumTree(root: string): LockfileComponent[] | undefined {
   const text = readCheckedText(root, 'go.sum');
@@ -634,11 +616,11 @@ function goSumTree(root: string): LockfileComponent[] | undefined {
     // Each module has two lines — `module version h1:...` (the module zip)
     // and `module version/go.mod h1:...` (just its manifest). Skip the
     // `/go.mod` one or its suffix ends up folded into the captured version.
-    const m = /^(\S+)\s+(v\S+)\s+h1:(\S+)/.exec(line.trim());
+    const m = /^(\S+)\s+(v\S+)\s+(h1:\S+)/.exec(line.trim());
     if (!m || m[2].endsWith('/go.mod')) continue;
     const [, name, version, hash] = m;
-    const digest = parseGoSumHash(hash);
-    assignComponent(out, { package: name, version, hashes: digest ? [digest] : undefined });
+    const digests = digestFromGoSumHash(hash);
+    rememberComponent(out, { package: name, version, ...(digests.length ? { digests } : {}) });
   }
   return out.size ? sortComponents(out) : undefined;
 }
@@ -657,13 +639,9 @@ function poetryLikeLockTree(root: string, file: string): LockfileComponent[] | u
   for (const block of text.split(/\[\[package\]\]/)) {
     const nm = /(?:^|\n)\s*name\s*=\s*"([^"]+)"/.exec(block);
     const ver = /(?:^|\n)\s*version\s*=\s*"([^"]+)"/.exec(block);
-    if (nm && ver) {
-      assignComponent(out, {
-        package: nm[1],
-        version: ver[1],
-        hashes: mergePackageDigests(parsePrefixedHashList(block)),
-      });
-    }
+    if (!nm || !ver) continue;
+    const digests = digestsFromHashLabels(block);
+    rememberComponent(out, { package: nm[1], version: ver[1], ...(digests.length ? { digests } : {}) });
   }
   return out.size ? sortComponents(out) : undefined;
 }
