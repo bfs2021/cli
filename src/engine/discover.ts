@@ -7,7 +7,12 @@ import { dropBlankPatterns, gitignoreWithoutBlankLines } from '../core-open/util
 import { assertLockfileFile, lockfileKind } from '../core-open/utils/lockfile-parse.js';
 import { inspectUtf8 } from '../core-open/utils/text-bytes.js';
 import { assertSafeWalkRoot, createWalkBudget, noteWalkEntry } from '../core-open/utils/root-safety.js';
-import { emitSkippedSymlinkNotice } from '../core-open/utils/skipped-symlinks.js';
+import { stampWarning } from '../core-open/warnings.js';
+import {
+  emitSkippedSymlinkNotice,
+  rememberSkippedSymlink,
+  skippedSymlinkWarning,
+} from '../core-open/utils/skipped-symlinks.js';
 
 /**
  * Deterministic file discovery.
@@ -168,6 +173,11 @@ export interface DiscoverOptions {
    * Default: `VG_MAX_FILES`, else 100000.
    */
   maxEntries?: number;
+  /**
+   * When set, one coalesced `VG_WARN_SYMLINK_SKIPPED` line is appended here
+   * and not written to stderr. The caller prints it with the other warnings.
+   */
+  warnings?: string[];
 }
 
 export interface DiscoveredFile {
@@ -285,7 +295,7 @@ export function discover(options: DiscoverOptions): DiscoveredFile[] {
       const rel = toPosix(path.relative(root, abs));
       if (entry.isSymbolicLink()) {
         if (rel && (rootIg.ignores(rel) || rootIg.ignores(`${rel}/`))) continue;
-        if (rel) skippedSymlinks.push(rel);
+        rememberSkippedSymlink(skippedSymlinks, rel);
         continue;
       }
       if (entry.isDirectory()) {
@@ -311,7 +321,12 @@ export function discover(options: DiscoverOptions): DiscoveredFile[] {
     } else if (stat.isFile()) considerFile(scope);
   }
 
-  emitSkippedSymlinkNotice(skippedSymlinks);
+  const symlinkWarning = skippedSymlinkWarning(skippedSymlinks);
+  if (symlinkWarning && options.warnings) {
+    options.warnings.push(stampWarning(symlinkWarning.code, symlinkWarning.message));
+  } else {
+    emitSkippedSymlinkNotice(skippedSymlinks);
+  }
   return [...found.values()].sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
 }
 

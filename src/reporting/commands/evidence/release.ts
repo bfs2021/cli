@@ -14,7 +14,6 @@ import type { ProjectType, ScanArtifact } from '../../types.js';
 import type { FrozenComponent, Release, ReleaseBuild } from './types.js';
 import {
   buildFactsFromInspection,
-  componentsFromSpdx,
   inspectImage,
   isProvenancePredicateType,
   isSbomPredicateType,
@@ -24,8 +23,8 @@ import {
   unwrapStatement,
   type Exec,
   type ProvenanceSummary,
-  type SpdxDocument,
 } from './buildkit.js';
+import { readCycloneDxInput, readSpdxInput } from './sbom-input.js';
 
 /** Map a Vibgrate project type to the OSV ecosystem used for advisory matching. */
 export function ecosystemForProjectType(type: ProjectType): string | undefined {
@@ -60,13 +59,6 @@ export function ecosystemForProjectType(type: ProjectType): string | undefined {
   }
 }
 
-function ecosystemForPurl(purl: string): string | undefined {
-  const m = /^pkg:([^/]+)\//.exec(purl);
-  if (!m) return undefined;
-  const map: Record<string, string> = { npm: 'npm', pypi: 'PyPI', maven: 'Maven', nuget: 'NuGet', golang: 'Go', cargo: 'crates.io', gem: 'RubyGems', composer: 'Packagist', pub: 'Pub', hex: 'Hex' };
-  return map[m[1].toLowerCase()];
-}
-
 export function componentsFromArtifact(artifact: ScanArtifact): FrozenComponent[] {
   const out: FrozenComponent[] = [];
   const seen = new Set<string>();
@@ -83,18 +75,8 @@ export function componentsFromArtifact(artifact: ScanArtifact): FrozenComponent[
   return out.sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version));
 }
 
-interface CycloneDxComponent {
-  name?: string;
-  version?: string;
-  purl?: string;
-}
-export function componentsFromCycloneDx(doc: { components?: CycloneDxComponent[] }): FrozenComponent[] {
-  const out: FrozenComponent[] = [];
-  for (const c of doc.components ?? []) {
-    if (!c.name || !c.version) continue;
-    out.push({ name: c.name, version: c.version, purl: c.purl, ecosystem: c.purl ? ecosystemForPurl(c.purl) : undefined });
-  }
-  return out.sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version));
+export function componentsFromCycloneDx(doc: { components?: Array<{ name?: string; version?: string; purl?: string }> }): FrozenComponent[] {
+  return readCycloneDxInput(doc, 'SBOM').components;
 }
 
 export interface FreezeInput {
@@ -119,11 +101,11 @@ export interface FreezeInput {
   image?: string;
   /** Process runner for `--image`; injectable for tests. */
   exec?: Exec;
-}
-
-interface CycloneDxDocument {
-  bomFormat?: string;
-  components?: CycloneDxComponent[];
+  /**
+   * Called at most once when the SBOM read skipped components or stopped early.
+   * The message is the single warning for that file.
+   */
+  onWarning?: (message: string) => void;
 }
 
 /**
@@ -132,22 +114,22 @@ interface CycloneDxDocument {
  * DSSE envelope (what `docker buildx build --sbom=true` attaches to an image and
  * `imagetools inspect` exports).
  */
-export function componentsFromSource(data: unknown, label: string): { components: FrozenComponent[]; attested: boolean } {
+export function componentsFromSource(data: unknown, label: string): { components: FrozenComponent[]; attested: boolean; warning?: string } {
   const statement = unwrapStatement(data);
   if (statement) {
     if (!isSbomPredicateType(statement.predicateType)) {
       const hint = isProvenancePredicateType(statement.predicateType) ? ' — that is a provenance attestation; pass it with --provenance' : '';
       throw new CliError(`${label} is an attestation of type ${statement.predicateType}, not an SBOM${hint}`, ExitCode.USAGE_ERROR);
     }
-    return { components: componentsFromSbom(statement.predicate, label), attested: true };
+    return { ...componentsFromSbom(statement.predicate, label), attested: true };
   }
   if (data && typeof data === 'object' && Array.isArray((data as ScanArtifact).projects)) {
     return { components: componentsFromArtifact(data as ScanArtifact), attested: false };
   }
-  return { components: componentsFromSbom(data, label), attested: false };
+  return { ...componentsFromSbom(data, label), attested: false };
 }
 
-function componentsFromSbom(data: unknown, label: string): FrozenComponent[] {
+function componentsFromSbom(data: unknown, label: string): { components: FrozenComponent[]; warning?: string } {
   const display = sbomDisplayPath(label);
   const kind = externalSbomKind(data);
   if (kind === 'other') {
@@ -157,10 +139,13 @@ function componentsFromSbom(data: unknown, label: string): FrozenComponent[] {
     );
   }
   // Required fields are checked before any component is kept. A component
-  // missing `name` fails the document; it is not dropped.
+  // missing `name` fails the document; it is not dropped. Components that
+  // have a name, a version, and a type are then kept even with no package
+  // URL and no CPE. Anything that still cannot be identified is skipped,
+  // and the read returns one warning for this file.
   const accepted = assertExternalSbom(data, display);
-  if (accepted === 'cyclonedx') return componentsFromCycloneDx(data as CycloneDxDocument);
-  return componentsFromSpdx(data as SpdxDocument);
+  if (accepted === 'cyclonedx') return readCycloneDxInput(data, display);
+  return readSpdxInput(data, display);
 }
 
 async function readSource(file: string, what: string): Promise<unknown> {
@@ -197,6 +182,7 @@ export async function buildRelease(input: FreezeInput): Promise<Release> {
   let artefactDigest = input.artefactDigest;
   let buildId = input.buildId;
   let components: FrozenComponent[] | undefined;
+  let componentWarning: string | undefined;
 
   if (input.image) {
     const inspection = await inspectImage(input.image, input.exec);
@@ -217,7 +203,9 @@ export async function buildRelease(input: FreezeInput): Promise<Release> {
     if (inspection.sbom && !input.fromExplicit) {
       assertExternalSbom(inspection.sbom, `SBOM of ${input.image}`);
       build.sources.push('sbom-attestation');
-      components = componentsFromSpdx(inspection.sbom);
+      const read = readSpdxInput(inspection.sbom, `SBOM of ${input.image}`);
+      components = read.components;
+      componentWarning = read.warning;
     }
   }
 
@@ -264,8 +252,10 @@ export async function buildRelease(input: FreezeInput): Promise<Release> {
     const label = sbomDisplayPath(input.from);
     const parsed = componentsFromSource(await readSbomJsonFile(input.from), label);
     components = parsed.components;
+    componentWarning = parsed.warning;
     if (parsed.attested) build.sources.push('sbom-attestation');
   }
+  if (componentWarning) input.onWarning?.(componentWarning);
   if (components.length === 0) {
     const where = input.image && !input.fromExplicit ? `the SBOM of ${input.image}` : sbomDisplayPath(input.from);
     throw new CliError(`no components found in ${where} — cannot freeze an empty manifest`, ExitCode.USAGE_ERROR);
