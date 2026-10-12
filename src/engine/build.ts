@@ -171,12 +171,14 @@ export async function buildGraph(options: BuildOptions): Promise<BuildResult> {
   // instead of reading a filesystem root or an enormous unpack first.
   const limits = resolveLimits(options.limits);
   timer.start('discover');
+  const buildWarnings: string[] = [];
   const files = discover({
     root,
     only: options.only,
     exclude,
     paths: options.paths,
     maxEntries: limits.maxFiles,
+    warnings: buildWarnings,
   });
   timer.end('discover');
 
@@ -215,7 +217,6 @@ export async function buildGraph(options: BuildOptions): Promise<BuildResult> {
   const fileStats: FileStat[] = [];
   const toParse: DiscoveredFile[] = [];
   const reused: FileParse[] = [];
-  const buildWarnings: string[] = [];
   // A binary `.gitignore` contributes no rules. Say so once, with the path
   // only — the bytes are not ignore syntax and must not be echoed.
   try {

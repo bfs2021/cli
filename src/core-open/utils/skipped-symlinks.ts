@@ -2,6 +2,7 @@
 // scripts/vendor-core-open.mjs. Do not edit here — change the source package
 // and re-run the vendor script. Apache-2.0.
 import * as path from 'node:path';
+import { codedWarning, formatWarningLine, warningPathLabel, WARNING_CODES, type CodedWarning } from '../warnings.js';
 
 /**
  * How many root-relative paths one notice lists. Further links are a count.
@@ -31,19 +32,33 @@ export function rememberSkippedSymlink(bucket: string[], relPath: string): void 
 }
 
 /**
- * One stderr line when a walk skips symlinks. `null` when `relPaths` is empty.
- * Paths are de-duplicated, sorted, and capped. Absolute paths are omitted.
+ * Label safe to print for one skipped symlink.
+ *
+ * {@link warningPathLabel} collapses an absolute path or a `..` path to its
+ * base name, so a home directory or a link target never appears. Empty labels
+ * are dropped. The link's own path is labeled; the target is not read.
  */
-export function formatSkippedSymlinkNotice(relPaths: readonly string[]): string | null {
+export function skippedSymlinkLabel(raw: string): string | null {
+  const rel = raw.split('\\').join('/');
+  if (!rel || rel === '.' || rel === '..') return null;
+  const label = warningPathLabel(rel);
+  if (!label || label === 'path' || label === '.' || label === '..') return null;
+  if (label.startsWith('/') || label.startsWith('..') || /^[A-Za-z]:/.test(label)) return null;
+  return label;
+}
+
+/**
+ * One coalesced warning when a walk skips symlinks. `null` when nothing
+ * safe remains. Labels are de-duplicated, sorted, and capped.
+ */
+export function skippedSymlinkWarning(relPaths: readonly string[]): CodedWarning | null {
   const seen = new Set<string>();
   const unique: string[] = [];
   for (const raw of relPaths) {
-    const rel = raw.split('\\').join('/');
-    if (!rel || rel === '.' || rel.startsWith('../') || rel === '..' || rel.startsWith('/')) continue;
-    if (/^[A-Za-z]:/.test(rel)) continue;
-    if (seen.has(rel)) continue;
-    seen.add(rel);
-    unique.push(rel);
+    const label = skippedSymlinkLabel(raw);
+    if (!label || seen.has(label)) continue;
+    seen.add(label);
+    unique.push(label);
   }
   unique.sort(comparePath);
   if (unique.length === 0) return null;
@@ -51,10 +66,21 @@ export function formatSkippedSymlinkNotice(relPaths: readonly string[]): string 
   const extra = unique.length - shown.length;
   const list = extra > 0 ? `${shown.join(', ')}, +${extra} more` : shown.join(', ');
   const noun = unique.length === 1 ? 'symlink' : 'symlinks';
-  return (
-    `notice: skipped ${unique.length} ${noun} (${list}). ` +
-    'vg does not follow symlinks. Point the root at the link target, or pass --exclude or a narrower root.'
+  return codedWarning(
+    WARNING_CODES.SYMLINK_SKIPPED,
+    `skipped ${unique.length} ${noun} (${list}). ` +
+      'vg does not follow symlinks. Point the root at the link target, or pass --exclude or a narrower root.',
   );
+}
+
+/**
+ * One stderr line when a walk skips symlinks. `null` when `relPaths` is empty.
+ * Paths are de-duplicated, sorted, and capped. The line is
+ * `warning [VG_WARN_SYMLINK_SKIPPED]: …`.
+ */
+export function formatSkippedSymlinkNotice(relPaths: readonly string[]): string | null {
+  const warning = skippedSymlinkWarning(relPaths);
+  return warning ? formatWarningLine(warning) : null;
 }
 
 /** Write {@link formatSkippedSymlinkNotice} to stderr. No-op when there is nothing to say. */

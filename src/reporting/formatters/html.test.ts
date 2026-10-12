@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SecurityFinding } from '../../core-open/types.js';
 import type { ScanArtifact } from '../types.js';
-import { ADVISORY_CORPUS_FOOTER_ID, FIX_AVAILABLE_ATTR, formatHtmlReport } from './html.js';
+import { ADVISORY_CORPUS_FOOTER_ID, FIX_AVAILABLE_ATTR, FIX_AVAILABLE_ONLY_ID, formatHtmlReport } from './html.js';
 
 const TOKEN = ['ghp', '0123456789abcdefghijklmnopqrstuvwxyzA'].join('_');
 
@@ -245,7 +245,7 @@ describe('formatHtmlReport', () => {
     expect(block(html, 'vuln-counts')).toContain('Not scanned');
     expect(block(html, 'vuln-counts')).not.toContain('critical');
     expect(block(html, 'security-counts')).toContain('Not scanned');
-    expect(html).not.toContain('id="fix-available"');
+    expect(html).not.toContain('<p id="fix-available">');
     expect(section(html, 'vulnerabilities')).toContain('Not scanned');
     expect(section(html, 'security')).toContain('Not scanned');
     expect(section(html, 'findings')).toContain('None');
@@ -355,6 +355,31 @@ describe('formatHtmlReport', () => {
     expect(html.indexOf('id="findings"')).toBeLessThan(html.indexOf(`id="${ADVISORY_CORPUS_FOOTER_ID}"`));
   });
 
+  it('adds an unchecked fix-available-only toggle and still emits every row', () => {
+    const html = formatHtmlReport(sample());
+    const control = `<p id="fix-filter"><label><input id="${FIX_AVAILABLE_ONLY_ID}" type="checkbox"> Fix available only</label></p>`;
+    const rule = `body:has(#${FIX_AVAILABLE_ONLY_ID}:checked) tr[${FIX_AVAILABLE_ATTR}="no"] { display: none; }`;
+
+    expect(html).toContain(control);
+    expect(html).toContain(rule);
+    expect(html).not.toMatch(/<input[^>]*\schecked[\s=>]/);
+    expect(html.split(control)).toHaveLength(2);
+
+    const vulns = section(html, 'vulnerabilities');
+    const findings = section(html, 'findings');
+    expect(vulns).toContain(`${FIX_AVAILABLE_ATTR}="yes"`);
+    expect(vulns).toContain(`${FIX_AVAILABLE_ATTR}="no"`);
+    expect(vulns).toContain('fix available (4.17.21)');
+    expect(vulns).toContain('GHSA-high');
+    expect(findings).toContain(`${FIX_AVAILABLE_ATTR}="yes"`);
+    expect(section(html, 'security')).toContain(`${FIX_AVAILABLE_ATTR}="no"`);
+
+    const empty = formatHtmlReport(artifact());
+    expect(empty).toContain(control);
+    expect(empty).toContain(rule);
+    expect(formatHtmlReport(sample())).toBe(html);
+  });
+
   it('is deterministic and does not embed a timestamp, a script, or external assets', () => {
     const first = sample();
     const again = formatHtmlReport(first);
@@ -371,7 +396,8 @@ describe('formatHtmlReport', () => {
     expect(again).not.toMatch(/\ssrc\s*=/i);
     expect(again.match(/<details/gi)).toEqual(['<details']);
     expect(again).not.toMatch(/<details[^>]*\bopen\b/i);
-    expect(again).not.toMatch(/fix available only/i);
+    expect(again).toContain('Fix available only');
+    expect(again).toContain(`<input id="${FIX_AVAILABLE_ONLY_ID}" type="checkbox">`);
     expect(footer(again)).toContain(`<footer id="${ADVISORY_CORPUS_FOOTER_ID}">`);
     expect(footer(again)).toContain('<summary>Advisory data: Not recorded</summary>');
     expect(again.startsWith('<!doctype html>')).toBe(true);

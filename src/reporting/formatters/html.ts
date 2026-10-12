@@ -12,8 +12,10 @@ import type { Finding, ScanArtifact } from '../types.js';
  * Stable ids: `#summary`, `#vulnerabilities`, `#security`, `#findings`,
  * `#advisory-corpus`.
  *
- * Rows carry {@link FIX_AVAILABLE_ATTR} so a client-side "fix available only"
- * filter can be added without changing the row model. That filter is unused.
+ * {@link FIX_AVAILABLE_ONLY_ID} is an unchecked checkbox. Checking it hides
+ * rows whose {@link FIX_AVAILABLE_ATTR} is `no`. The page file always contains
+ * every row, so the default (unfiltered) document stays a pure function of the
+ * artifact. The checkbox is presentation only: no network, no external file.
  *
  * {@link advisoryCorpusFooter} fills `#advisory-corpus` with a collapsed
  * footer. It names the advisory source recorded on the artifact, and it says
@@ -21,8 +23,14 @@ import type { Finding, ScanArtifact } from '../types.js';
  * A missing advisory total is omitted rather than printed as zero.
  */
 
-/** Row attribute a later "fix available only" filter can select on. */
+/** Row attribute the Fix available only checkbox selects on. `yes` or `no`. */
 export const FIX_AVAILABLE_ATTR = 'data-fix-available';
+
+/**
+ * Checkbox id. The control is emitted unchecked, so the page opens showing
+ * every finding.
+ */
+export const FIX_AVAILABLE_ONLY_ID = 'fix-available-only';
 
 /** Element id of the collapsed advisory-data footer. */
 export const ADVISORY_CORPUS_FOOTER_ID = 'advisory-corpus';
@@ -80,6 +88,7 @@ export function formatHtmlReport(artifact: ScanArtifact): string {
   .absent { font-style: italic; }
   #${ADVISORY_CORPUS_FOOTER_ID} { margin-top: 2.5rem; font-size: 0.85rem; }
   #${ADVISORY_CORPUS_FOOTER_ID} summary { cursor: pointer; }
+  body:has(#${FIX_AVAILABLE_ONLY_ID}:checked) tr[${FIX_AVAILABLE_ATTR}="no"] { display: none; }
 </style>
 </head>
 <body>
@@ -98,7 +107,7 @@ export function formatHtmlReport(artifact: ScanArtifact): string {
 ${renderCounts('vuln-counts', VULN_SEVERITIES, vulnCounts)}
 <h3><a href="#security">Security</a></h3>
 ${renderCounts('security-counts', SECURITY_SEVERITIES, securityCounts)}
-${fix === null ? '' : `<p id="fix-available">Fix available: ${fix}</p>\n`}
+${fix === null ? '' : `<p id="fix-available">Fix available: ${fix}</p>\n`}${fixAvailableOnlyControl()}
 <nav aria-label="Report sections">
 <a href="#vulnerabilities">Vulnerabilities</a>
 <a href="#security">Security</a>
@@ -203,6 +212,15 @@ function advisoryTotal(value: unknown): number | null {
 
 function advisoryCountPhrase(count: number): string {
   return count === 1 ? '1 advisory' : `${count} advisories`;
+}
+
+/**
+ * Local checkbox. Unchecked in the file, so the serialized page is the
+ * unfiltered report. A browser hides `data-fix-available="no"` rows only
+ * after the reader checks it.
+ */
+function fixAvailableOnlyControl(): string {
+  return `<p id="fix-filter"><label><input id="${FIX_AVAILABLE_ONLY_ID}" type="checkbox"> Fix available only</label></p>\n`;
 }
 
 function vulnerabilityEvaluated(artifact: ScanArtifact, vulnFindings: Finding[]): boolean {
