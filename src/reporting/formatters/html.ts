@@ -11,15 +11,24 @@ import type { Finding, ScanArtifact } from '../types.js';
  *
  * Stable ids: `#summary`, `#vulnerabilities`, `#security`, `#findings`.
  *
- * Two extension points, unused today:
- * - Rows carry {@link FIX_AVAILABLE_ATTR} so a client-side "fix available
- *   only" filter can be added without changing the row model.
+ * {@link FIX_AVAILABLE_ONLY_ID} is an unchecked checkbox. Checking it hides
+ * rows whose {@link FIX_AVAILABLE_ATTR} is `no`. The page file always contains
+ * every row, so the default (unfiltered) document stays a pure function of the
+ * artifact. The checkbox is presentation only: no network, no external file.
+ *
+ * One extension point, unused today:
  * - {@link advisoryCorpusFooter} emits an empty `#advisory-corpus` mount for
  *   a later collapsible advisory-corpus metadata footer.
  */
 
-/** Row attribute a later "fix available only" filter can select on. */
+/** Row attribute the Fix available only checkbox selects on. `yes` or `no`. */
 export const FIX_AVAILABLE_ATTR = 'data-fix-available';
+
+/**
+ * Checkbox id. The control is emitted unchecked, so the page opens showing
+ * every finding.
+ */
+export const FIX_AVAILABLE_ONLY_ID = 'fix-available-only';
 
 /** Element id reserved for a later advisory-corpus metadata footer. */
 export const ADVISORY_CORPUS_FOOTER_ID = 'advisory-corpus';
@@ -75,6 +84,7 @@ export function formatHtmlReport(artifact: ScanArtifact): string {
   nav a { margin-right: 1rem; }
   a { color: inherit; }
   .absent { font-style: italic; }
+  body:has(#${FIX_AVAILABLE_ONLY_ID}:checked) tr[${FIX_AVAILABLE_ATTR}="no"] { display: none; }
 </style>
 </head>
 <body>
@@ -93,7 +103,7 @@ export function formatHtmlReport(artifact: ScanArtifact): string {
 ${renderCounts('vuln-counts', VULN_SEVERITIES, vulnCounts)}
 <h3><a href="#security">Security</a></h3>
 ${renderCounts('security-counts', SECURITY_SEVERITIES, securityCounts)}
-${fix === null ? '' : `<p id="fix-available">Fix available: ${fix}</p>\n`}
+${fix === null ? '' : `<p id="fix-available">Fix available: ${fix}</p>\n`}${fixAvailableOnlyControl()}
 <nav aria-label="Report sections">
 <a href="#vulnerabilities">Vulnerabilities</a>
 <a href="#security">Security</a>
@@ -116,6 +126,15 @@ ${advisoryCorpusFooter()}
 </body>
 </html>
 `;
+}
+
+/**
+ * Local checkbox. Unchecked in the file, so the serialized page is the
+ * unfiltered report. A browser hides `data-fix-available="no"` rows only
+ * after the reader checks it.
+ */
+function fixAvailableOnlyControl(): string {
+  return `<p id="fix-filter"><label><input id="${FIX_AVAILABLE_ONLY_ID}" type="checkbox"> Fix available only</label></p>\n`;
 }
 
 /** Empty mount. A later change can fill this with a collapsible footer. */
