@@ -29,6 +29,7 @@ export function formatSarif(artifact: ScanArtifact, root?: string): object {
   const rules = buildRules(artifact.findings);
   const results = artifact.findings.map((f) => toSarifResult(f, suppressed.get(suppressionKey(f.ruleId, f.location))));
 
+  const degradationNotes = degradationNotifications(artifact);
   const runs: object[] = [
     {
       tool: {
@@ -44,6 +45,7 @@ export function formatSarif(artifact: ScanArtifact, root?: string): object {
         {
           executionSuccessful: true,
           startTimeUtc: artifact.timestamp,
+          ...(degradationNotes ? { toolExecutionNotifications: degradationNotes } : {}),
         },
       ],
     },
@@ -59,6 +61,20 @@ export function formatSarif(artifact: ScanArtifact, root?: string): object {
     version: '2.1.0',
     runs,
   };
+}
+
+/**
+ * Scan degradations, in the order already stored on the artifact. Absent when
+ * the scan recorded none, so a document with no degradations is unchanged.
+ */
+function degradationNotifications(artifact: ScanArtifact): object[] | undefined {
+  const rows = artifact.degradations;
+  if (!rows || rows.length === 0) return undefined;
+  return rows.map((warning) => ({
+    descriptor: { id: warning.code },
+    level: 'warning',
+    message: { text: warning.message },
+  }));
 }
 
 /** SARIF `level` for a pack severity: critical/high → error, medium → warning, low/info → note. */
