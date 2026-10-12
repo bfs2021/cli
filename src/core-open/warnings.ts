@@ -17,9 +17,16 @@ import { redactForDisplay } from './utils/redact.js';
  * object and one emit site.
  */
 
+import { compareCodeUnits } from './utils/code-unit.js';
+
 export const WARNING_CODES = {
   /** A source file failed to parse. The build continues without its symbols. */
   PARSE_FAILED: 'VG_WARN_PARSE_FAILED',
+  /**
+   * A file under the walk is binary or not UTF-8. It is left out of the map
+   * and out of text parsers. The message is a count and paths, never bytes.
+   */
+  NON_TEXT_FILE: 'VG_WARN_NON_TEXT_FILE',
   /** A file exceeded the per-file size cap and was left out of the map. */
   BUILD_FILE_OVERSIZE: 'VG_WARN_BUILD_FILE_OVERSIZE',
   /** The TypeScript resolver was skipped because the corpus exceeded its file cap. */
@@ -120,11 +127,12 @@ export function splitStampedWarning(stored: string): CodedWarning | undefined {
 }
 
 /**
- * Order by code, then by message. Equal pairs keep their input order
- * (the runtime sort is stable).
+ * Order by code, then by message, in UTF-16 code units. Equal pairs keep
+ * their input order (the runtime sort is stable). The process locale does
+ * not change the order.
  */
 export function sortCodedWarnings(warnings: readonly CodedWarning[]): CodedWarning[] {
-  return [...warnings].sort((a, b) => a.code.localeCompare(b.code) || a.message.localeCompare(b.message));
+  return [...warnings].sort((a, b) => compareCodeUnits(a.code, b.code) || compareCodeUnits(a.message, b.message));
 }
 
 /**

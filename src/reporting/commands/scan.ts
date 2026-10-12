@@ -18,6 +18,7 @@ import {
   loadConfig,
   findConfigFile,
 } from '../../core-open/index.js';
+import { compareCodeUnits } from '../../core-open/utils/code-unit.js';
 import { writeScanSummary } from '../scan-summary.js';
 import { compareDriftBudget, evaluateConfigDriftBudget } from '../drift-budget-gate.js';
 import {
@@ -52,6 +53,8 @@ import { emitIngestIdLine, emitDriftScoreLine } from '../utils/ingest-id-output.
 import { formatUploadHttpFailure, uploadScanArtifact } from '../utils/upload.js';
 import { redactForDisplay } from '../../core-open/utils/redact.js';
 import { buildGraph } from '../../engine/build.js';
+import { assertLockfilesValid, LockfileSyntaxError } from '../../engine/lockfile-guard.js';
+import { parseFailureWarningLines } from '../../engine/parse-warning.js';
 import { writeArtifacts, resolveGraphPath } from '../../engine/artifacts.js';
 import { readHaileSidecar } from '../../engine/haile/sidecar.js';
 import { isUsableHaileSymbol } from '../../engine/haile/format.js';
@@ -383,7 +386,7 @@ function architectureFindings(rootDir: string, hardOnly: boolean): { policy: str
       out.push({ file: s.file_path, ...(typeof f.line === 'number' && f.line > 0 ? { line: f.line } : {}), symbol: s.qualified_name || s.name, severity: f.severity, message: f.message, rule: f.rule, policy });
     }
   }
-  out.sort((a, b) => a.file.localeCompare(b.file) || (a.line ?? 0) - (b.line ?? 0) || a.symbol.localeCompare(b.symbol));
+  out.sort((a, b) => compareCodeUnits(a.file, b.file) || (a.line ?? 0) - (b.line ?? 0) || compareCodeUnits(a.symbol, b.symbol));
   return { policy, rows: out };
 }
 
@@ -474,6 +477,15 @@ export const scanCommand = new Command('scan')
       assertSafeWalkRoot(rootDir);
     } catch (err) {
       if (err instanceof UnsafeRootError) throw new CliError(err.message, ExitCode.ERROR);
+      throw err;
+    }
+
+    // Before project scanners and the code-map parse workers. A truncated
+    // lockfile must not become a partial dependency graph or a successful exit.
+    try {
+      assertLockfilesValid(rootDir);
+    } catch (err) {
+      if (err instanceof LockfileSyntaxError) throw new CliError(err.message, ExitCode.ERROR);
       throw err;
     }
 
@@ -709,6 +721,11 @@ export const scanCommand = new Command('scan')
             exclude: opts.exclude,
             onParseProgress: (done, total) => report(done, total, 'parsing'),
           });
+          // Same coded warning `vg build` prints. Stderr only, so scan JSON
+          // on stdout stays the artifact. One line per file, already sorted.
+          for (const line of parseFailureWarningLines(result.codedWarnings)) {
+            console.error(chalk.yellow(line));
+          }
           builtGraph = result.graph;
           const written = writeArtifacts(result.graph, { root: rootDir });
           if (written.architecturePolicyError) console.error(chalk.red(`\narchitecture policy: ${written.architecturePolicyError}`));
