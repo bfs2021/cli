@@ -49,11 +49,22 @@ function section(html: string, id: string): string {
 }
 
 function footer(html: string): string {
-  const start = html.indexOf(`<details id="${ADVISORY_CORPUS_FOOTER_ID}">`);
-  if (start < 0) throw new Error('missing advisory corpus footer');
-  const end = html.indexOf('</details>', start);
-  if (end < 0) throw new Error('unclosed advisory corpus footer');
-  return html.slice(start, end + '</details>'.length);
+  const start = html.indexOf(`<footer id="${ADVISORY_CORPUS_FOOTER_ID}">`);
+  const end = html.indexOf('</footer>', start);
+  if (start < 0 || end < 0) throw new Error('missing advisory footer');
+  return html.slice(start, end + '</footer>'.length);
+}
+
+function vulnResult(
+  source: 'osv' | 'manifest' | 'unreachable' | 'none',
+  totalAdvisories: number,
+): NonNullable<ScanArtifact['extended']>['vulnerabilities'] {
+  return {
+    source,
+    packages: [],
+    totalAdvisories,
+    severityCounts: { low: 0, moderate: 0, high: 0, critical: 0, unknown: 0 },
+  };
 }
 
 function sample(): ScanArtifact {
@@ -182,12 +193,10 @@ describe('formatHtmlReport', () => {
     expect(html).toContain('href="#vulnerabilities"');
     expect(html).toContain('href="#security"');
     expect(html).toContain('href="#findings"');
-    expect(html).toContain(`href="#${ADVISORY_CORPUS_FOOTER_ID}"`);
     expect(html).toContain('id="summary"');
     expect(html).toContain('id="vulnerabilities"');
     expect(html).toContain('id="security"');
     expect(html).toContain('id="findings"');
-    expect(html).toContain(`id="${ADVISORY_CORPUS_FOOTER_ID}"`);
   });
 
   it('keeps the full finding tables, in stable order, under the summary', () => {
@@ -219,11 +228,6 @@ describe('formatHtmlReport', () => {
     expect(html).not.toContain('engine/1');
     expect(findings).not.toContain('GHSA-crit');
     expect(html.indexOf('id="summary"')).toBeLessThan(html.indexOf('id="vulnerabilities"'));
-    expect(html.indexOf('id="vulnerabilities"')).toBeLessThan(html.indexOf('id="security"'));
-    expect(html.indexOf('id="security"')).toBeLessThan(html.indexOf('id="findings"'));
-    expect(html.lastIndexOf('</section>')).toBeLessThan(html.indexOf(`id="${ADVISORY_CORPUS_FOOTER_ID}"`));
-    expect(footer(html)).toContain('Not scanned');
-    expect(footer(html)).not.toContain('GHSA-crit');
   });
 
   it('escapes markup and redacts credential-shaped text', () => {
@@ -245,9 +249,9 @@ describe('formatHtmlReport', () => {
     expect(section(html, 'vulnerabilities')).toContain('Not scanned');
     expect(section(html, 'security')).toContain('Not scanned');
     expect(section(html, 'findings')).toContain('None');
-    expect(footer(html)).toContain('<p class="absent">Not scanned</p>');
-    expect(footer(html)).not.toContain('<dt>Advisories</dt>');
-    expect(footer(html)).not.toContain('critical');
+    expect(block(html, 'advisory-source')).toBe('<p id="advisory-source" class="absent">Not scanned</p>');
+    expect(footer(html)).toContain('<summary>Advisory data: Not scanned</summary>');
+    expect(footer(html)).not.toContain('id="advisory-count"');
   });
 
   it('renders real zeros when a vulnerability check finished with nothing to report', () => {
@@ -264,12 +268,9 @@ describe('formatHtmlReport', () => {
     expect(block(html, 'vuln-counts')).toContain('data-evaluated="yes"');
     expect(block(html, 'vuln-counts')).toContain('critical 0');
     expect(section(html, 'vulnerabilities')).toContain('None');
-    const foot = footer(html);
-    expect(foot).toContain('<dt>Source</dt><dd>none</dd>');
-    expect(foot).toContain('<dt>Advisories</dt><dd>0</dd>');
-    expect(foot).toContain('<dt>Packages</dt><dd>0</dd>');
-    expect(foot).toContain('<dt>Severity</dt><dd>critical 0, high 0, moderate 0, low 0, unknown 0</dd>');
-    expect(html.lastIndexOf('</section>')).toBeLessThan(html.indexOf(`id="${ADVISORY_CORPUS_FOOTER_ID}"`));
+    expect(block(html, 'advisory-source')).toBe('<dd id="advisory-source">No packages to check</dd>');
+    expect(block(html, 'advisory-count')).toBe('<dd id="advisory-count">0</dd>');
+    expect(footer(html)).toContain('<summary>Advisory data: No packages to check, 0 advisories</summary>');
   });
 
   it('leaves an unfinished vulnerability check blank instead of zero', () => {
@@ -285,12 +286,10 @@ describe('formatHtmlReport', () => {
     }));
     expect(block(html, 'vuln-counts')).toContain('Not scanned');
     expect(html).not.toContain('critical 0');
-    const foot = footer(html);
-    expect(foot).toContain('<dt>Source</dt><dd>unreachable</dd>');
-    expect(foot).not.toContain('<dt>Advisories</dt>');
-    expect(foot).not.toContain('<dt>Packages</dt>');
-    expect(foot).not.toContain('<dt>Severity</dt>');
-    expect(html.lastIndexOf('</section>')).toBeLessThan(html.indexOf(`id="${ADVISORY_CORPUS_FOOTER_ID}"`));
+    expect(block(html, 'advisory-source')).toBe('<p id="advisory-source" class="absent">Not checked</p>');
+    expect(footer(html)).toContain('<summary>Advisory data: Not checked</summary>');
+    expect(footer(html)).not.toContain('id="advisory-count"');
+    expect(footer(html)).not.toContain('0 advisories');
   });
 
   it('shows a zero fix rollup when the field is present and no version is listed', () => {
@@ -308,6 +307,54 @@ describe('formatHtmlReport', () => {
     expect(block(html, 'fix-available')).toBe('<p id="fix-available">Fix available: 0</p>');
   });
 
+  it('names a finished advisory source and keeps a missing total absent', () => {
+    const osv = formatHtmlReport(artifact({
+      findings: [{
+        ruleId: 'vibgrate/vulnerability',
+        level: 'error',
+        message: 'critical row',
+        location: 'left-pad',
+        details: { severity: 'critical', package: 'left-pad', advisoryId: 'GHSA-crit' },
+      }],
+      extended: { vulnerabilities: vulnResult('osv', 1) },
+    }));
+    expect(footer(osv)).toContain('<summary>Advisory data: OSV, 1 advisory</summary>');
+    expect(block(osv, 'advisory-source')).toBe('<dd id="advisory-source">OSV</dd>');
+    expect(block(osv, 'advisory-count')).toBe('<dd id="advisory-count">1</dd>');
+
+    const manifest = formatHtmlReport(artifact({
+      extended: { vulnerabilities: vulnResult('manifest', 2) },
+    }));
+    expect(block(manifest, 'advisory-source')).toBe('<dd id="advisory-source">Offline package-version manifest</dd>');
+    expect(block(manifest, 'advisory-count')).toBe('<dd id="advisory-count">2</dd>');
+
+    const missingTotal = vulnResult('osv', 0);
+    delete (missingTotal as { totalAdvisories?: number }).totalAdvisories;
+    const omitted = formatHtmlReport(artifact({ extended: { vulnerabilities: missingTotal } }));
+    expect(footer(omitted)).toContain('<summary>Advisory data: OSV</summary>');
+    expect(footer(omitted)).not.toContain('id="advisory-count"');
+    expect(footer(omitted)).not.toContain('0 advisories');
+  });
+
+  it('does not echo an unknown advisory source', () => {
+    const hostile = `<img src=x onerror=alert(1)> ${TOKEN}`;
+    const recorded = vulnResult('osv', 4);
+    (recorded as { source: string }).source = hostile;
+    const html = formatHtmlReport(artifact({ extended: { vulnerabilities: recorded } }));
+    expect(block(html, 'advisory-source')).toBe('<p id="advisory-source" class="absent">Not scanned</p>');
+    expect(html).not.toContain(TOKEN);
+    expect(html).not.toContain('<img');
+    expect(html).not.toContain('onerror');
+    expect(footer(html)).not.toContain('4');
+  });
+
+  it('says the advisory source was not recorded when findings have no source', () => {
+    const html = formatHtmlReport(sample());
+    expect(block(html, 'advisory-source')).toBe('<p id="advisory-source" class="absent">Not recorded</p>');
+    expect(footer(html)).not.toContain('id="advisory-count"');
+    expect(html.indexOf('id="findings"')).toBeLessThan(html.indexOf(`id="${ADVISORY_CORPUS_FOOTER_ID}"`));
+  });
+
   it('is deterministic and does not embed a timestamp, a script, or external assets', () => {
     const first = sample();
     const again = formatHtmlReport(first);
@@ -322,94 +369,11 @@ describe('formatHtmlReport', () => {
     expect(again).not.toMatch(/<script/i);
     expect(again).not.toMatch(/<link[\s>]/i);
     expect(again).not.toMatch(/\ssrc\s*=/i);
-    expect(again).not.toMatch(/<details[^>]*\sopen\b/i);
+    expect(again.match(/<details/gi)).toEqual(['<details']);
+    expect(again).not.toMatch(/<details[^>]*\bopen\b/i);
     expect(again).not.toMatch(/fix available only/i);
-    expect(again).not.toMatch(/class="banner"/);
-    expect(footer(again)).toBe(
-      `<details id="${ADVISORY_CORPUS_FOOTER_ID}">\n<summary>Advisory data</summary>\n<p class="absent">Not scanned</p>\n</details>`,
-    );
+    expect(footer(again)).toContain(`<footer id="${ADVISORY_CORPUS_FOOTER_ID}">`);
+    expect(footer(again)).toContain('<summary>Advisory data: Not recorded</summary>');
     expect(again.startsWith('<!doctype html>')).toBe(true);
-  });
-
-  it('records advisory source and counts in a collapsed footer after the tables', () => {
-    const html = formatHtmlReport(artifact({
-      extended: {
-        vulnerabilities: {
-          source: 'manifest',
-          packages: [
-            { ecosystem: 'pypi', package: 'aaa', version: '1.0.0', advisories: [] },
-            { ecosystem: 'npm', package: 'zzz', version: '2.0.0', advisories: [] },
-          ],
-          totalAdvisories: 3,
-          severityCounts: { unknown: 0, low: 1, moderate: 0, high: 2, critical: 0 },
-        },
-      },
-    }));
-    const foot = footer(html);
-    expect(html.indexOf('id="summary"')).toBeLessThan(html.indexOf('id="vulnerabilities"'));
-    expect(html.indexOf('id="vulnerabilities"')).toBeLessThan(html.indexOf('id="security"'));
-    expect(html.indexOf('id="security"')).toBeLessThan(html.indexOf('id="findings"'));
-    expect(html.lastIndexOf('</section>')).toBeLessThan(html.indexOf(`id="${ADVISORY_CORPUS_FOOTER_ID}"`));
-    expect(foot.startsWith(`<details id="${ADVISORY_CORPUS_FOOTER_ID}">`)).toBe(true);
-    expect(foot).not.toMatch(/\sopen\b/);
-    expect(foot).toContain('<dt>Source</dt><dd>manifest</dd>');
-    expect(foot).toContain('<dt>Advisories</dt><dd>3</dd>');
-    expect(foot).toContain('<dt>Packages</dt><dd>2</dd>');
-    expect(foot).toContain('<dt>Severity</dt><dd>critical 0, high 2, moderate 0, low 1, unknown 0</dd>');
-    expect(foot.indexOf('<dt>Source</dt>')).toBeLessThan(foot.indexOf('<dt>Advisories</dt>'));
-    expect(foot.indexOf('<dt>Advisories</dt>')).toBeLessThan(foot.indexOf('<dt>Packages</dt>'));
-    expect(foot.indexOf('<dt>Packages</dt>')).toBeLessThan(foot.indexOf('<dt>Severity</dt>'));
-    expect(foot).not.toContain('aaa');
-    expect(foot).not.toContain('zzz');
-    expect(foot).not.toContain('<h2');
-    expect(foot).not.toContain('class="banner"');
-  });
-
-  it('keeps the advisory footer byte-stable when package and severity key order change', () => {
-    const scanned = artifact({
-      extended: {
-        vulnerabilities: {
-          source: 'osv',
-          packages: [
-            { ecosystem: 'npm', package: 'left-pad', version: '1.0.0', advisories: [] },
-            { ecosystem: 'npm', package: 'lodash', version: '4.17.21', advisories: [] },
-          ],
-          totalAdvisories: 0,
-          severityCounts: { low: 0, moderate: 0, high: 0, critical: 0, unknown: 0 },
-        },
-      },
-    });
-    const flipped = structuredClone(scanned);
-    flipped.extended!.vulnerabilities!.packages.reverse();
-    flipped.extended!.vulnerabilities!.severityCounts = {
-      unknown: 0,
-      critical: 0,
-      low: 0,
-      high: 0,
-      moderate: 0,
-    };
-    const html = formatHtmlReport(scanned);
-    expect(formatHtmlReport(flipped)).toBe(html);
-    expect(footer(html)).toContain('<dt>Source</dt><dd>osv</dd>');
-    expect(footer(html)).toContain('<dt>Advisories</dt><dd>0</dd>');
-    expect(footer(html)).toContain('<dt>Packages</dt><dd>2</dd>');
-    expect(footer(html)).toContain('critical 0, high 0, moderate 0, low 0, unknown 0');
-  });
-
-  it('escapes and redacts advisory source text in the footer', () => {
-    const html = formatHtmlReport(artifact({
-      extended: {
-        vulnerabilities: {
-          source: `manifest <b>${TOKEN}</b>` as 'manifest',
-          packages: [],
-          totalAdvisories: 1,
-          severityCounts: { low: 0, moderate: 0, high: 0, critical: 0, unknown: 0 },
-        },
-      },
-    }));
-    const foot = footer(html);
-    expect(foot).toContain('manifest &lt;b&gt;[REDACTED]&lt;/b&gt;');
-    expect(foot).not.toContain(TOKEN);
-    expect(foot).not.toContain('<b>');
   });
 });

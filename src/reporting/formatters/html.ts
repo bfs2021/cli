@@ -12,19 +12,19 @@ import type { Finding, ScanArtifact } from '../types.js';
  * Stable ids: `#summary`, `#vulnerabilities`, `#security`, `#findings`,
  * `#advisory-corpus`.
  *
- * Rows carry {@link FIX_AVAILABLE_ATTR} so a client-side "fix available
- * only" filter can be added without changing the row model.
- * {@link advisoryCorpusFooter} is a collapsed footer after the finding
- * tables. It records advisory-database provenance already stored on
- * `extended.vulnerabilities`: `source` (online OSV, offline manifest,
- * unreachable, or none), advisory count, affected-package count, and
- * severity counts. The artifact has no separate corpus-version field.
+ * Rows carry {@link FIX_AVAILABLE_ATTR} so a client-side "fix available only"
+ * filter can be added without changing the row model. That filter is unused.
+ *
+ * {@link advisoryCorpusFooter} fills `#advisory-corpus` with a collapsed
+ * footer. It names the advisory source recorded on the artifact, and it says
+ * "Not scanned", "Not checked", or "Not recorded" when that fact is absent.
+ * A missing advisory total is omitted rather than printed as zero.
  */
 
 /** Row attribute a later "fix available only" filter can select on. */
 export const FIX_AVAILABLE_ATTR = 'data-fix-available';
 
-/** Collapsed footer id for advisory-database provenance. */
+/** Element id of the collapsed advisory-data footer. */
 export const ADVISORY_CORPUS_FOOTER_ID = 'advisory-corpus';
 
 const VULN_RULE_ID = 'vibgrate/vulnerability';
@@ -78,8 +78,8 @@ export function formatHtmlReport(artifact: ScanArtifact): string {
   nav a { margin-right: 1rem; }
   a { color: inherit; }
   .absent { font-style: italic; }
-  #${ADVISORY_CORPUS_FOOTER_ID} { margin-top: 2.5rem; }
-  #${ADVISORY_CORPUS_FOOTER_ID} summary { font-weight: 600; }
+  #${ADVISORY_CORPUS_FOOTER_ID} { margin-top: 2.5rem; font-size: 0.85rem; }
+  #${ADVISORY_CORPUS_FOOTER_ID} summary { cursor: pointer; }
 </style>
 </head>
 <body>
@@ -103,7 +103,6 @@ ${fix === null ? '' : `<p id="fix-available">Fix available: ${fix}</p>\n`}
 <a href="#vulnerabilities">Vulnerabilities</a>
 <a href="#security">Security</a>
 <a href="#findings">Findings</a>
-<a href="#${ADVISORY_CORPUS_FOOTER_ID}">Advisory data</a>
 </nav>
 </section>
 <section id="vulnerabilities">
@@ -124,38 +123,86 @@ ${advisoryCorpusFooter(artifact)}
 `;
 }
 
+const ADVISORY_SOURCES = ['osv', 'manifest', 'unreachable', 'none'] as const;
+type AdvisorySourceName = (typeof ADVISORY_SOURCES)[number];
+
+const ADVISORY_SOURCE_LABEL: Record<AdvisorySourceName, string> = {
+  osv: 'OSV',
+  manifest: 'Offline package-version manifest',
+  unreachable: 'Not checked',
+  none: 'No packages to check',
+};
+
 /**
- * Collapsed provenance for the vulnerability database. Counts are a result
- * only when `source` is not `unreachable` — a zero there would read as clean.
- * Severity order is fixed, so object key order cannot change the bytes.
+ * Collapsed footer. Closed by default so the finding tables stay first.
+ * Known sources are the only strings copied from the artifact. An unknown
+ * source value is not echoed.
  */
 function advisoryCorpusFooter(artifact: ScanArtifact): string {
-  const vulns = artifact.extended?.vulnerabilities;
-  const open = `<details id="${ADVISORY_CORPUS_FOOTER_ID}">\n<summary>Advisory data</summary>\n`;
-  if (!vulns) {
-    return `${open}<p class="absent">Not scanned</p>\n</details>`;
-  }
-  const rows = [`<dt>Source</dt><dd>${sourceText(vulns.source)}</dd>`];
-  if (vulns.source !== 'unreachable') {
-    rows.push(`<dt>Advisories</dt><dd>${scoreText(vulns.totalAdvisories)}</dd>`);
-    const packageCount = Array.isArray(vulns.packages) ? vulns.packages.length : undefined;
-    rows.push(`<dt>Packages</dt><dd>${scoreText(packageCount)}</dd>`);
-    rows.push(`<dt>Severity</dt><dd>${severityLine(vulns.severityCounts)}</dd>`);
-  }
-  return `${open}<dl>\n${rows.join('\n')}\n</dl>\n</details>`;
+  const view = advisoryCorpusView(artifact);
+  const summary = view.count === null
+    ? `Advisory data: ${view.label}`
+    : `Advisory data: ${view.label}, ${advisoryCountPhrase(view.count)}`;
+  const body = view.absent
+    ? `<p id="advisory-source" class="absent">${text(view.label)}</p>`
+    : advisoryCorpusList(view.label, view.count);
+  return `<footer id="${ADVISORY_CORPUS_FOOTER_ID}">
+<details>
+<summary>${text(summary)}</summary>
+${body}
+</details>
+</footer>`;
 }
 
-function sourceText(value: unknown): string {
-  if (typeof value !== 'string' || value.trim() === '') return 'n/a';
-  return text(value.trim());
+function advisoryCorpusList(label: string, count: number | null): string {
+  const countRow = count === null
+    ? ''
+    : `<dt>Advisories</dt><dd id="advisory-count">${count}</dd>\n`;
+  return `<dl>
+<dt>Source</dt><dd id="advisory-source">${text(label)}</dd>
+${countRow}</dl>`;
 }
 
-/** Fixed severity order. A missing count is `n/a`, never a fabricated zero. */
-function severityLine(counts: unknown): string {
-  const record = counts && typeof counts === 'object' && !Array.isArray(counts)
-    ? counts as Record<string, unknown>
-    : {};
-  return VULN_SEVERITIES.map((name) => `${name} ${scoreText(record[name])}`).join(', ');
+interface AdvisoryCorpusView {
+  label: string;
+  /** Null when the artifact does not record a finished total. Never a stand-in zero. */
+  count: number | null;
+  absent: boolean;
+}
+
+function advisoryCorpusView(artifact: ScanArtifact): AdvisoryCorpusView {
+  const recorded = artifact.extended?.vulnerabilities;
+  const source = advisorySourceName(recorded?.source);
+  if (source === 'unreachable') {
+    return { label: ADVISORY_SOURCE_LABEL.unreachable, count: null, absent: true };
+  }
+  if (source === 'osv' || source === 'manifest' || source === 'none') {
+    return {
+      label: ADVISORY_SOURCE_LABEL[source],
+      count: advisoryTotal(recorded?.totalAdvisories),
+      absent: false,
+    };
+  }
+  const findings = Array.isArray(artifact.findings) ? artifact.findings : [];
+  if (findings.some((finding) => finding.ruleId === VULN_RULE_ID)) {
+    return { label: 'Not recorded', count: null, absent: true };
+  }
+  return { label: 'Not scanned', count: null, absent: true };
+}
+
+function advisorySourceName(value: unknown): AdvisorySourceName | null {
+  if (typeof value !== 'string') return null;
+  return (ADVISORY_SOURCES as readonly string[]).includes(value) ? (value as AdvisorySourceName) : null;
+}
+
+/** A non-negative integer is a real total, including 0. Anything else is absent. */
+function advisoryTotal(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) return null;
+  return value;
+}
+
+function advisoryCountPhrase(count: number): string {
+  return count === 1 ? '1 advisory' : `${count} advisories`;
 }
 
 function vulnerabilityEvaluated(artifact: ScanArtifact, vulnFindings: Finding[]): boolean {
