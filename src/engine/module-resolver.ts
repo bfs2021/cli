@@ -84,7 +84,7 @@ export function buildModuleResolver(root: string, relSet: Set<string>): ModuleRe
   const probe = makeProbe(relSet);
   const suffixIndex = buildSuffixIndex(relSet);
   const tsPaths = loadTsconfigPaths(root); // {baseUrlRel, paths}
-  const workspaces = loadWorkspacePackages(root); // name -> dirRel
+  const workspaces = loadWorkspacePackages(root);
 
   function resolveAlias(source: string): string | null {
     if (!tsPaths) return null;
@@ -102,17 +102,24 @@ export function buildModuleResolver(root: string, relSet: Set<string>): ModuleRe
   }
 
   function resolveWorkspace(source: string): string | null {
-    if (!workspaces.size) return null;
-    // longest package-name match (so @org/a/b prefers @org/a/b over @org/a)
-    let best: { dirRel: string; rest: string } | null = null;
-    for (const [name, dirRel] of workspaces) {
-      if (source === name || source.startsWith(`${name}/`)) {
-        const rest = source === name ? '' : source.slice(name.length + 1);
-        if (!best || name.length > best.dirRel.length) best = { dirRel, rest };
+    if (!workspaces.length) return null;
+    // Longest package name wins (`@org/a/b` over `@org/a`). Equal names use
+    // compareWorkspacePackages: path, then name, then version.
+    let best: { pkg: WorkspacePackage; rest: string } | null = null;
+    for (const pkg of workspaces) {
+      const { name } = pkg;
+      if (source !== name && !source.startsWith(`${name}/`)) continue;
+      const rest = source === name ? '' : source.slice(name.length + 1);
+      if (
+        !best ||
+        name.length > best.pkg.name.length ||
+        (name.length === best.pkg.name.length && compareWorkspacePackages(pkg, best.pkg) < 0)
+      ) {
+        best = { pkg, rest };
       }
     }
     if (!best) return null;
-    const base = best.rest ? posixJoin(best.dirRel, best.rest) : best.dirRel;
+    const base = best.rest ? posixJoin(best.pkg.dirRel, best.rest) : best.pkg.dirRel;
     return probe(base) ?? probe(posixJoin(base, 'src/index')) ?? probe(posixJoin(base, 'index'));
   }
 
@@ -379,8 +386,28 @@ function readTsconfigChain(root: string, file: string, seen: Set<string>): TsPat
 
 // --- workspaces ---
 
-function loadWorkspacePackages(root: string): Map<string, string> {
-  const map = new Map<string, string>();
+interface WorkspacePackage {
+  name: string;
+  dirRel: string;
+  version: string;
+}
+
+/**
+ * Tie-break when bare package names collide: path, then name, then version.
+ * Directory walk order is not an input.
+ */
+export function compareWorkspacePackages(
+  a: { dirRel: string; name: string; version: string },
+  b: { dirRel: string; name: string; version: string },
+): number {
+  return cmpText(a.dirRel, b.dirRel) || cmpText(a.name, b.name) || cmpText(a.version, b.version);
+}
+
+function cmpText(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function loadWorkspacePackages(root: string): WorkspacePackage[] {
   const globs: string[] = [];
 
   const rootPkg = path.join(root, 'package.json');
@@ -411,16 +438,25 @@ function loadWorkspacePackages(root: string): Map<string, string> {
     }
   }
 
+  const packages: WorkspacePackage[] = [];
+  const seen = new Set<string>();
   for (const dir of expandWorkspaceGlobs(root, globs)) {
     const pj = path.join(dir, 'package.json');
     try {
-      const name = (JSON.parse(fs.readFileSync(pj, 'utf8')) as { name?: string }).name;
-      if (name) map.set(name, path.relative(root, dir).split(path.sep).join('/'));
+      const parsed = JSON.parse(fs.readFileSync(pj, 'utf8')) as { name?: unknown; version?: unknown };
+      const name = typeof parsed.name === 'string' ? parsed.name : '';
+      if (!name) continue;
+      const dirRel = path.relative(root, dir).split(path.sep).join('/');
+      if (seen.has(dirRel)) continue;
+      seen.add(dirRel);
+      const version = typeof parsed.version === 'string' ? parsed.version : '';
+      packages.push({ name, dirRel, version });
     } catch {
       /* ignore */
     }
   }
-  return map;
+  packages.sort(compareWorkspacePackages);
+  return packages;
 }
 
 /** Resolve simple workspace globs (`packages/*`, `apps/*`, `libs/**`) to dirs containing package.json. */
@@ -437,7 +473,7 @@ function expandWorkspaceGlobs(root: string, globs: string[]): string[] {
     }
     collectPackageDirs(baseDir, recurse ? 4 : 1, out);
   }
-  return [...out];
+  return [...out].sort(cmpText);
 }
 
 function collectPackageDirs(dir: string, depth: number, out: Set<string>): void {
@@ -448,6 +484,7 @@ function collectPackageDirs(dir: string, depth: number, out: Set<string>): void 
   } catch {
     return;
   }
+  entries.sort((a, b) => cmpText(a.name, b.name));
   for (const e of entries) {
     if (!e.isDirectory() || e.name === 'node_modules' || e.name.startsWith('.')) continue;
     const child = path.join(dir, e.name);
