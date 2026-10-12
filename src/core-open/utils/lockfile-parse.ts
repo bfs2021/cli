@@ -17,6 +17,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { parse as parseToml } from 'smol-toml';
 import { parseAllDocuments } from 'yaml';
+import { inspectUtf8 } from './text-bytes.js';
 
 export type LockfileKind =
   | 'JSON'
@@ -42,6 +43,7 @@ const KIND_BY_BASENAME: Readonly<Record<string, LockfileKind>> = {
   'cargo.lock': 'TOML',
   'yarn.lock': 'yarn.lock',
   'go.sum': 'go.sum',
+  'go.work.sum': 'go.sum',
   'gradle.lockfile': 'gradle.lockfile',
   'gemfile.lock': 'Gemfile.lock',
 };
@@ -60,11 +62,18 @@ export class LockfileParseError extends Error {
   readonly kind: string;
 
   constructor(filePath: string, kind: string) {
-    const detail = kind === 'unreadable' ? 'could not be read' : `is truncated or invalid ${kind}`;
+    const detail =
+      kind === 'unreadable'
+        ? 'could not be read'
+        : kind === 'binary'
+          ? 'is binary or not UTF-8'
+          : `is truncated or invalid ${kind}`;
     const action =
       kind === 'unreadable'
         ? 'Check that the file is accessible, then re-run the command.'
-        : 'Restore or regenerate the file with your package manager, then re-run the command.';
+        : kind === 'binary'
+          ? 'Leave it out with a .gitignore entry or pass --exclude, or replace it with a text lockfile, then re-run the command.'
+          : 'Restore or regenerate the file with your package manager, then re-run the command.';
     super(`${filePath}: lockfile ${detail}. ${action}`);
     this.name = 'LockfileParseError';
     this.filePath = filePath;
@@ -97,6 +106,8 @@ export function parseLockfileJson(filePath: string, text: string): unknown {
  * concern (absence is not an error); this only runs on bytes that were read.
  */
 export function assertLockfileText(filePath: string, text: string, kind: LockfileKind): void {
+  // A NUL survived a lossy decode. Reject before a parser can quote the bytes.
+  if (text.includes('\u0000')) throw new LockfileParseError(filePath, 'binary');
   switch (kind) {
     case 'JSON':
       parseLockfileJson(filePath, text);
@@ -136,8 +147,11 @@ export function assertLockfileFile(filePath: string): void {
   if (!kind) return;
   let text: string;
   try {
-    text = fs.readFileSync(filePath, 'utf8');
+    const inspected = inspectUtf8(fs.readFileSync(filePath));
+    if (!inspected.ok) throw new LockfileParseError(filePath, 'binary');
+    text = inspected.text;
   } catch (err) {
+    if (err instanceof LockfileParseError) throw err;
     const code = (err as NodeJS.ErrnoException).code;
     if (code === 'ENOENT') return;
     throw new LockfileParseError(filePath, 'unreadable');
@@ -191,7 +205,8 @@ function assertYarn(filePath: string, text: string): void {
 }
 
 function assertGoSum(filePath: string, text: string): void {
-  if (!text.trim()) throw new LockfileParseError(filePath, 'go.sum');
+  // An empty sum is a module with no dependencies, not a truncated file.
+  if (!text.trim()) return;
   const lineRe = /^\S+\s+v\S+\s+h1:\S+$/;
   for (const raw of text.split('\n')) {
     const line = raw.trim();

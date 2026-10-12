@@ -8,6 +8,7 @@ import { compareLicenseFindings, dedupeLicenseFindings } from '../licenses/dedup
 import { WARNING_CODES } from '../warnings.js';
 import { normalizeLicenseSourcePath } from '../licenses/dependency-license.js';
 import { aggregateDependencyDrift } from './dependency-drift-v3.js';
+import { compareCodeUnits } from '../utils/code-unit.js';
 
 /**
  * Version of the drift-score methodology (weighting + formula). Bump this ONLY
@@ -390,11 +391,17 @@ export function generateFindings(
 
     // A non-empty license that does not resolve, or an expression with an
     // unresolved constituent, is a data-quality finding. An explicit
-    // NOASSERTION / empty declaration is not. Rows are ordered by package,
-    // then license id, then source path. A later row with the same component,
-    // license id, and path is dropped below.
+    // NOASSERTION / empty declaration is not. Code-unit order, so the same
+    // manifest emits the same findings under every locale.
     const licenseFindings: Finding[] = [];
-    for (const dep of project.dependencies) {
+    const licenseDeps = [...project.dependencies].sort(
+      (a, b) =>
+        compareCodeUnits(a.package, b.package) ||
+        compareCodeUnits(a.license?.raw ?? '', b.license?.raw ?? '') ||
+        compareCodeUnits(a.section, b.section) ||
+        compareCodeUnits(a.license?.sourcePath ?? '', b.license?.sourcePath ?? ''),
+    );
+    for (const dep of licenseDeps) {
       // Location is the manifest path the scanner recorded, when it recorded one.
       const sourcePath = normalizeLicenseSourcePath(dep.license?.sourcePath);
       const location = sourcePath ?? project.path;
