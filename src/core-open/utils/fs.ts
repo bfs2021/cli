@@ -337,6 +337,8 @@ export class FileCache {
   private _nonTextAbs = new Set<string>();
   /** Root-relative labels for those files, de-duplicated. */
   private _skippedNonTextFiles: string[] = [];
+  /** Symlinks the shared walk did not follow. One coalesced warning is built from these. */
+  private _skippedSymlinks: string[] = [];
   /** Maximum file size (bytes) we will read. 0 = unlimited. */
   private _maxFileSize = 0;
   /** Per-project / per-directory scan timeout in ms. */
@@ -435,6 +437,15 @@ export class FileCache {
     this._skippedNonTextFiles.push(label);
   }
 
+  /**
+   * Symlinks the shared walk did not follow, as root-relative paths.
+   * The scan turns this list into one `VG_WARN_SYMLINK_SKIPPED` degradation.
+   * The walk itself does not print it, so the scan says it once.
+   */
+  get skippedSymlinks(): readonly string[] {
+    return this._skippedSymlinks;
+  }
+
   // ── Directory walking ──
 
   /**
@@ -528,9 +539,9 @@ export class FileCache {
       budgetError = noteWalkEntry(budgetState);
     };
     // Symlinks are not followed. Dirent.isDirectory() is false for a link, so a
-    // link to a parent cannot re-enter this walk. One notice is printed after
-    // the walk finishes. The prelude count stays quiet so a scan says it once.
-    const skippedSymlinks: string[] = [];
+    // link to a parent cannot re-enter this walk. Paths are recorded; the scan
+    // prints one VG_WARN_SYMLINK_SKIPPED degradation after the walk.
+    const skippedSymlinks = this._skippedSymlinks;
     const noteNonText = (abs: string): void => {
       this.noteNonText(abs);
     };
@@ -630,7 +641,6 @@ export class FileCache {
 
     await walk(rootDir, []);
     if (budgetError) throw budgetError;
-    emitSkippedSymlinkNotice(skippedSymlinks);
 
     let totalDirs = 0;
     const rootNameIndex = new Map<string, string[]>();

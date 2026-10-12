@@ -3,11 +3,16 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { discover } from '../src/engine/discover.js';
+import { buildGraph } from '../src/engine/build.js';
 import { FileCache } from '../src/core-open/utils/fs.js';
 import { runCoreScan } from '../src/core-open/index.js';
+import { formatSkippedSymlinkNotice } from '../src/core-open/utils/skipped-symlinks.js';
 
+const PIN = '2020-01-01T00:00:00.000Z';
 const NOTICE =
-  'notice: skipped 3 symlinks (alias.ts, nested/cycle, via). vg does not follow symlinks. Point the root at the link target, or pass --exclude or a narrower root.';
+  'warning [VG_WARN_SYMLINK_SKIPPED]: skipped 3 symlinks (alias.ts, nested/cycle, via). vg does not follow symlinks. Point the root at the link target, or pass --exclude or a narrower root.';
+const DIR_NOTICE =
+  'warning [VG_WARN_SYMLINK_SKIPPED]: skipped 1 symlink (jump). vg does not follow symlinks. Point the root at the link target, or pass --exclude or a narrower root.';
 
 function symlinksSupported(): boolean {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vg-symlink-probe-'));
@@ -97,24 +102,25 @@ describe.skipIf(!SYMLINKS)('vg build discovery and vg scan walk skip symlinks', 
       expect(rels).toEqual(['hidden/secret.ts', 'keep.ts']);
     });
     expect(stderr).toBe(
-      'notice: skipped 2 symlinks (nested/cycle, via). vg does not follow symlinks. Point the root at the link target, or pass --exclude or a narrower root.\n',
+      'warning [VG_WARN_SYMLINK_SKIPPED]: skipped 2 symlinks (nested/cycle, via). vg does not follow symlinks. Point the root at the link target, or pass --exclude or a narrower root.\n',
     );
     expect(stderr).not.toContain('alias.ts');
   });
 
-  it('the scan walk finishes with the same files and the same notice', async () => {
+  it('the scan walk finishes with the same files and records one warning', async () => {
     const root = symlinkFixture();
     dirs.push(root);
 
-    const read = async (): Promise<{ files: string[]; dirs: string[] }> => {
-      const entries = await new FileCache().walkDir(root);
+    const read = async (): Promise<{ files: string[]; dirs: string[]; warning: string | null }> => {
+      const cache = new FileCache();
+      const entries = await cache.walkDir(root);
       const files = entries.filter((e) => e.isFile).map((e) => e.relPath.split(path.sep).join('/')).sort();
       const directories = entries.filter((e) => e.isDirectory).map((e) => e.relPath.split(path.sep).join('/')).sort();
-      return { files, dirs: directories };
+      return { files, dirs: directories, warning: formatSkippedSymlinkNotice(cache.skippedSymlinks) };
     };
 
-    let first: { files: string[]; dirs: string[] } | undefined;
-    let second: { files: string[]; dirs: string[] } | undefined;
+    let first: { files: string[]; dirs: string[]; warning: string | null } | undefined;
+    let second: { files: string[]; dirs: string[]; warning: string | null } | undefined;
     const stderr1 = await captureStderr(async () => {
       first = await read();
     });
@@ -122,11 +128,13 @@ describe.skipIf(!SYMLINKS)('vg build discovery and vg scan walk skip symlinks', 
       second = await read();
     });
 
-    expect(first).toEqual({ files: ['hidden/secret.ts', 'keep.ts'], dirs: ['hidden', 'nested'] });
+    expect(first?.files).toEqual(['hidden/secret.ts', 'keep.ts']);
+    expect(first?.dirs).toEqual(['hidden', 'nested']);
+    expect(first?.warning).toBe(NOTICE);
     expect(second).toEqual(first);
-    expect(stderr1).toBe(`${NOTICE}\n`);
-    expect(stderr2).toBe(stderr1);
-    expect(stderr1).not.toContain(root);
+    expect(stderr1).toBe('');
+    expect(stderr2).toBe('');
+    expect(first?.warning).not.toContain(root);
   }, 5_000);
 
   it('prints nothing when the tree has no symlinks', async () => {
@@ -152,7 +160,10 @@ describe.skipIf(!SYMLINKS)('vg build discovery and vg scan walk skip symlinks', 
       logs.push(args.map((a) => String(a)).join(' '));
     });
     const stderrChunks: string[] = [];
-    const errSpy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: string | Uint8Array) => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      stderrChunks.push(args.map((a) => String(a)).join(' '));
+    });
+    const writeSpy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: string | Uint8Array) => {
       stderrChunks.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
       return true;
     });
@@ -166,24 +177,122 @@ describe.skipIf(!SYMLINKS)('vg build discovery and vg scan walk skip symlinks', 
     });
     logSpy.mockRestore();
     errSpy.mockRestore();
+    writeSpy.mockRestore();
 
     const stdout = logs.join('\n');
     const stderr = stderrChunks.join('');
     expect(artifact).toBeTruthy();
-    expect(stdout).not.toContain('notice: skipped');
     expect(stdout).not.toContain(root);
     const jsonText = logs.find((line) => line.trim().startsWith('{'));
     expect(jsonText).toBeTruthy();
-    const parsed = JSON.parse(jsonText!) as { schemaVersion?: string };
+    const parsed = JSON.parse(jsonText!) as {
+      schemaVersion?: string;
+      degradations?: { code: string; message: string }[];
+    };
     expect(parsed.schemaVersion).toBe('1.0');
     expect(JSON.stringify(parsed)).not.toContain('via/secret.ts');
-    expect(JSON.stringify(parsed)).not.toContain('nested/cycle');
-    expect(JSON.stringify(parsed)).not.toContain('alias.ts');
-    const notices = stderr.match(/notice: skipped \d+ symlinks/g) ?? [];
-    expect(notices).toEqual(['notice: skipped 3 symlinks']);
+    expect(JSON.stringify(parsed)).not.toContain('export const secret');
+    const notices = stderr.match(/warning \[VG_WARN_SYMLINK_SKIPPED\]/g) ?? [];
+    expect(notices).toEqual(['warning [VG_WARN_SYMLINK_SKIPPED]']);
     expect(stderr).toContain('alias.ts, nested/cycle, via');
     expect(stderr).not.toContain(root);
+    const symlinkWarnings = (parsed.degradations ?? []).filter((warning) => warning.code === 'VG_WARN_SYMLINK_SKIPPED');
+    expect(symlinkWarnings).toHaveLength(1);
+    expect(symlinkWarnings[0]?.message).toContain('alias.ts, nested/cycle, via');
+    expect(artifact.degradations?.filter((warning) => warning.code === 'VG_WARN_SYMLINK_SKIPPED')).toEqual(symlinkWarnings);
+    expect(JSON.stringify(parsed)).not.toContain(root);
     expect(fs.readdirSync(root).sort()).toEqual(before);
     expect(fs.existsSync(path.join(root, '.vibgrate'))).toBe(false);
+  }, 60_000);
+
+  it('a directory symlink yields one warning and the walk does not enter it', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vg-dirlink-'));
+    const target = fs.mkdtempSync(path.join(os.tmpdir(), 'vg-dirlink-target-'));
+    dirs.push(root, target);
+    fs.writeFileSync(path.join(root, 'keep.ts'), 'export const keep = 1;\n');
+    fs.writeFileSync(path.join(target, 'marker.ts'), 'export const marker = 1;\n');
+    fs.symlinkSync(target, path.join(root, 'jump'));
+
+    const stderr = await captureStderr(() => {
+      const rels = discover({ root }).map((f) => f.rel);
+      expect(rels).toEqual(['keep.ts']);
+      expect(rels.some((rel) => rel.startsWith('jump/'))).toBe(false);
+    });
+    expect(stderr).toBe(`${DIR_NOTICE}\n`);
+    expect(stderr).not.toContain(root);
+    expect(stderr).not.toContain(target);
+    expect(stderr).not.toContain('marker');
+    expect(stderr).not.toContain(os.homedir());
+
+    const buildStderr = await captureStderr(async () => {
+      const result = await buildGraph({
+        root,
+        generatedAt: PIN,
+        inline: true,
+        noCache: true,
+        noIndex: true,
+        noTsc: true,
+      });
+      const symlink = result.codedWarnings.filter((warning) => warning.code === 'VG_WARN_SYMLINK_SKIPPED');
+      expect(symlink).toHaveLength(1);
+      expect(symlink[0]?.message).toBe(
+        'skipped 1 symlink (jump). vg does not follow symlinks. Point the root at the link target, or pass --exclude or a narrower root.',
+      );
+      expect(result.warnings).toContain(`${symlink[0]!.message} [VG_WARN_SYMLINK_SKIPPED]`);
+      expect(result.fileStats.map((file) => file.rel)).toEqual(['keep.ts']);
+      expect(symlink[0]?.message).not.toContain(target);
+      expect(symlink[0]?.message).not.toContain('marker');
+    });
+    expect(buildStderr).not.toContain('VG_WARN_SYMLINK_SKIPPED');
+  }, 30_000);
+
+  it('a tree with no symlinks yields no symlink warning', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vg-nosym-build-'));
+    dirs.push(root);
+    fs.writeFileSync(path.join(root, 'keep.ts'), 'export const keep = 1;\n');
+    fs.writeFileSync(
+      path.join(root, 'package.json'),
+      JSON.stringify({ name: 'no-symlink', version: '1.0.0' }),
+    );
+    const discoverStderr = await captureStderr(() => {
+      expect(discover({ root }).map((f) => f.rel)).toEqual(['keep.ts']);
+    });
+    expect(discoverStderr).toBe('');
+
+    const result = await buildGraph({
+      root,
+      generatedAt: PIN,
+      inline: true,
+      noCache: true,
+      noIndex: true,
+      noTsc: true,
+    });
+    expect(result.codedWarnings.some((warning) => warning.code === 'VG_WARN_SYMLINK_SKIPPED')).toBe(false);
+
+    const logs: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+      logs.push(args.map((a) => String(a)).join(' '));
+    });
+    const errorLines: string[] = [];
+    const errSpy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      errorLines.push(args.map((a) => String(a)).join(' '));
+    });
+    const stderr = await captureStderr(() =>
+      runCoreScan(root, {
+        format: 'json',
+        concurrency: 1,
+        offline: true,
+        noLocalArtifacts: true,
+        quiet: true,
+      }),
+    );
+    logSpy.mockRestore();
+    errSpy.mockRestore();
+    const combined = `${stderr}\n${errorLines.join('\n')}`;
+    const artifact = JSON.parse(logs.find((line) => line.trim().startsWith('{'))!) as {
+      degradations?: { code: string }[];
+    };
+    expect(combined).not.toContain('VG_WARN_SYMLINK_SKIPPED');
+    expect(artifact.degradations?.some((warning) => warning.code === 'VG_WARN_SYMLINK_SKIPPED') ?? false).toBe(false);
   }, 60_000);
 });
