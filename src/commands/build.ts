@@ -21,6 +21,7 @@ import { serializeGraph } from '../engine/serialize.js';
 import { renderReport } from '../engine/report.js';
 import { renderHtml } from '../engine/html.js';
 import { UsageError, mergeExcludes } from '../engine/discover.js';
+import { LockfileSyntaxError } from '../engine/lockfile-guard.js';
 import { ResourceLimitError } from '../engine/limits.js';
 import { ParseWorkerError } from '../engine/pool.js';
 import { UnsafeRootError } from '../core-open/utils/root-safety.js';
@@ -155,6 +156,7 @@ export async function runBuild(
       throw new CliError(err.message, ExitCode.ERROR);
     }
     if (err instanceof UnsafeRootError) throw new CliError(err.message, ExitCode.ERROR);
+    if (err instanceof LockfileSyntaxError) throw new CliError(err.message, ExitCode.ERROR);
     throw err;
   }
   bar?.done();

@@ -37,6 +37,7 @@ import { formatSarif } from './formatters/sarif.js';
 import { formatMarkdown } from './formatters/markdown.js';
 import { loadConfig, appendExcludePatterns } from './config.js';
 import { pathExists, readJsonFile, writeJsonFile, writeTextFile, ensureDir, FileCache, quickTreeCount } from './utils/fs.js';
+import { formatNonTextWarning } from './utils/text-bytes.js';
 import { portableValue } from './utils/portable-path.js';
 import { assertSafeWalkRoot } from './utils/root-safety.js';
 import { detectVcs } from './utils/vcs.js';
@@ -65,6 +66,7 @@ import {
   type CodedWarning,
 } from './warnings.js';
 import type { RuntimeCatalog } from './runtimes/types.js';
+import { compareCodeUnits } from './utils/code-unit.js';
 
 /**
  * Shared context handed to the advanced-analysis hook (see {@link AdvancedScanHook}).
@@ -776,8 +778,8 @@ export async function runCoreScan(
   if (rootIdentityWarning) {
     degradations.push(codedWarning(WARNING_CODES.ROOT_PACKAGE_IDENTITY, rootIdentityWarning));
   }
-  const stuckPaths = [...fileCache.stuckPaths].sort((a, b) => a.localeCompare(b));
-  const skippedLarge = [...fileCache.skippedLargeFiles].sort((a, b) => a.localeCompare(b));
+  const stuckPaths = [...fileCache.stuckPaths].sort(compareCodeUnits);
+  const skippedLarge = [...fileCache.skippedLargeFiles].sort(compareCodeUnits);
   const timeoutSeconds = Math.round(projectScanTimeoutMs / 1000);
 
   if (stuckPaths.length > 0) {
@@ -807,6 +809,11 @@ export async function runCoreScan(
         ),
       );
     }
+  }
+
+  const nonTextMessage = formatNonTextWarning(fileCache.skippedNonTextFiles);
+  if (nonTextMessage) {
+    degradations.push(codedWarning(WARNING_CODES.NON_TEXT_FILE, nonTextMessage));
   }
 
   fileCache.clear();
