@@ -3,15 +3,14 @@ import * as fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { generateFindings } from '../src/core-open/scoring/drift-score.js';
 import { formatSarif } from '../src/core-open/formatters/sarif.js';
-import { formatText as formatScanText } from '../src/core-open/formatters/text.js';
-import { formatText as formatReportText } from '../src/reporting/formatters/text.js';
-import { LICENSE_PARSE_FAILED } from '../src/core-open/licenses/diagnostic.js';
+import { formatText } from '../src/core-open/formatters/text.js';
+import { LICENSE_PARSE_FAILED, licenseParseDiagnostic } from '../src/core-open/licenses/diagnostic.js';
 import {
   dedupeLicenseFindings,
-  licenseComponentKey,
-  licenseFindingId,
-  licenseFindingSourcePath,
-} from '../src/core-open/licenses/dedupe.js';
+  licenseFindingEqualityKey,
+  licenseIdForEquality,
+  setLicenseFindingKey,
+} from '../src/core-open/licenses/dedupe-findings.js';
 import type { DependencyRow, Finding, ProjectScan, ScanArtifact } from '../src/core-open/types.js';
 
 interface FixtureDep {
@@ -19,15 +18,17 @@ interface FixtureDep {
   raw: string;
   sourcePath?: string;
   section?: DependencyRow['section'];
+  version?: string | null;
 }
 
 interface FixtureProject {
   name: string;
   path: string;
+  type?: ProjectScan['type'];
   dependencies: FixtureDep[];
 }
 
-const FIXTURE = fileURLToPath(new URL('./fixtures/license-findings/duplicate-rows.json', import.meta.url));
+const FIXTURE = fileURLToPath(new URL('./fixtures/license-findings/duplicates.json', import.meta.url));
 
 function projectsFromFixture(): ProjectScan[] {
   const parsed = JSON.parse(fs.readFileSync(FIXTURE, 'utf8')) as { projects: FixtureProject[] };
@@ -36,7 +37,7 @@ function projectsFromFixture(): ProjectScan[] {
       package: dep.package,
       section: dep.section ?? 'dependencies',
       currentSpec: '1.0.0',
-      resolvedVersion: '1.0.0',
+      resolvedVersion: dep.version === undefined ? '1.0.0' : dep.version,
       latestStable: '1.0.0',
       majorsBehind: 0,
       drift: 'current',
@@ -49,7 +50,7 @@ function projectsFromFixture(): ProjectScan[] {
       },
     }));
     return {
-      type: 'node',
+      type: project.type ?? 'node',
       path: project.path,
       name: project.name,
       runtimeMajorsBehind: 0,
@@ -61,7 +62,6 @@ function projectsFromFixture(): ProjectScan[] {
 }
 
 function artifact(projects: ProjectScan[]): ScanArtifact {
-  const findings = generateFindings(projects);
   return {
     schemaVersion: '1.0',
     timestamp: '2026-10-11T00:00:00.000Z',
@@ -74,162 +74,211 @@ function artifact(projects: ProjectScan[]): ScanArtifact {
       components: { runtimeScore: 0, frameworkScore: 0, dependencyScore: 0, eolScore: 0 },
       measured: [],
     },
-    findings,
+    findings: generateFindings(projects),
   };
 }
 
-function licenseRows(findings: Finding[]): Array<{ component: string; licenseId: string; path: string }> {
-  return findings
+function packageNamed(message: string): string {
+  const forAt = message.match(/ for (.+) at /);
+  return forAt?.[1] ?? '';
+}
+
+function licenseRows(scan: ScanArtifact): Array<{ package: string; raw: string; location: string; sourcePath: string | null }> {
+  return scan.findings
     .filter((f) => f.ruleId === LICENSE_PARSE_FAILED)
     .map((f) => ({
-      component: licenseComponentKey(f),
-      licenseId: licenseFindingId(typeof f.details?.raw === 'string' ? f.details.raw : ''),
-      path: licenseFindingSourcePath(f),
+      package: packageNamed(f.message),
+      raw: String(f.details?.raw ?? ''),
+      location: f.location,
+      sourcePath: typeof f.details?.sourcePath === 'string' ? f.details.sourcePath : null,
     }));
 }
 
-const EXPECTED_ROWS = [
-  { component: 'left-pad', licenseId: 'NotAReal-A', path: 'apps/web/LICENSE' },
-  { component: 'left-pad', licenseId: 'NotAReal-A', path: 'apps/web/package.json' },
-  { component: 'left-pad', licenseId: 'NotAReal-A OR NotAReal-C', path: 'apps/web/package.json' },
-  { component: 'left-pad', licenseId: 'NotAReal-B', path: 'apps/web/package.json' },
-  { component: 'right-pad', licenseId: 'NotAReal-A', path: 'apps/web/package.json' },
-  { component: 'left-pad', licenseId: 'NotAReal-A', path: 'apps/api' },
-  { component: 'left-pad', licenseId: 'Not-A-LicenseRef', path: 'apps/extra/package.json' },
-];
-
-function stripAnsi(value: string): string {
-  return value.replace(/\x1b\[[0-9;]*m/g, '');
+function reversedDeps(projects: ProjectScan[]): ProjectScan[] {
+  return projects.map((project) => ({ ...project, dependencies: [...project.dependencies].reverse() }));
 }
 
-function countOccurrences(haystack: string, needle: string): number {
-  if (!needle) return 0;
-  let count = 0;
-  let from = 0;
-  while (from <= haystack.length) {
-    const at = haystack.indexOf(needle, from);
-    if (at === -1) break;
-    count += 1;
-    from = at + needle.length;
-  }
-  return count;
-}
-
-function licenseFinding(pkg: string, raw: string, path: string, sourcePath?: string): Finding {
+function finding(packageName: string, raw: string, location: string, sourcePath?: string): Finding {
+  const diag = licenseParseDiagnostic(raw, location, packageName);
+  if (!diag) throw new Error(`expected a license finding for ${raw}`);
   return {
-    ruleId: LICENSE_PARSE_FAILED,
+    ruleId: diag.code,
     level: 'warning',
-    message:
-      `Could not resolve SPDX license "${raw}" for ${pkg} at ${path}. ` +
-      'Replace it with a canonical SPDX id or expression, or NOASSERTION if the license is intentionally unknown.',
-    location: path,
-    details:
-      sourcePath === undefined
-        ? { raw, warnCode: 'VG_WARN_LICENSE_UNPARSEABLE' }
-        : { raw, sourcePath, warnCode: 'VG_WARN_LICENSE_UNPARSEABLE' },
+    message: diag.message,
+    location,
+    details: sourcePath
+      ? { raw: diag.raw, sourcePath, warnCode: diag.warnCode }
+      : { raw: diag.raw, warnCode: diag.warnCode },
   };
 }
 
 describe('license finding equality', () => {
-  it('treats SPDX aliases and LicenseRefs as ids, and keeps a different id or path', () => {
-    expect(licenseFindingId('mit')).toBe('MIT');
-    expect(licenseFindingId('Apache2')).toBe('Apache-2.0');
-    expect(licenseFindingId('LicenseRef-Acme-1.0')).toBe('LicenseRef-Acme-1.0');
-    expect(licenseFindingId('MIT OR LicenseRef-Acme-1.0')).toBe('MIT OR LicenseRef-Acme-1.0');
-    expect(licenseFindingId('NotAReal-A')).toBe('NotAReal-A');
-    expect(licenseFindingId('NotAReal-A')).not.toBe(licenseFindingId('NotAReal-B'));
+  it('uses the SPDX id or LicenseRef, and keeps an unresolved declaration whole', () => {
+    expect(licenseIdForEquality('expat')).toBe('MIT');
+    expect(licenseIdForEquality('MIT')).toBe('MIT');
+    expect(licenseIdForEquality('LicenseRef-Acme-1.0')).toBe('LicenseRef-Acme-1.0');
+    expect(licenseIdForEquality('LicenseRef-OR-1.0')).toBe('LicenseRef-OR-1.0');
+    expect(licenseIdForEquality('NotARealLicense-9')).toBe('NotARealLicense-9');
+    expect(licenseIdForEquality('MIT OR NotARealLicense-9')).toBe('MIT OR NotARealLicense-9');
+    expect(licenseIdForEquality('  NotARealLicense-9  ')).toBe('NotARealLicense-9');
+  });
 
-    const other = {
-      ruleId: 'vibgrate/runtime-eol',
-      level: 'error' as const,
-      message: 'runtime is behind',
+  it('changes when the component, the license id, or the path changes', () => {
+    const base = {
+      projectType: 'node',
+      packageName: 'alpha-bad',
+      resolvedVersion: '1.0.0',
+      licenseRaw: 'NotARealLicense-9',
+      sourcePath: 'apps/web/package.json',
+    };
+    const key = licenseFindingEqualityKey(base);
+    expect(licenseFindingEqualityKey(base)).toBe(key);
+    expect(licenseFindingEqualityKey({ ...base, resolvedVersion: null })).not.toBe(key);
+    expect(licenseFindingEqualityKey({ ...base, resolvedVersion: '2.0.0' })).not.toBe(key);
+    expect(licenseFindingEqualityKey({ ...base, projectType: 'python' })).not.toBe(key);
+    expect(licenseFindingEqualityKey({ ...base, packageName: 'other-bad' })).not.toBe(key);
+    expect(licenseFindingEqualityKey({ ...base, licenseRaw: 'Also-Not-SPDX' })).not.toBe(key);
+    expect(licenseFindingEqualityKey({ ...base, licenseRaw: 'LicenseRef-Acme-1.0' })).not.toBe(key);
+    expect(licenseFindingEqualityKey({ ...base, licenseRaw: 'expat' })).not.toBe(
+      licenseFindingEqualityKey({ ...base, licenseRaw: 'NotARealLicense-9' }),
+    );
+    expect(licenseFindingEqualityKey({ ...base, licenseRaw: 'expat' })).toBe(
+      licenseFindingEqualityKey({ ...base, licenseRaw: 'MIT' }),
+    );
+    expect(licenseFindingEqualityKey({ ...base, sourcePath: 'apps/web/LICENSE' })).not.toBe(key);
+    expect(licenseFindingEqualityKey({ ...base, resolvedVersion: undefined })).toBe(
+      licenseFindingEqualityKey({ ...base, resolvedVersion: null }),
+    );
+  });
+
+  it('keeps the first row, leaves other findings in place, and does not reorder', () => {
+    const dup = finding('alpha-bad', 'NotARealLicense-9', 'apps/web/package.json', 'apps/web/package.json');
+    const otherId = finding('alpha-bad', 'Also-Not-SPDX', 'apps/web/package.json', 'apps/web/package.json');
+    const otherPath = finding('alpha-bad', 'NotARealLicense-9', 'apps/web/LICENSE', 'apps/web/LICENSE');
+    const otherPkg = finding('other-bad', 'NotARealLicense-9', 'apps/web/package.json', 'apps/web/package.json');
+    const runtime: Finding = {
+      ruleId: 'vibgrate/runtime-lag',
+      level: 'warning',
+      message: 'Node.js runtime "18" is 2 major versions behind (latest: 22).',
       location: 'apps/web',
     };
-    const rows = dedupeLicenseFindings([
-      other,
-      licenseFinding('left-pad', 'MIT', 'package.json'),
-      licenseFinding('left-pad', 'mit', 'package.json'),
-      licenseFinding('left-pad', 'Apache2', 'package.json'),
-      licenseFinding('left-pad', 'Apache-2.0', 'package.json'),
-      licenseFinding('left-pad', 'MIT', 'LICENSE'),
-      licenseFinding('right-pad', 'MIT', 'package.json'),
-      licenseFinding('left-pad', 'LicenseRef-Acme-1.0', 'package.json'),
-      licenseFinding('left-pad', 'LicenseRef-Acme-1.0', 'package.json'),
-      licenseFinding('left-pad', 'LicenseRef-Other-1.0', 'package.json'),
-      licenseFinding('left-pad', 'NotAReal-A', 'package.json', '.\\package.json'),
-      licenseFinding('left-pad', 'NotAReal-A', 'package.json', 'package.json'),
-    ]);
+    const once = dedupeLicenseFindings([dup, runtime, { ...dup }, otherId, otherPath, otherPkg, { ...otherId }]);
+    expect(once).toEqual([dup, runtime, otherId, otherPath, otherPkg]);
+    expect(dedupeLicenseFindings([otherPath, dup])).toEqual([otherPath, dup]);
+    expect(dedupeLicenseFindings(once)).toEqual(once);
+  });
 
-    expect(rows[0]).toBe(other);
-    expect(licenseRows(rows)).toEqual([
-      { component: 'left-pad', licenseId: 'MIT', path: 'package.json' },
-      { component: 'left-pad', licenseId: 'Apache-2.0', path: 'package.json' },
-      { component: 'left-pad', licenseId: 'MIT', path: 'LICENSE' },
-      { component: 'right-pad', licenseId: 'MIT', path: 'package.json' },
-      { component: 'left-pad', licenseId: 'LicenseRef-Acme-1.0', path: 'package.json' },
-      { component: 'left-pad', licenseId: 'LicenseRef-Other-1.0', path: 'package.json' },
-      { component: 'left-pad', licenseId: 'NotAReal-A', path: 'package.json' },
-    ]);
+  it('keeps two resolved versions when the findings were tagged with component identity', () => {
+    const older = finding('alpha-bad', 'NotARealLicense-9', 'apps/web/package.json', 'apps/web/package.json');
+    const newer = finding('alpha-bad', 'NotARealLicense-9', 'apps/web/package.json', 'apps/web/package.json');
+    setLicenseFindingKey(older, licenseFindingEqualityKey({
+      projectType: 'node',
+      packageName: 'alpha-bad',
+      resolvedVersion: '1.0.0',
+      licenseRaw: 'NotARealLicense-9',
+      sourcePath: 'apps/web/package.json',
+    }));
+    setLicenseFindingKey(newer, licenseFindingEqualityKey({
+      projectType: 'node',
+      packageName: 'alpha-bad',
+      resolvedVersion: '2.0.0',
+      licenseRaw: 'NotARealLicense-9',
+      sourcePath: 'apps/web/package.json',
+    }));
+    expect(dedupeLicenseFindings([older, newer, older])).toEqual([older, newer]);
   });
 });
 
-describe('duplicate license findings', () => {
-  it('emits one row for the same component, license id, and path, in a stable order', () => {
-    const projects = projectsFromFixture();
-    const failingInputs = projects.reduce(
-      (count, project) => count + project.dependencies.filter((dep) => dep.license?.raw !== 'MIT').length,
-      0,
+describe('license findings before text, JSON, and SARIF', () => {
+  // expr-ref is listed twice: resolved versions 1.0.0 and 3.0.0 are different
+  // components, and the finding text does not include the version.
+  // other-bad shares raw and path with alpha-bad; the message names the package.
+  const expected = [
+    { package: 'alpha-bad', raw: 'Also-Not-SPDX', location: 'apps/web/package.json', sourcePath: 'apps/web/package.json' },
+    { package: 'alpha-bad', raw: 'MIT OR NotARealLicense-9', location: 'apps/web/package.json', sourcePath: 'apps/web/package.json' },
+    { package: 'alpha-bad', raw: 'NotARealLicense-9', location: 'apps/web/package.json', sourcePath: 'apps/web/package.json' },
+    { package: 'alpha-bad', raw: 'NotARealLicense-9', location: 'apps/web/LICENSE', sourcePath: 'apps/web/LICENSE' },
+    { package: 'expr-ref', raw: 'LicenseRef-Acme-1.0 OR NotARealLicense-9', location: 'apps/web/package.json', sourcePath: 'apps/web/package.json' },
+    { package: 'expr-ref', raw: 'LicenseRef-Acme-1.0 OR NotARealLicense-9', location: 'apps/web/package.json', sourcePath: 'apps/web/package.json' },
+    { package: 'other-bad', raw: 'NotARealLicense-9', location: 'apps/web/package.json', sourcePath: 'apps/web/package.json' },
+    { package: 'gamma-bad', raw: 'Third-Not-SPDX', location: 'apps/api/package.json', sourcePath: 'apps/api/package.json' },
+    { package: 'gamma-bad', raw: 'Third-Not-SPDX', location: 'apps/api', sourcePath: null },
+  ];
+
+  it('lists each duplicate once, keeps distinct ids and paths, and stays stable across two runs', () => {
+    const first = artifact(projectsFromFixture());
+    const second = artifact(projectsFromFixture());
+    const reversed = artifact(reversedDeps(projectsFromFixture()));
+
+    expect(first.findings.every((f) => f.ruleId === LICENSE_PARSE_FAILED)).toBe(true);
+    expect(licenseRows(first)).toEqual(expected);
+    expect(licenseRows(second)).toEqual(licenseRows(first));
+    expect(licenseRows(reversed)).toEqual(licenseRows(first));
+
+    const alphaAtManifest = first.findings.filter(
+      (f) => f.details?.raw === 'NotARealLicense-9' && f.location === 'apps/web/package.json' && f.message.includes('for alpha-bad at'),
     );
-    expect(failingInputs).toBeGreaterThan(EXPECTED_ROWS.length);
+    expect(alphaAtManifest).toHaveLength(1);
+    expect(first.findings.some((f) => f.details?.raw === 'MIT')).toBe(false);
+    expect(first.findings.some((f) => f.details?.raw === 'LicenseRef-Acme-1.0')).toBe(false);
 
-    const scan = artifact(projects);
-    const again = artifact(projects);
-    const reversed = artifact(
-      projects.map((project) => ({ ...project, dependencies: [...project.dependencies].reverse() })),
-    );
+    const json = JSON.stringify(first, null, 2);
+    const findingsJson = JSON.stringify(first.findings, null, 2);
+    const text = formatText(first);
+    const sarif = JSON.stringify(formatSarif(first), null, 2);
+    expect(json).toBe(JSON.stringify(second, null, 2));
+    expect(text).toBe(formatText(second));
+    expect(sarif).toBe(JSON.stringify(formatSarif(second), null, 2));
+    // Dependency row order is input. Findings, the text report, and SARIF are not.
+    expect(findingsJson).toBe(JSON.stringify(reversed.findings, null, 2));
+    expect(text).toBe(formatText(reversed));
+    expect(sarif).toBe(JSON.stringify(formatSarif(reversed), null, 2));
 
-    expect(licenseRows(scan.findings)).toEqual(EXPECTED_ROWS);
-    expect(licenseRows(again.findings)).toEqual(EXPECTED_ROWS);
-    expect(licenseRows(reversed.findings)).toEqual(EXPECTED_ROWS);
-    expect(scan.findings).toEqual(again.findings);
-    expect(scan.findings).toEqual(reversed.findings);
-
-    const duplicate = scan.findings.find(
-      (f) =>
-        f.ruleId === LICENSE_PARSE_FAILED &&
-        f.details?.raw === 'NotAReal-A' &&
-        f.location === 'apps/web/package.json',
-    );
-    expect(duplicate?.message).toContain('for left-pad at apps/web/package.json');
-    expect(scan.findings.filter((f) => f.message === duplicate?.message)).toHaveLength(1);
-    expect(scan.findings.some((f) => f.details?.raw === 'MIT')).toBe(false);
-
-    const missingPath = scan.findings.find((f) => f.location === 'apps/api');
-    expect(missingPath?.details).toEqual({ raw: 'NotAReal-A', warnCode: 'VG_WARN_LICENSE_UNPARSEABLE' });
-
-    const json = JSON.stringify(scan.findings);
-    const jsonAgain = JSON.stringify(again.findings);
-    expect(json).toBe(jsonAgain);
-    const parsed = JSON.parse(json) as Finding[];
-    expect(parsed.filter((f) => f.message === duplicate!.message)).toHaveLength(1);
-
-    const human = stripAnsi(formatScanText(scan));
-    const humanAgain = stripAnsi(formatScanText(again));
-    const report = stripAnsi(formatReportText(scan));
-    expect(human).toBe(humanAgain);
-    expect(countOccurrences(human, duplicate!.message)).toBe(1);
-    expect(countOccurrences(report, duplicate!.message)).toBe(1);
-
-    const sarif = formatSarif(scan) as {
+    const alphaMessage = 'Could not resolve SPDX license "NotARealLicense-9" for alpha-bad at apps/web/package.json.';
+    expect(text.split(alphaMessage)).toHaveLength(2);
+    const sarifDoc = JSON.parse(sarif) as {
       runs: Array<{ results: Array<{ ruleId: string; message: { text: string } }> }>;
     };
-    const sarifAgain = formatSarif(again);
-    expect(sarif).toEqual(sarifAgain);
-    const results = sarif.runs[0]!.results.filter((r) => r.ruleId === LICENSE_PARSE_FAILED);
-    expect(results).toHaveLength(EXPECTED_ROWS.length);
-    expect(results.filter((r) => r.message.text === duplicate!.message)).toHaveLength(1);
-    expect(results.map((r) => r.message.text)).toEqual(
-      scan.findings.filter((f) => f.ruleId === LICENSE_PARSE_FAILED).map((f) => f.message),
+    expect(sarifDoc.runs[0]!.results.filter((r) => r.message.text.startsWith(alphaMessage))).toHaveLength(1);
+    expect(json).toContain('"raw": "Also-Not-SPDX"');
+    expect(json).toContain('"raw": "LicenseRef-Acme-1.0 OR NotARealLicense-9"');
+    expect(json).toContain('"location": "apps/web/LICENSE"');
+    expect(json).toContain('"location": "apps/api"');
+  });
+
+  it('keeps a second resolved version of the same package, license, and path', () => {
+    const [web] = projectsFromFixture();
+    if (!web) throw new Error('fixture missing web');
+    const again: ProjectScan = {
+      ...web,
+      dependencies: [
+        ...web.dependencies,
+        {
+          package: 'alpha-bad',
+          section: 'dependencies',
+          currentSpec: '2.0.0',
+          resolvedVersion: '2.0.0',
+          latestStable: '2.0.0',
+          majorsBehind: 0,
+          drift: 'current',
+          license: {
+            raw: 'NotARealLicense-9',
+            spdxId: null,
+            source: 'registry',
+            confidence: 0,
+            sourcePath: 'apps/web/package.json',
+          },
+        },
+      ],
+    };
+    const once = generateFindings([web]);
+    const twice = generateFindings([again]);
+    const alpha = (findings: Finding[]) => findings.filter(
+      (f) => f.details?.raw === 'NotARealLicense-9' && f.message.includes('for alpha-bad at apps/web/package.json'),
     );
+    expect(alpha(once)).toHaveLength(1);
+    expect(alpha(twice)).toHaveLength(2);
+    expect(alpha(twice)[0]).toEqual(alpha(twice)[1]);
+    expect(generateFindings([again])).toEqual(twice);
   });
 });

@@ -4,7 +4,6 @@
 import type { ScanArtifact } from '../types.js';
 import { baselineSuppressionLabel } from '../baseline-suppressions.js';
 import { portableValue } from '../utils/portable-path.js';
-import { dedupeLicenseFindings } from '../licenses/dedupe.js';
 import { findingRuleLabel, formatDegradationLines } from '../warnings.js';
 import { securityPacksLabel } from './text.js';
 
@@ -185,14 +184,13 @@ export function formatMarkdown(artifact: ScanArtifact, root?: string): string {
     lines.push('');
   }
 
-  // Findings. License rows are collapsed before this table is printed.
-  const findings = dedupeLicenseFindings(artifact.findings);
-  if (findings.length > 0) {
+  // Findings
+  if (artifact.findings.length > 0) {
     lines.push('## Findings');
     lines.push('');
     lines.push(`| Level | Rule | Message | Location |`);
     lines.push(`|-------|------|---------|----------|`);
-    for (const f of findings) {
+    for (const f of artifact.findings) {
       const emoji = f.level === 'error' ? '🔴' : f.level === 'warning' ? '🟡' : '🔵';
       lines.push(`| ${emoji} ${f.level} | ${findingRuleLabel(f.ruleId, f.details)} | ${f.message} | ${f.location} |`);
     }

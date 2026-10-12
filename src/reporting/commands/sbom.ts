@@ -3,7 +3,6 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import { pathExists, readJsonFile, writeTextFile } from '../utils/fs.js';
 import type { DependencyRow, Finding, ProjectScan, ScanArtifact } from '../types.js';
-import { dedupeLicenseFindings } from '../../core-open/licenses/dedupe.js';
 import { LICENSE_PARSE_FAILED } from '../../core-open/licenses/diagnostic.js';
 import { fullDependencyGraph, type LockfileComponent, type LockfileGraph } from '../../engine/lockfile.js';
 import { ECOSYSTEMS, type Ecosystem } from '../../engine/drift.js';
@@ -348,7 +347,7 @@ const ROOT_BOM_REF = 'vibgrate-root';
  * still sees the failure instead of a bare NOASSERTION.
  */
 function licenseParseFindings(artifact: ScanArtifact): Finding[] {
-  const sorted = artifact.findings
+  return artifact.findings
     .filter((f) => f.ruleId === LICENSE_PARSE_FAILED)
     .slice()
     .sort((a, b) => compareCodeUnits(a.location, b.location) || compareCodeUnits(a.message, b.message));
