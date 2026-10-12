@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -379,5 +380,117 @@ describe('fullDependencyGraph', () => {
     fs.rmSync(path.join(root, 'poetry.lock'));
     write('uv.lock', ['[[package]]', 'name = "click"', 'version = "8.1.3"'].join('\n'));
     expect(fullDependencyGraph(root)?.ecosystem).toBe('pypi');
+  });
+});
+
+describe('lockfile package digests', () => {
+  const sha256 = createHash('sha256').update('alpha').digest('base64');
+  const sha512 = createHash('sha512').update('alpha').digest('base64');
+  const other256 = createHash('sha256').update('beta').digest('base64');
+  const cargo = 'a'.repeat(64);
+  const wheel = 'b'.repeat(64);
+  const goZip = createHash('sha256').update('module').digest('base64');
+  const goMod = createHash('sha256').update('gomod').digest('base64');
+  const token = 'super-secret-token';
+
+  it('keeps one npm component when two paths record different digests, sorted by algorithm', () => {
+    write(
+      'package-lock.json',
+      JSON.stringify({
+        packages: {
+          '': { name: 'app' },
+          'node_modules/left-pad': {
+            version: '1.3.0',
+            resolved: `https://user:${token}@registry.example/left-pad.tgz`,
+            integrity: `sha512-${sha512} sha256-${sha256}`,
+          },
+          'node_modules/widget/node_modules/left-pad': {
+            version: '1.3.0',
+            integrity: `sha256-${other256}`,
+          },
+        },
+      }),
+    );
+    const sha256Values = [other256, sha256].sort();
+    const component = fullDependencyGraph(root)?.components.find((row) => row.package === 'left-pad');
+    expect(component).toEqual({
+      package: 'left-pad',
+      version: '1.3.0',
+      digests: [
+        { alg: 'SHA-256', content: sha256Values[0] },
+        { alg: 'SHA-256', content: sha256Values[1] },
+        { alg: 'SHA-512', content: sha512 },
+      ],
+    });
+    expect(JSON.stringify(component)).not.toContain(token);
+  });
+
+  it('reads pnpm, yarn, Cargo, go.sum, and uv digests without a second row per hash', () => {
+    write(
+      'pnpm-lock.yaml',
+      [
+        "lockfileVersion: '9.0'",
+        'packages:',
+        '  left-pad@1.3.0:',
+        `    resolution: {integrity: sha512-${sha512}, tarball: https://example.invalid/left-pad.tgz}`,
+        '',
+      ].join('\n'),
+    );
+    expect(fullDependencyGraph(root)?.components).toEqual([
+      { package: 'left-pad', version: '1.3.0', digests: [{ alg: 'SHA-512', content: sha512 }] },
+    ]);
+
+    fs.rmSync(path.join(root, 'pnpm-lock.yaml'));
+    write(
+      'yarn.lock',
+      ['left-pad@^1.3.0:', '  version "1.3.0"', `  integrity sha256-${sha256}`, ''].join('\n'),
+    );
+    expect(fullDependencyGraph(root)?.components).toEqual([
+      { package: 'left-pad', version: '1.3.0', digests: [{ alg: 'SHA-256', content: sha256 }] },
+    ]);
+
+    fs.rmSync(path.join(root, 'yarn.lock'));
+    write(
+      'Cargo.lock',
+      ['[[package]]', 'name = "memchr"', 'version = "2.7.4"', `checksum = "${cargo}"`, ''].join('\n'),
+    );
+    expect(fullDependencyGraph(root)?.components).toEqual([
+      { package: 'memchr', version: '2.7.4', digests: [{ alg: 'SHA-256', content: cargo }] },
+    ]);
+
+    fs.rmSync(path.join(root, 'Cargo.lock'));
+    write(
+      'go.sum',
+      [
+        `github.com/gin-contrib/sse v1.1.0 h1:${goZip}`,
+        `github.com/gin-contrib/sse v1.1.0/go.mod h1:${goMod}`,
+      ].join('\n'),
+    );
+    expect(fullDependencyGraph(root)?.components).toEqual([
+      { package: 'github.com/gin-contrib/sse', version: 'v1.1.0', digests: [{ alg: 'SHA-256', content: goZip }] },
+    ]);
+
+    fs.rmSync(path.join(root, 'go.sum'));
+    write(
+      'uv.lock',
+      [
+        '[[package]]',
+        'name = "click"',
+        'version = "8.1.3"',
+        `wheels = [{ hash = "sha256:${wheel}" }]`,
+        `sdist = { hash = "sha256:${cargo}" }`,
+        '',
+      ].join('\n'),
+    );
+    expect(fullDependencyGraph(root)?.components).toEqual([
+      {
+        package: 'click',
+        version: '8.1.3',
+        digests: [
+          { alg: 'SHA-256', content: cargo },
+          { alg: 'SHA-256', content: wheel },
+        ],
+      },
+    ]);
   });
 });

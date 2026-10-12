@@ -1,11 +1,10 @@
 // VENDORED from @vibgrate/core-open (packages/vibgrate-core-open) by
 // scripts/vendor-core-open.mjs. Do not edit here — change the source package
 // and re-run the vendor script. Apache-2.0.
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
-import * as os from 'node:os';
-import { spawn } from 'node:child_process';
 import type { RuntimeCatalog } from './runtimes/types.js';
+import { ArchiveLimitError, readBoundedArchive, readZipMember } from './utils/archive-limits.js';
 
 /**
  * An advisory entry as carried by an offline package-version manifest, used for
@@ -84,23 +83,7 @@ export interface PackageVersionManifest {
   terraform?: Record<string, EcosystemVersionEntry>;
 }
 
-function runCommand(cmd: string, args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
-    let out = '';
-    let err = '';
-    child.stdout.on('data', (d: Buffer) => (out += String(d)));
-    child.stderr.on('data', (d: Buffer) => (err += String(d)));
-    child.on('error', reject);
-    child.on('close', (code) => {
-      if (code !== 0) {
-        reject(new Error(`${cmd} ${args.join(' ')} failed (code=${code}): ${err.trim()}`));
-        return;
-      }
-      resolve(out);
-    });
-  });
-}
+const ZIP_MANIFEST_NAMES = ['package-versions.json', 'manifest.json', 'index.json'] as const;
 
 async function parseManifestText(text: string, source: string): Promise<PackageVersionManifest> {
   try {
@@ -111,28 +94,17 @@ async function parseManifestText(text: string, source: string): Promise<PackageV
 }
 
 async function loadManifestFromZip(zipPath: string): Promise<PackageVersionManifest> {
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'vibgrate-manifest-'));
+  // Size cap is enforced before the file is read. Entry count and declared
+  // uncompressed size are enforced before any member is inflated.
+  const buf = await readBoundedArchive(zipPath);
+  let body: Buffer;
   try {
-    await runCommand('unzip', ['-qq', zipPath, '-d', tmpDir]);
-    const candidates = [
-      path.join(tmpDir, 'package-versions.json'),
-      path.join(tmpDir, 'manifest.json'),
-      path.join(tmpDir, 'index.json'),
-    ];
-
-    for (const candidate of candidates) {
-      try {
-        const text = await readFile(candidate, 'utf8');
-        return await parseManifestText(text, candidate);
-      } catch {
-        // keep searching
-      }
-    }
-
+    body = readZipMember(buf, zipPath, ZIP_MANIFEST_NAMES);
+  } catch (err) {
+    if (err instanceof ArchiveLimitError) throw err;
     throw new Error('Zip must contain package-versions.json, manifest.json, or index.json');
-  } finally {
-    await rm(tmpDir, { recursive: true, force: true });
   }
+  return parseManifestText(body.toString('utf8'), zipPath);
 }
 
 export async function loadPackageVersionManifest(filePath: string): Promise<PackageVersionManifest> {

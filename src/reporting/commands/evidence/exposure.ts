@@ -75,7 +75,12 @@ export function versionAffected(version: string, range: AdvisoryRange): boolean 
 
 function rangeMatchesComponent(range: AdvisoryRange, name: string, ecosystem?: string): boolean {
   if (range.package.toLowerCase() !== name.toLowerCase()) return false;
-  if (range.ecosystem && ecosystem && range.ecosystem.toLowerCase() !== ecosystem.toLowerCase()) return false;
+  // A component kept by name, version, and type has no ecosystem. An advisory
+  // that names one does not match it — vendored code is not that registry package.
+  if (range.ecosystem) {
+    if (!ecosystem) return false;
+    if (range.ecosystem.toLowerCase() !== ecosystem.toLowerCase()) return false;
+  }
   return true;
 }
 
