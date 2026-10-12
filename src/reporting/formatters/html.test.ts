@@ -396,10 +396,10 @@ describe('formatHtmlReport', () => {
     expect(again).not.toMatch(/\ssrc\s*=/i);
     expect(again.match(/<details/gi)).toEqual(['<details']);
     expect(again).not.toMatch(/<details[^>]*\bopen\b/i);
-    expect(again).toContain('Fix available only');
-    expect(again).toContain(`<input id="${FIX_AVAILABLE_ONLY_ID}" type="checkbox">`);
     expect(footer(again)).toContain(`<footer id="${ADVISORY_CORPUS_FOOTER_ID}">`);
     expect(footer(again)).toContain('<summary>Advisory data: Not recorded</summary>');
+    expect(again).toContain('Fix available only');
+    expect(again).toContain(`<input id="${FIX_AVAILABLE_ONLY_ID}" type="checkbox">`);
     expect(again.startsWith('<!doctype html>')).toBe(true);
   });
 });

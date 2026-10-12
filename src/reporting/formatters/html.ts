@@ -12,10 +12,11 @@ import type { Finding, ScanArtifact } from '../types.js';
  * Stable ids: `#summary`, `#vulnerabilities`, `#security`, `#findings`,
  * `#advisory-corpus`.
  *
- * {@link FIX_AVAILABLE_ONLY_ID} is an unchecked checkbox. Checking it hides
- * rows whose {@link FIX_AVAILABLE_ATTR} is `no`. The page file always contains
- * every row, so the default (unfiltered) document stays a pure function of the
- * artifact. The checkbox is presentation only: no network, no external file.
+ * Rows carry {@link FIX_AVAILABLE_ATTR}. {@link FIX_AVAILABLE_ONLY_ID} is an
+ * unchecked checkbox. Checking it hides rows whose attribute is `no`. The
+ * page file always contains every row, so the default document stays a pure
+ * function of the artifact. The checkbox is presentation only: no network,
+ * no external file.
  *
  * {@link advisoryCorpusFooter} fills `#advisory-corpus` with a collapsed
  * footer. It names the advisory source recorded on the artifact, and it says
@@ -86,9 +87,9 @@ export function formatHtmlReport(artifact: ScanArtifact): string {
   nav a { margin-right: 1rem; }
   a { color: inherit; }
   .absent { font-style: italic; }
+  body:has(#${FIX_AVAILABLE_ONLY_ID}:checked) tr[${FIX_AVAILABLE_ATTR}="no"] { display: none; }
   #${ADVISORY_CORPUS_FOOTER_ID} { margin-top: 2.5rem; font-size: 0.85rem; }
   #${ADVISORY_CORPUS_FOOTER_ID} summary { cursor: pointer; }
-  body:has(#${FIX_AVAILABLE_ONLY_ID}:checked) tr[${FIX_AVAILABLE_ATTR}="no"] { display: none; }
 </style>
 </head>
 <body>

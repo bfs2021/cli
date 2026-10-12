@@ -502,9 +502,9 @@ external files. The page opens with a summary:
 - DriftScore and the four component scores. A missing score is `n/a`. A measured `0` stays `0`.
 - Counts by severity for vulnerability findings and for security findings. A check that did not run stays "Not scanned" rather than a row of zeros. A check that finished with nothing to report shows zeros.
 - When a finding carries `details.fixedVersions`, how many of those findings name a fix.
-- A collapsed footer after the tables names the advisory source when the artifact records one: OSV, an offline package-version manifest, or no packages to check. The advisory count is included when it is present, and a finished check with nothing to report shows 0. A check that did not run says "Not scanned". A check that could not reach its source says "Not checked" and omits the count. Findings with no recorded source say "Not recorded".
 - A **Fix available only** checkbox. It starts unchecked, so the tables show every finding. Checking it hides findings that do not name a fix version. The page file still contains every finding, and the checkbox does not call the network.
 - Links to the full tables under the summary: vulnerabilities, security findings, and the other findings.
+- A collapsed footer after the tables names the advisory source when the artifact records one: OSV, an offline package-version manifest, or no packages to check. The advisory count is included when it is present, and a finished check with nothing to report shows 0. A check that did not run says "Not scanned". A check that could not reach its source says "Not checked" and omits the count. Findings with no recorded source say "Not recorded".
 
 The same artifact always produces the same page. Save it with a shell redirect:
 
