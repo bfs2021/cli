@@ -53,9 +53,9 @@ import { emitIngestIdLine, emitDriftScoreLine } from '../utils/ingest-id-output.
 import { formatUploadHttpFailure, uploadScanArtifact } from '../utils/upload.js';
 import { redactForDisplay } from '../../core-open/utils/redact.js';
 import { buildGraph } from '../../engine/build.js';
+import { withCoalescedWarningStderr } from '../../engine/coalesce-warnings.js';
 import { assertLockfilesValid, LockfileSyntaxError } from '../../engine/lockfile-guard.js';
 import { parseFailureWarningLines } from '../../engine/parse-warning.js';
-import { withCoalescedWarningStderr } from '../../engine/coalesce-warnings.js';
 import { writeArtifacts, resolveGraphPath } from '../../engine/artifacts.js';
 import { readHaileSidecar } from '../../engine/haile/sidecar.js';
 import { isUsableHaileSymbol } from '../../engine/haile/format.js';
