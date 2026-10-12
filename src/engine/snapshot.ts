@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as zlib from 'node:zlib';
+import { writeAtomicSync } from '../util/atomic-file.js';
 import { Packr } from 'msgpackr';
 import { assertReadableGraph, parseGraph, unreadableGraphError } from './serialize.js';
 import { VERSION } from '../version.js';
@@ -119,14 +120,7 @@ export function writeGraphSnapshot(
     const lenBuf = Buffer.alloc(4);
     lenBuf.writeUInt32LE(header.length, 0);
     const file = snapshotPathFor(graphPath);
-    const tmp = `${file}.${process.pid}.tmp`;
-    try {
-      fs.writeFileSync(tmp, Buffer.concat([MAGIC, lenBuf, header, payload]));
-      fs.renameSync(tmp, file);
-    } catch (err) {
-      fs.rmSync(tmp, { force: true });
-      throw err;
-    }
+    writeAtomicSync(file, Buffer.concat([MAGIC, lenBuf, header, payload]));
     return true;
   } catch {
     return false;

@@ -504,6 +504,7 @@ external files. The page opens with a summary:
 - When a finding carries `details.fixedVersions`, how many of those findings name a fix.
 - A **Fix available only** checkbox. It starts unchecked, so the tables show every finding. Checking it hides findings that do not name a fix version. The page file still contains every finding, and the checkbox does not call the network.
 - Links to the full tables under the summary: vulnerabilities, security findings, and the other findings.
+- A collapsed footer after the tables names the advisory source when the artifact records one: OSV, an offline package-version manifest, or no packages to check. The advisory count is included when it is present, and a finished check with nothing to report shows 0. A check that did not run says "Not scanned". A check that could not reach its source says "Not checked" and omits the count. Findings with no recorded source say "Not recorded".
 
 The same artifact always produces the same page. Save it with a shell redirect:
 
@@ -599,7 +600,7 @@ When set:
 
 ##### HTML (`formatHtmlReport`)
 
-`vg report --format html` writes one self-contained page from the same artifact. It does not call the network and does not load external files. The page opens with the summary listed above (DriftScore, severity counts, a fix-available count when a finding carries `details.fixedVersions`, a Fix available only checkbox, and links to the tables), then the full vulnerability, security, and other-finding tables. The checkbox starts unchecked. Checking it hides findings that do not name a fix version. Those rows stay in the page file, and the summary counts stay the full set. A check that did not run stays "Not scanned". A missing score is `n/a`. The same artifact always produces the same page.
+`vg report --format html` writes one self-contained page from the same artifact. It does not call the network and does not load external files. The page opens with the summary listed above (DriftScore, severity counts, a fix-available count when a finding carries `details.fixedVersions`, a Fix available only checkbox, and links to the tables), then the full vulnerability, security, and other-finding tables. The checkbox starts unchecked. Checking it hides findings that do not name a fix version. Those rows stay in the page file, and the summary counts stay the full set. A check that did not run stays "Not scanned". A missing score is `n/a`. A collapsed footer after the tables names the advisory source (OSV, an offline package-version manifest, or no packages to check) and the advisory count when that count is present. A missing source stays "Not scanned", "Not checked", or "Not recorded", and a missing count is left out rather than shown as 0. The same artifact always produces the same page.
 
 ##### Differences
 
@@ -612,7 +613,7 @@ When set:
 - DriftScore: Markdown puts the lower-is-better gloss in the opening cell. Text puts the score in **DriftScore Summary** without that gloss.
 - VCS: Markdown uses separate VCS, Branch, and Commit rows, and Commit requires `vcs.sha`. Text uses one line and can show `shortSha` without requiring `sha`.
 - Runtime wording: Markdown always says `major(s)`. Text says `major` or `majors`.
-- HTML is the browser page: the summary above, then the vulnerability, security, and other-finding tables. A Fix available only checkbox starts unchecked and can hide findings that do not name a fix version. The page file still lists every finding. It does not print Markdown's recommended-standards section or the text inventory.
+- HTML is the browser page: the summary above, then the vulnerability, security, and other-finding tables, then a collapsed advisory-data footer. A Fix available only checkbox starts unchecked and can hide findings that do not name a fix version. The page file still lists every finding. It does not print Markdown's recommended-standards section or the text inventory. Text's closing line is the scan time and file counts. Markdown has no advisory-source line.
 
 ##### JSON
 
@@ -2191,7 +2192,7 @@ vg scan [path] [--vulns] [--full] [--iac] [--format text|json|sarif|md] [--out <
 | `--concurrency <n>` | `8` | Max concurrent npm registry calls |
 | `--drift-budget <score>` | — | Fitness gate: fail if drift score is above this budget |
 | `--drift-worsening <percent>` | — | Fitness gate: fail if drift worsens by more than % vs baseline |
-| `--summary-out <file>` | — | Also write a small JSON summary for CI steps: `driftScore`, `riskLevel`, `components`, and `delta` / `baselineScore` when `--baseline` is set. An unmeasured score is `null`, never `0`. Written before any gate can fail the run |
+| `--summary-out <file>` | — | Also write a small JSON summary for CI steps: `driftScore`, `riskLevel`, `components`, `delta` / `baselineScore` when `--baseline` is set, and `driftBudget`. `driftBudget` is the verdict (`source`, `mode`, `withinBudget`, `blocking`, `rules`), or `null` when no budget is set. A budget from `--drift-budget` or `--drift-worsening` has `source` `flags` and replaces the project config. An unmeasured score is `null`, never `0`, and is not compared. Written before any gate can fail the run |
 | `--push` | — | Upload scan artifact to Vibgrate Cloud after a successful scan |
 | `--dsn <dsn>` | `VIBGRATE_DSN` env | DSN used for `--push` authentication |
 | `--region <region>` | — | Override data residency (`us`, `eu`) during push |
@@ -5224,7 +5225,11 @@ driftBudget:
 - `agents.maxWorseningPercent` is checked by the GitHub App, which knows who
   opened the pull request.
 - `--drift-budget` / `--drift-worsening` still work; passing either uses the flags
-  and ignores `driftBudget`.
+  and ignores `driftBudget`. `--summary-out` records that verdict with
+  `source` `flags`.
+- `--summary-out` includes the budget that was judged: `mode`, `withinBudget`,
+  `blocking`, and `rules`. The field is `null` when no budget is set. An
+  unmeasured DriftScore is not compared and is not treated as 0.
 - A misspelt key, a wrong type, or a `driftBudget` that sets no limit stops the
   command. The error names the file and, when the file makes it clear, the line
   and the key. The value is not printed.

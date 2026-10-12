@@ -1,7 +1,5 @@
-import * as fs from 'node:fs';
-import * as fsp from 'node:fs/promises';
-import * as path from 'node:path';
 import { CliError, ExitCode } from './exit.js';
+import { writeAtomic, writeAtomicSync } from './atomic-file.js';
 
 /**
  * Write evidence and attestation JSON/JSONL without leaking a raw Node error.
@@ -85,9 +83,7 @@ export function writeOutputFileSync(
   opts?: OutputWriteOptions,
 ): void {
   try {
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    if (typeof data === 'string') fs.writeFileSync(filePath, data, 'utf8');
-    else fs.writeFileSync(filePath, data);
+    writeAtomicSync(filePath, data);
   } catch (err) {
     rethrowOutputWrite(filePath, err, opts);
   }
@@ -97,8 +93,7 @@ export function writeOutputFileSync(
 export async function writeJsonOutputFile(filePath: string, value: unknown, opts?: OutputWriteOptions): Promise<void> {
   const text = serializeJsonOutput(filePath, value, { ...opts, space: opts?.space ?? 2 });
   try {
-    await fsp.mkdir(path.dirname(filePath), { recursive: true });
-    await fsp.writeFile(filePath, `${text}\n`, 'utf8');
+    await writeAtomic(filePath, `${text}\n`);
   } catch (err) {
     rethrowOutputWrite(filePath, err, opts);
   }

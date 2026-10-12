@@ -48,6 +48,7 @@ import { LockfileSyntaxError } from './engine/lockfile-guard.js';
 import { ArchiveLimitError } from './core-open/utils/archive-limits.js';
 import { UnsafeRootError } from './core-open/utils/root-safety.js';
 import { CliError, ExitCode, usageError } from './util/exit.js';
+import './util/atomic-file.js';
 import { ParseWorkerError } from './engine/pool.js';
 import { c, info, disableColor, exitAfterFlush } from './util/output.js';
 

@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import type { Dirent } from 'node:fs';
 import { Semaphore } from './semaphore.js';
 import { compileGlobs } from './glob.js';
+import { artifactWriteError, writeAtomic } from '../../util/atomic-file.js';
 
 
 const execFileAsync = promisify(execFile);
@@ -666,11 +667,18 @@ export async function ensureDir(dir: string): Promise<void> {
 }
 
 export async function writeJsonFile(filePath: string, data: unknown): Promise<void> {
-  await ensureDir(path.dirname(filePath));
-  await fs.writeFile(filePath, JSON.stringify(data, null, 2) + '\n', 'utf8');
+  const body = JSON.stringify(data, null, 2) + '\n';
+  try {
+    await writeAtomic(filePath, body);
+  } catch (err) {
+    throw artifactWriteError(filePath, err);
+  }
 }
 
 export async function writeTextFile(filePath: string, content: string): Promise<void> {
-  await ensureDir(path.dirname(filePath));
-  await fs.writeFile(filePath, content, 'utf8');
+  try {
+    await writeAtomic(filePath, content);
+  } catch (err) {
+    throw artifactWriteError(filePath, err);
+  }
 }
