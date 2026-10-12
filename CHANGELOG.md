@@ -30,6 +30,20 @@ backward compatible.
 
 ### Added
 
+- **`vg scan --summary-out` includes the drift budget verdict.** The JSON
+  summary adds `driftBudget` (`source`, `mode`, `withinBudget`, `blocking`,
+  `rules`), or `null` when no budget is set. A budget from `--drift-budget`
+  or `--drift-worsening` is marked `source: "flags"`. An unmeasured DriftScore
+  stays `null` and is not treated as 0. The file is still written before a
+  gate exits.
+
+- **HTML reports can hide findings that have no known fix.**
+  `vg report --format html` includes an unchecked **Fix available only**
+  checkbox. Checking it hides table rows that do not name a fixed version
+  already stored on the scan artifact. The file bytes do not change with
+  that choice, summary counts stay complete, and the report still does not
+  contact a registry.
+
 - **Unknown optional lockfile fields warn and continue.** When a lockfile still lists dependencies vg can read, an extra field does not drop that graph or the SBOM rows built from it. The command prints one warning per lockfile path and field name, sorted by path then field: `pnpm-lock.yaml: unknown optional lockfile field "<name>"; continuing with the fields this version understands.` A field name that is not a plain identifier is reported as `(name omitted)`. A truncated lockfile, or one missing the structure its format requires, still exits non-zero.
 
 - **`vg build --attest` and `vg build --verify` are documented.** The docs
@@ -41,6 +55,32 @@ backward compatible.
   are retired names for those flags.
 
 ### Fixed
+
+- **`vg evidence release` keeps SBOM components that have no package URL and no CPE.**
+  Vendored code, a file, firmware, and a machine-learning model stay in the
+  frozen manifest when they have a name, a version, and a type. A component
+  that cannot be identified is skipped, and the command prints one warning
+  for that file. A nested document is read up to a fixed component count and
+  depth, including a cycle, and the same file produces the same components.
+
+- **`vg scan --format json` lists findings in a stable order.** The same tree
+  produces the same findings array: path, then rule id, then advisory id, then
+  package URL. Alias lists are sorted. The text report still prints errors,
+  then warnings, then notes.
+
+- **Identical parse warnings on a large tree are one stderr line.** When the same warning code and the same reason apply to many files, `vg build` and `vg scan` print the count and up to five repo-relative sample paths. `vg build --json` still lists every file. Scan JSON and SARIF still list every degradation, in a stable order.
+
+- **Interrupted writes no longer leave a truncated artifact.** Graph, baseline,
+  scan and report outputs, SBOM exports, and the other files `vg` writes under
+  `.vibgrate/` (and files you name with `--out`) are written to a temporary
+  file in the same directory and renamed into place. A killed run leaves the
+  previous file intact and parseable. The next run removes leftover
+  temporary files in that directory, and only those, in sorted order.
+  A failed write names the file, why it failed, and to check the path,
+  permissions, and free disk space, then re-run. Successful output bytes are
+  unchanged.
+
+- **Workspace imports of a duplicated package name stay on one directory.** When two workspace manifests declare the same bare name, `vg build` resolves that name to the copy with the smallest content key: repo-relative path, then name, then the version string. A later path does not win because the directory walk reached it last, and a higher version does not override a smaller path. Dependency edges in `graph.json` for that import stay put across runs.
 
 - **`vg evidence verify` reports a truncated or unreadable bundle as an error.**
   A bundle whose envelope or `result.json` is cut off, is not JSON, or is not
