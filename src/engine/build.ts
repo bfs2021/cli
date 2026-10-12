@@ -55,6 +55,7 @@ import type { AstRoleHit } from '../core-open/scanners/architecture/ast-roles.js
 import { stampWarning, WARNING_CODES, type CodedWarning } from '../core-open/warnings.js';
 import { collapseNonTextWarnings, inspectUtf8 } from '../core-open/utils/text-bytes.js';
 import { isParseFailureWarning } from './parse-warning.js';
+import { isFailedParseWarning } from './coalesce-warnings.js';
 import { assembleEngineWarnings } from './warning-codes.js';
 
 export interface BuildOptions {
@@ -335,7 +336,7 @@ export async function buildGraph(options: BuildOptions): Promise<BuildResult> {
     // corrupted wasm heap) would otherwise poison the cache for that content
     // hash and every later build would reuse the empty parse instead of
     // re-parsing the file.
-    if (p.defs.length === 0 && p.warnings?.some((w) => isParseFailureWarning(w))) continue;
+    if (p.defs.length === 0 && p.warnings?.some((w) => isFailedParseWarning(w) || isParseFailureWarning(w))) continue;
     const st = fileStats.find((f) => f.rel === p.rel);
     cache.set(p.rel, p, st ? { mtimeMs: st.mtimeMs, size: st.size } : undefined);
   }

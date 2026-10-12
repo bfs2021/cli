@@ -55,6 +55,7 @@ import { redactForDisplay } from '../../core-open/utils/redact.js';
 import { buildGraph } from '../../engine/build.js';
 import { assertLockfilesValid, LockfileSyntaxError } from '../../engine/lockfile-guard.js';
 import { parseFailureWarningLines } from '../../engine/parse-warning.js';
+import { withCoalescedWarningStderr } from '../../engine/coalesce-warnings.js';
 import { writeArtifacts, resolveGraphPath } from '../../engine/artifacts.js';
 import { readHaileSidecar } from '../../engine/haile/sidecar.js';
 import { isUsableHaileSymbol } from '../../engine/haile/format.js';
@@ -785,7 +786,7 @@ export const scanCommand = new Command('scan')
     // Open base scan. The optional advanced-analysis hook is a no-op in this
     // open build, so the scan runs entirely on the open base engine.
     const advanced = await loadAdvancedScanHook();
-    const artifact = await runCoreScan(rootDir, scanOpts, advanced);
+    const artifact = await withCoalescedWarningStderr(() => runCoreScan(rootDir, scanOpts, advanced));
 
     // The scan just built a code map (its `postScan` step). Start the local
     // runtime if it is not up and hand it that map, so the very first `vg` in a

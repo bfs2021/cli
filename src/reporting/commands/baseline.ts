@@ -2,6 +2,7 @@ import * as path from 'node:path';
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { runCoreScan } from '../../core-open/index.js';
+import { withCoalescedWarningStderr } from '../../engine/coalesce-warnings.js';
 import { writeJsonFile } from '../utils/fs.js';
 import { loadAdvancedScanHook } from '../advanced-hook.js';
 
@@ -9,10 +10,10 @@ export async function runBaseline(rootDir: string): Promise<void> {
   console.log(chalk.dim('Creating baseline...'));
 
   const advanced = await loadAdvancedScanHook();
-  const artifact = await runCoreScan(rootDir, {
+  const artifact = await withCoalescedWarningStderr(() => runCoreScan(rootDir, {
     format: 'text',
     concurrency: 8,
-  }, advanced);
+  }, advanced));
 
   const baselinePath = path.join(rootDir, '.vibgrate', 'baseline.json');
   await writeJsonFile(baselinePath, artifact);

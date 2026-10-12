@@ -4,7 +4,7 @@ import { setGrammarsOverride, resetParser } from './grammars.js';
 import type { FileParse } from './types.js';
 import { inspectUtf8 } from '../core-open/utils/text-bytes.js';
 import { stampWarning, WARNING_CODES } from '../core-open/warnings.js';
-import { parseFailureWarning } from './parse-warning.js';
+import { stampedParseFailure } from './coalesce-warnings.js';
 
 /**
  * tinypool worker entry. Receives a chunk of files, reads and parses each, and
@@ -50,11 +50,11 @@ export default async function run(payload: ParsePayload): Promise<FileParse[]> {
         continue;
       }
       out.push(await parseSource(task.rel, task.lang, inspected.text));
-    } catch {
+    } catch (err) {
       // A wasm-level parse crash can leave the language's reused parser
       // mid-state; drop it so the failure stays contained to this file.
-      // The exception text is intentionally dropped: it can be a wasm stack
-      // or a snippet of source. The warning names the file instead.
+      // The warning names the file and a sanitized reason, not a stack or
+      // a snippet of source.
       resetParser(task.lang);
       out.push({
         rel: task.rel,
@@ -67,7 +67,7 @@ export default async function run(payload: ParsePayload): Promise<FileParse[]> {
         heritage: [],
         typeRefs: [],
         guards: [],
-        warnings: [parseFailureWarning(task.rel, task.lang)],
+        warnings: [stampedParseFailure(task.rel, err)],
       });
     }
   }

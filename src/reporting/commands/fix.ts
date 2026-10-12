@@ -15,6 +15,7 @@ import {
   type VulnSeverity,
 } from '../../core-open/index.js';
 import { pathExists, readJsonFile } from '../utils/fs.js';
+import { withCoalescedWarningStderr } from '../../engine/coalesce-warnings.js';
 import { scanStaleness } from '../utils/scan-freshness.js';
 import { loadAdvancedScanHook } from '../advanced-hook.js';
 import { VERSION } from '../version.js';
@@ -125,7 +126,7 @@ const defaultFixScanner: FixScanner = async (rootDir) => {
   const scratch = path.join(os.tmpdir(), `vg-fix-scan-${process.pid}.json`);
   const scanOpts: ScanOptions = { vibgrateVersion: VERSION, format: 'json', out: scratch, quiet: true, concurrency: 8 };
   const advanced = await loadAdvancedScanHook();
-  return runCoreScan(rootDir, scanOpts, advanced);
+  return withCoalescedWarningStderr(() => runCoreScan(rootDir, scanOpts, advanced));
 };
 
 /**

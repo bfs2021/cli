@@ -5804,9 +5804,9 @@ A warning means the command continued. The process exit code stays the one in [E
 
 Stderr lines look like `warning [VG_WARN_PARSE_FAILED]: …`. The code is the token a CI check or an assistant asserts on. The sentence after the code can be reworded.
 
-When the same code and the same reason apply to more than one file, stderr prints one line. The line gives the count and up to five repo-relative paths, sorted by code point. Further paths are a `+N more` suffix. A warning that names one file keeps that file in the sentence. A path that is absolute, or that leaves the repo, is reduced to its file name before it is shown. Counts and byte sizes in the reason do not split the line. A command that stops on a hard error is unchanged: only degrade-and-continue warnings are coalesced.
+When the same code and the same reason apply to more than one file, stderr prints one line. That line gives the count and up to five repo-relative sample paths, sorted. A single file keeps its own sentence. `vg build --json` still lists every file in `warnings` and `codedWarnings`. `vg scan --format json` still lists every row in `degradations`. `vg scan --format sarif` still lists every row as a tool notification. Those machine-readable lists stay in code order, then message order.
 
-`vg build --json` keeps `warnings` as strings and adds `codedWarnings`: an array of `{ code, message }` in that same order, one entry per event. Each string in `warnings` ends with ` [CODE]`. `codedWarnings` is left out when there are no warnings. Scan JSON keeps every row in `degradations`. SARIF keeps one result per finding. Text and markdown reports use the same coalesced lines as stderr.
+`vg build --json` keeps `warnings` as strings and adds `codedWarnings`: an array of `{ code, message }` in that same order. Each string in `warnings` ends with ` [CODE]`. `codedWarnings` is left out when there are no warnings.
 
 `vg scan --format json` adds `degradations` when a path was skipped, a baseline file could not be read, or the root `package.json` omitted `name` or `version`. The field is left out when there are none. `vg report` prints those same rows.
 

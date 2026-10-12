@@ -24,6 +24,7 @@ import { pathToFileURL, fileURLToPath } from 'node:url';
 import * as semver from 'semver';
 
 import { runCoreScan, refineArchitectureWithGraph, refineArchitectureWithAstRoles } from '../core-open/index.js';
+import { withCoalescedWarningStderr } from '../engine/coalesce-warnings.js';
 import type {
   DependencyRow,
   ProjectScan,
@@ -2048,7 +2049,7 @@ async function runCoreScanSilently(
     realLog(...args);
   };
   try {
-    const artifact = await runCoreScan(root, opts, advanced);
+    const artifact = await withCoalescedWarningStderr(() => runCoreScan(root, opts, advanced));
     if (graph) refineArtifactWithGraph(artifact, graph, fileRoles);
     return artifact;
   } finally {
