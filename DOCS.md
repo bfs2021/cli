@@ -500,7 +500,7 @@ external files. The page opens with a summary:
 - DriftScore and the four component scores. A missing score is `n/a`. A measured `0` stays `0`.
 - Counts by severity for vulnerability findings and for security findings. A check that did not run stays "Not scanned" rather than a row of zeros. A check that finished with nothing to report shows zeros.
 - When a finding carries `details.fixedVersions`, how many of those findings name a fix.
-- An unchecked **Fix available only** checkbox. Checking it hides table rows that do not name a fix. The saved page does not change, and the summary counts stay complete.
+- A **Fix available only** checkbox. It starts unchecked, so the tables show every finding. Checking it hides findings that do not name a fix version. The page file still contains every finding, and the checkbox does not call the network.
 - Links to the full tables under the summary: vulnerabilities, security findings, and the other findings.
 
 The same artifact always produces the same page. Save it with a shell redirect:
@@ -597,9 +597,7 @@ When set:
 
 ##### HTML (`formatHtmlReport`)
 
-`vg report --format html` writes one self-contained page from the same artifact. It does not call the network and does not load external files. The page opens with the summary listed above (DriftScore, severity counts, a fix-available count when a finding carries `details.fixedVersions`, and links to the tables), then the full vulnerability, security, and other-finding tables. A check that did not run stays "Not scanned". A missing score is `n/a`. The same artifact always produces the same page.
-
-The summary includes a **Fix available only** checkbox (`#fix-available-only`). It is unchecked in the file, so opening the page shows every row. Checking it hides rows whose `data-fix-available` attribute is `no`. That attribute is `yes` only when `details.fixedVersions` on the scan artifact already lists a published fix. Rows without that list, including security findings, stay in the file and are hidden only while the box is checked. Summary counts are not rewritten. The filter is a style rule in the page: no script, no registry call, and no change to the HTML bytes.
+`vg report --format html` writes one self-contained page from the same artifact. It does not call the network and does not load external files. The page opens with the summary listed above (DriftScore, severity counts, a fix-available count when a finding carries `details.fixedVersions`, a Fix available only checkbox, and links to the tables), then the full vulnerability, security, and other-finding tables. The checkbox starts unchecked. Checking it hides findings that do not name a fix version. Those rows stay in the page file, and the summary counts stay the full set. A check that did not run stays "Not scanned". A missing score is `n/a`. The same artifact always produces the same page.
 
 ##### Differences
 
@@ -612,7 +610,7 @@ The summary includes a **Fix available only** checkbox (`#fix-available-only`). 
 - DriftScore: Markdown puts the lower-is-better gloss in the opening cell. Text puts the score in **DriftScore Summary** without that gloss.
 - VCS: Markdown uses separate VCS, Branch, and Commit rows, and Commit requires `vcs.sha`. Text uses one line and can show `shortSha` without requiring `sha`.
 - Runtime wording: Markdown always says `major(s)`. Text says `major` or `majors`.
-- HTML is the browser page: the summary above, then the vulnerability, security, and other-finding tables, plus an unchecked **Fix available only** checkbox that hides rows with no known fix. It does not print Markdown's recommended-standards section or the text inventory.
+- HTML is the browser page: the summary above, then the vulnerability, security, and other-finding tables. A Fix available only checkbox starts unchecked and can hide findings that do not name a fix version. The page file still lists every finding. It does not print Markdown's recommended-standards section or the text inventory.
 
 ##### JSON
 

@@ -30,13 +30,6 @@ backward compatible.
 
 ### Added
 
-- **HTML reports can hide findings that have no known fix.**
-  `vg report --format html` includes an unchecked **Fix available only**
-  checkbox. Checking it hides table rows that do not name a fixed version
-  already stored on the scan artifact. The file bytes do not change with
-  that choice, summary counts stay complete, and the report still does not
-  contact a registry. (#249)
-
 - **Unknown optional lockfile fields warn and continue.** When a lockfile still lists dependencies vg can read, an extra field does not drop that graph or the SBOM rows built from it. The command prints one warning per lockfile path and field name, sorted by path then field: `pnpm-lock.yaml: unknown optional lockfile field "<name>"; continuing with the fields this version understands.` A field name that is not a plain identifier is reported as `(name omitted)`. A truncated lockfile, or one missing the structure its format requires, still exits non-zero.
 
 - **`vg build --attest` and `vg build --verify` are documented.** The docs

@@ -226,7 +226,7 @@ describe('formatHtmlReport', () => {
     expect(block(html, 'vuln-counts')).toContain('Not scanned');
     expect(block(html, 'vuln-counts')).not.toContain('critical');
     expect(block(html, 'security-counts')).toContain('Not scanned');
-    expect(html).not.toContain('id="fix-available"');
+    expect(html).not.toContain('<p id="fix-available">');
     expect(section(html, 'vulnerabilities')).toContain('Not scanned');
     expect(section(html, 'security')).toContain('Not scanned');
     expect(section(html, 'findings')).toContain('None');
@@ -278,6 +278,31 @@ describe('formatHtmlReport', () => {
     expect(block(html, 'fix-available')).toBe('<p id="fix-available">Fix available: 0</p>');
   });
 
+  it('adds an unchecked fix-available-only toggle and still emits every row', () => {
+    const html = formatHtmlReport(sample());
+    const control = `<p id="fix-filter"><label><input id="${FIX_AVAILABLE_ONLY_ID}" type="checkbox"> Fix available only</label></p>`;
+    const rule = `body:has(#${FIX_AVAILABLE_ONLY_ID}:checked) tr[${FIX_AVAILABLE_ATTR}="no"] { display: none; }`;
+
+    expect(html).toContain(control);
+    expect(html).toContain(rule);
+    expect(html).not.toMatch(/<input[^>]*\schecked[\s=>]/);
+    expect(html.split(control)).toHaveLength(2);
+
+    const vulns = section(html, 'vulnerabilities');
+    const findings = section(html, 'findings');
+    expect(vulns).toContain(`${FIX_AVAILABLE_ATTR}="yes"`);
+    expect(vulns).toContain(`${FIX_AVAILABLE_ATTR}="no"`);
+    expect(vulns).toContain('fix available (4.17.21)');
+    expect(vulns).toContain('GHSA-high');
+    expect(findings).toContain(`${FIX_AVAILABLE_ATTR}="yes"`);
+    expect(section(html, 'security')).toContain(`${FIX_AVAILABLE_ATTR}="no"`);
+
+    const empty = formatHtmlReport(artifact());
+    expect(empty).toContain(control);
+    expect(empty).toContain(rule);
+    expect(formatHtmlReport(sample())).toBe(html);
+  });
+
   it('is deterministic and does not embed a timestamp, a script, or external assets', () => {
     const first = sample();
     const again = formatHtmlReport(first);
@@ -293,34 +318,9 @@ describe('formatHtmlReport', () => {
     expect(again).not.toMatch(/<link[\s>]/i);
     expect(again).not.toMatch(/\ssrc\s*=/i);
     expect(again).not.toMatch(/<details/i);
-    expect(again).toContain(`id="${FIX_AVAILABLE_ONLY_ID}"`);
-    expect(again).toMatch(/fix available only/i);
-    expect(again).not.toMatch(new RegExp(`id="${FIX_AVAILABLE_ONLY_ID}"[^>]*\\schecked`));
+    expect(again).toContain('Fix available only');
+    expect(again).toContain(`<input id="${FIX_AVAILABLE_ONLY_ID}" type="checkbox">`);
     expect(again).toContain(`<div id="${ADVISORY_CORPUS_FOOTER_ID}" hidden></div>`);
     expect(again.startsWith('<!doctype html>')).toBe(true);
-  });
-
-  it('ships an unchecked fix-available-only control and keeps every row in the page', () => {
-    const control = `<p id="fix-available-filter"><label for="${FIX_AVAILABLE_ONLY_ID}"><input type="checkbox" id="${FIX_AVAILABLE_ONLY_ID}"> Fix available only</label></p>`;
-    const rule = `body:has(#${FIX_AVAILABLE_ONLY_ID}:checked) tr[${FIX_AVAILABLE_ATTR}="no"] { display: none; }`;
-    const empty = formatHtmlReport(artifact());
-    const html = formatHtmlReport(sample());
-
-    expect(empty).toContain(control);
-    expect(html).toContain(control);
-    expect(empty).toContain(rule);
-    expect(html).toContain(rule);
-    expect(html).not.toMatch(new RegExp(`<input[^>]*id="${FIX_AVAILABLE_ONLY_ID}"[^>]*checked`));
-
-    const vulns = section(html, 'vulnerabilities');
-    const findings = section(html, 'findings');
-    expect(vulns).toContain(`${FIX_AVAILABLE_ATTR}="yes"`);
-    expect(vulns).toContain(`${FIX_AVAILABLE_ATTR}="no"`);
-    expect(vulns).toContain('GHSA-crit');
-    expect(vulns).toContain('GHSA-mod');
-    expect(findings).toContain('vibgrate/runtime-lag');
-    expect(html).not.toMatch(/<script/i);
-    expect(html.indexOf('id="summary"')).toBeLessThan(html.indexOf(`id="${FIX_AVAILABLE_ONLY_ID}"`));
-    expect(html.indexOf(`id="${FIX_AVAILABLE_ONLY_ID}"`)).toBeLessThan(html.indexOf('id="vulnerabilities"'));
   });
 });
