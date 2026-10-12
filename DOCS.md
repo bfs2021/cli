@@ -104,6 +104,7 @@ For a quick overview, see the [README](./README.md). This document covers everyt
 - [Output Formats](#output-formats)
   - [Text](#text)
   - [JSON Artifact](#json-artifact)
+    - [Score fields in the JSON artifact](#score-fields-in-the-json-artifact)
   - [SARIF](#sarif)
     - [Result fingerprints](#result-fingerprints)
     - [Advisories with several ids](#advisories-with-several-ids)
@@ -501,6 +502,7 @@ external files. The page opens with a summary:
 - DriftScore and the four component scores. A missing score is `n/a`. A measured `0` stays `0`.
 - Counts by severity for vulnerability findings and for security findings. A check that did not run stays "Not scanned" rather than a row of zeros. A check that finished with nothing to report shows zeros.
 - When a finding carries `details.fixedVersions`, how many of those findings name a fix.
+- A **Fix available only** checkbox. It starts unchecked, so the tables show every finding. Checking it hides findings that do not name a fix version. The page file still contains every finding, and the checkbox does not call the network.
 - Links to the full tables under the summary: vulnerabilities, security findings, and the other findings.
 
 The same artifact always produces the same page. Save it with a shell redirect:
@@ -597,7 +599,7 @@ When set:
 
 ##### HTML (`formatHtmlReport`)
 
-`vg report --format html` writes one self-contained page from the same artifact. It does not call the network and does not load external files. The page opens with the summary listed above (DriftScore, severity counts, a fix-available count when a finding carries `details.fixedVersions`, and links to the tables), then the full vulnerability, security, and other-finding tables. A check that did not run stays "Not scanned". A missing score is `n/a`. The same artifact always produces the same page.
+`vg report --format html` writes one self-contained page from the same artifact. It does not call the network and does not load external files. The page opens with the summary listed above (DriftScore, severity counts, a fix-available count when a finding carries `details.fixedVersions`, a Fix available only checkbox, and links to the tables), then the full vulnerability, security, and other-finding tables. The checkbox starts unchecked. Checking it hides findings that do not name a fix version. Those rows stay in the page file, and the summary counts stay the full set. A check that did not run stays "Not scanned". A missing score is `n/a`. The same artifact always produces the same page.
 
 ##### Differences
 
@@ -610,7 +612,7 @@ When set:
 - DriftScore: Markdown puts the lower-is-better gloss in the opening cell. Text puts the score in **DriftScore Summary** without that gloss.
 - VCS: Markdown uses separate VCS, Branch, and Commit rows, and Commit requires `vcs.sha`. Text uses one line and can show `shortSha` without requiring `sha`.
 - Runtime wording: Markdown always says `major(s)`. Text says `major` or `majors`.
-- HTML is the browser page: the summary above, then the vulnerability, security, and other-finding tables. It does not print Markdown's recommended-standards section or the text inventory.
+- HTML is the browser page: the summary above, then the vulnerability, security, and other-finding tables. A Fix available only checkbox starts unchecked and can hide findings that do not name a fix version. The page file still lists every finding. It does not print Markdown's recommended-standards section or the text inventory.
 
 ##### JSON
 
@@ -2198,7 +2200,7 @@ By default, the scan writes `.vibgrate/scan_result.json`. Use `--no-local-artifa
 
 A truncated or syntactically invalid lockfile stops the scan before a dependency graph is built. The error names the file (for example `package-lock.json`, `pnpm-lock.yaml`, or `yarn.lock`) and tells you to regenerate it with your package manager. The message does not include the lockfile, and the process exits non-zero. A valid lockfile is scanned as before.
 
-`vg scan` does not follow symlinks while it indexes the tree. A skipped link is named once on stderr. See [Symlinks](#symlinks).
+`vg scan` does not follow symlinks while it indexes the tree. A skipped link is named once, as `warning [VG_WARN_SYMLINK_SKIPPED]`. See [Symlinks](#symlinks).
 
 For offline drift scoring, pass `--package-manifest <file>` with a downloaded manifest bundle such as `https://github.com/vibgrate/manifests/latest-packages.zip`. The manifest shape, the fail-closed errors, and what offline mode skips are in [Offline scan with a package-version manifest](#offline-scan-with-a-package-version-manifest).
 
@@ -2794,7 +2796,7 @@ A truncated or syntactically invalid lockfile stops the build before source file
 | `--attestation <file>` | `.vibgrate/attestation.intoto.jsonl` | Where `--attest` writes, and where `--verify` reads |
 | `--pub <path>` | — | Public key PEM that pins the signer for `--verify` |
 
-`vg build` does not follow symlinks while it discovers files. A skipped link is named once on stderr. See [Symlinks](#symlinks). `.gitignore` and `--exclude` still apply.
+`vg build` does not follow symlinks while it discovers files. A skipped link is named once, as `warning [VG_WARN_SYMLINK_SKIPPED]`. See [Symlinks](#symlinks). `.gitignore` and `--exclude` still apply.
 
 **Local by default — no git churn.** The first time vg writes into `.vibgrate/` it also creates `.vibgrate/.gitignore`, keeping the graph artifacts (`graph.json`, `graph.html`, `GRAPH_REPORT.md`, `facts.jsonl`, `mcp-navigation.json`) and the cache out of git — so builds, auto-refreshes, and MCP use never leave your branch dirty. Run `vg share` when you want the map committed for your team (it rewrites that ignore file). vg never touches an existing `.vibgrate/.gitignore`, so edit it (or leave it empty) to manage the ignores yourself.
 
@@ -4908,6 +4910,89 @@ The full scan artifact in JSON format. Contains all raw data, scores, findings, 
 
 Dependency identity in this file is `projects[].type` plus `dependencies[].package` and `resolvedVersion`. An advisory match is `extended.vulnerabilities.packages[]` (`ecosystem`, `package`, `version`). `vg sbom export` writes those coordinates as a package URL. The file has no CPE field. See [Component identity](#component-identity). A dependency row has no package digest. `projects[].projectId` and `solutions[].solutionId` identify the project and the solution. See [Package digests](#package-digests).
 
+#### Score fields in the JSON artifact
+
+Every score `vg scan` computes locally lives under the top-level `drift` object. Read `drift.score`; the other fields explain it.
+
+| Field | Range | Present when |
+| --- | --- | --- |
+| `drift.score` | `0`-`100`, lower is better, or `null` | Always. `null` means nothing was measured |
+| `drift.riskLevel` | `low` (0-30), `moderate` (31-60), `high` (61-100), or `null` | Always. `null` when `score` is `null` |
+| `drift.components.runtimeScore` | `0`-`100` drift, or `null` | Always. `null` when the component had no input |
+| `drift.components.frameworkScore` | `0`-`100` drift, or `null` | Always |
+| `drift.components.dependencyScore` | `0`-`100` drift, or `null` | Always |
+| `drift.components.eolScore` | `0`-`100` drift, or `null` | Always |
+| `drift.measured` | Array of `runtime`, `framework`, `dependency`, `eol`, `freshness` | Always. Empty when nothing was measured |
+| `drift.methodologyVersion` | For example `driftscore-3.0` | Always on current CLIs |
+| `drift.confidence` | `0`-`1` | When at least one dependency row was classified |
+| `drift.mode` | `verified` or `estimated` | When there were scoreable dependencies |
+| `drift.dependencyDrift` | `p95`, `unsupportedShare`, `coverage`, `top[]` | When there were scoreable dependencies |
+| `delta` | Score change against `--baseline`, positive is worse | When `--baseline` names a readable file **and** this scan's `drift.score` and the baseline's `drift.score` are both numbers. Omitted otherwise, never `0` or `null` |
+
+Component scores are drift too: `0` is current, `100` is maximum drift, the same direction as `drift.score`.
+
+**An absent score stays absent.** `drift.score` is `null` when no component had data, and an individual component is `null` when only that pillar was unmeasurable. Neither is ever written as `0`. A `null` and a measured `0` are different results: `0` says the stack was measured and is current, `null` says nothing was measured. `--drift-budget` and `--drift-worsening` skip a `null` score rather than comparing it, and the JUnit XML reports it as a skipped case. The same rule applies to the summary file: an unmeasured `driftScore` is `null`, and `delta` and `baselineScore` are `null` without a `--baseline` comparison.
+
+**RiskScore and the combined DriftRisk Index are not in this file.** A local scan computes the DriftScore only. `riskScore` and `driftRisk` are not fields of the scan artifact, and they are not written as `0` or as an empty object: they are absent. RiskScore comes from Vibgrate Cloud on a Team plan or above, and the combined DriftRisk Index is the blend of the two axes, so both land in the dashboard rather than in free, offline CLI output. `drift.riskLevel` is the DriftScore band, not RiskScore. A `maxRiskScore` or `maxRiskWorseningPercent` limit in `driftBudget` is reported as not evaluated on a local scan, never as a silent pass; see [Drift budget](#drift-budget). The formulas, bands, and methodology tags for all three numbers are published in the [public scoring specification](./docs/public/SCORING-METHODOLOGY-PUBLIC.md), with the design rationale and limitations in the [risk modelling whitepaper](./docs/public/RISK-MODELLING-WHITEPAPER.md).
+
+CI example. A step that reads the score from a scan, with `--summary-out` written before any gate can fail the run:
+
+```yaml
+- name: Drift gate
+  run: vg scan --baseline .vibgrate/baseline.json --drift-budget 40 --summary-out drift-summary.json
+
+- name: Publish the measured score
+  if: always()
+  run: cat drift-summary.json >> "$GITHUB_STEP_SUMMARY"
+```
+
+```bash
+# Fail a build on an unmeasured score, and print the measured one either way.
+drift=$(jq -r '.driftScore' drift-summary.json)
+if [ "$drift" = "null" ]; then
+  echo "DriftScore was not measured; see drift.measured in scan_result.json."
+  exit 1
+fi
+echo "DriftScore $drift/100 ($(jq -r '.riskLevel' drift-summary.json))"
+```
+
+The values below are illustrative: every key and shape is copied from a real `--format json` run, but the numbers come from an offline scan of a two-dependency fixture, so your paths, versions, and counts will differ.
+
+```json
+{
+  "schemaVersion": "1.0",
+  "timestamp": "2026-10-10T07:09:12.481Z",
+  "vibgrateVersion": "2026.1007.1",
+  "rootPath": "/path/to/your/repo",
+  "drift": {
+    "score": 0,
+    "riskLevel": "low",
+    "components": {
+      "runtimeScore": null,
+      "frameworkScore": null,
+      "dependencyScore": 0,
+      "eolScore": null
+    },
+    "measured": ["dependency"],
+    "methodologyVersion": "driftscore-3.0",
+    "confidence": 0,
+    "mode": "estimated",
+    "dependencyDrift": {
+      "p95": 0,
+      "unsupportedShare": 0,
+      "coverage": 0,
+      "top": [
+        { "package": "lodash", "drift": 0, "mode": "estimated", "unsupported": false, "flags": [] }
+      ]
+    }
+  }
+}
+```
+
+Without `--baseline` there is no `delta` key at all: the field is left out, not written as `null`. `--baseline` alone does not add it either. `delta` appears only when the baseline file is readable and both this scan's DriftScore and the baseline's DriftScore are measured numbers; if either side is `null`, or the file is missing or unreadable, `delta` is still absent. Read it with a presence check, not a bare `jq .delta`.
+
+`confidence: 0` with `mode: "estimated"` is what an offline scan without a `--package-manifest` looks like: no release-date data was available, so only version-only estimates were possible. Supply a manifest to measure real drift offline; see [Offline scan with a package-version manifest](#offline-scan-with-a-package-version-manifest).
+
 ### SARIF
 
 [Static Analysis Results Interchange Format](https://sarifweb.azurewebsites.net/) (SARIF) 2.1.0. GitHub code scanning and Azure DevOps read this file. It contains findings only. The DriftScore and the other metrics stay in the JSON artifact. Drift findings come first. Vulnerability findings follow when the scan ran with `--vulns`.
@@ -5188,16 +5273,22 @@ link points at, point the root at that target, or pass a narrower directory
 that already contains them. To leave a link out without a notice, list it in
 `.gitignore` or pass `--exclude`.
 
-When a walk skips one or more symlinks, vg prints one notice on stderr and
-nothing when there are none. The notice is the count, then the first few
-root-relative paths in sorted order (at most five; further links are a
-`+N more` count). Paths are relative to the root you passed. Absolute paths
-are not printed. The line goes to stderr, so `--format json` and
-`vg build --json` keep a JSON document on stdout. `--quiet` hides promotional
-text only; it does not hide this notice.
+When a walk skips one or more symlinks, vg prints one warning and nothing when
+there are none. The warning code is `VG_WARN_SYMLINK_SKIPPED`. The sentence
+is the count, then the first few paths in sorted order (at most five; further
+links are a `+N more` count). Each path is a label for the link itself: a
+path inside the root stays root-relative, and an absolute path is reduced to
+its file name. The link target is not read and is not printed, so a home
+directory never appears in the line.
+
+`vg build` prints the warning on stderr with the other coded warnings.
+`vg build --json` lists it in `codedWarnings` and in `warnings`. `vg scan`
+lists it in `degradations` and prints the same line on stderr, including
+when the scan document is JSON on stdout. `--quiet` hides promotional text
+only; it does not hide this warning.
 
 ```text
-notice: skipped 3 symlinks (alias.ts, nested/cycle, via). vg does not follow symlinks. Point the root at the link target, or pass --exclude or a narrower root.
+warning [VG_WARN_SYMLINK_SKIPPED]: skipped 3 symlinks (alias.ts, nested/cycle, via). vg does not follow symlinks. Point the root at the link target, or pass --exclude or a narrower root.
 ```
 
 ### Binary and non-UTF-8 files
@@ -5825,7 +5916,7 @@ Stderr lines look like `warning [VG_WARN_PARSE_FAILED]: …`. The code is the to
 
 `vg build --json` keeps `warnings` as strings and adds `codedWarnings`: an array of `{ code, message }` in that same order. Each string in `warnings` ends with ` [CODE]`. `codedWarnings` is left out when there are no warnings.
 
-`vg scan --format json` adds `degradations` when a path was skipped, a baseline file could not be read, or the root `package.json` omitted `name` or `version`. The field is left out when there are none. `vg report` prints those same rows.
+`vg scan --format json` adds `degradations` when a path was skipped, a symlink was not followed, a baseline file could not be read, or the root `package.json` omitted `name` or `version`. The field is left out when there are none. `vg report` prints those same rows.
 
 `vg sbom export` prints the code on stderr. CycloneDX adds a `vibgrate:warningCode` property next to the existing warning property. SPDX adds an annotation whose comment is `warningCode=VG_WARN_…`. The warning sentences already stored on the document stay as they are.
 
@@ -5849,6 +5940,7 @@ A truncated or invalid lockfile stops the command. Warning codes cover condition
 | `VG_WARN_WORKFLOW_STEP_CAP` | `vg build` | A workflow job listed more steps than the extractor enumerates. |
 | `VG_WARN_SCAN_PATH_SKIPPED` | `vg scan` | A scan path timed out and was skipped. |
 | `VG_WARN_SCAN_FILE_OVERSIZE` | `vg scan` | A scan file exceeded the size cap and was skipped. |
+| `VG_WARN_SYMLINK_SKIPPED` | `vg build`, `vg scan` | A walk skipped one or more symlinks and did not follow them. One warning names the links. |
 | `VG_WARN_BASELINE_UNREADABLE` | `vg scan` | A baseline file could not be read. The scan continues without a comparison. |
 | `VG_WARN_LICENSE_UNPARSEABLE` | `vg scan`, `vg sbom` | A declared license string could not be resolved to SPDX. |
 | `VG_WARN_LICENSE_UNREPRESENTABLE` | `vg sbom` | A declared license cannot be represented in an SBOM. |
