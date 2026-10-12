@@ -51,6 +51,8 @@ export const WARNING_CODES = {
   SCAN_PATH_SKIPPED: 'VG_WARN_SCAN_PATH_SKIPPED',
   /** A scan file exceeded the size cap and was skipped. */
   SCAN_FILE_OVERSIZE: 'VG_WARN_SCAN_FILE_OVERSIZE',
+  /** Paths were left out of the scan by exclude patterns, so the results cover only part of the repository. */
+  SCAN_PATHS_EXCLUDED: 'VG_WARN_SCAN_PATHS_EXCLUDED',
   /** A walk skipped one or more symlinks. The links were not followed. */
   SYMLINK_SKIPPED: 'VG_WARN_SYMLINK_SKIPPED',
   /** A baseline file could not be read. The scan continues without a comparison. */

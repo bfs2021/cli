@@ -6,8 +6,9 @@ import * as fs from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import type * as TsModule from 'typescript';
 import { parseDocument } from 'yaml';
-import type { VibgrateConfig } from './types.js';
+import type { ScanExclusion, ScanExclusionSource, VibgrateConfig } from './types.js';
 import { parseDriftBudget } from './drift-budget.js';
+import { codedWarning, WARNING_CODES, type CodedWarning } from './warnings.js';
 import { pathExists, readTextFile } from './utils/fs.js';
 import { redactSecrets } from './utils/redact.js';
 
@@ -683,6 +684,62 @@ const DEFAULT_CONFIG: VibgrateConfig = {
   },
 };
 
+/**
+ * Exclude patterns recorded in `.vibgrate/auto-excludes.json` — paths a previous scan timed out on,
+ * which later scans skip. Empty when the file is absent, unreadable, or not a list of strings.
+ */
+export async function readAutoExcludes(rootDir: string): Promise<string[]> {
+  const sidecarPath = path.join(rootDir, '.vibgrate', 'auto-excludes.json');
+  if (!(await pathExists(sidecarPath))) return [];
+  try {
+    const parsed: unknown = JSON.parse(await readTextFile(sidecarPath));
+    return Array.isArray(parsed) ? parsed.filter((p): p is string => typeof p === 'string' && p.length > 0) : [];
+  } catch {
+    return []; // ignore a corrupt sidecar
+  }
+}
+
+/**
+ * Label every exclude pattern in force with where it came from. `configExclude` is the merged list
+ * `loadConfig` returns (config file plus sidecar), so a pattern the sidecar holds is `auto` even if
+ * the config file repeats it. Sorted by pattern, then source, with no duplicates.
+ */
+export function classifyExcludes(
+  configExclude: readonly string[] | undefined,
+  cliExclude: readonly string[] | undefined,
+  autoExclude: readonly string[],
+): ScanExclusion[] {
+  const auto = new Set(autoExclude);
+  const bySource = new Map<string, ScanExclusion>();
+  const add = (pattern: string, source: ScanExclusionSource): void => {
+    const final = auto.has(pattern) ? 'auto' : source;
+    bySource.set(pattern, { pattern, source: final });
+  };
+  for (const pattern of configExclude ?? []) add(pattern, 'config');
+  for (const pattern of cliExclude ?? []) if (!bySource.has(pattern)) add(pattern, 'cli');
+  return [...bySource.values()].sort((a, b) => a.pattern.localeCompare(b.pattern) || a.source.localeCompare(b.source));
+}
+
+/**
+ * The notice a scan carries when some of its exclusions were applied without anyone asking for them
+ * on this run (auto-excluded after a timeout). Without it a scan of a repository with most packages
+ * excluded reads as a clean bill of health for the whole repository. Exclusions the user wrote in
+ * the config or on the command line are listed on the artifact but do not raise this notice.
+ */
+export function excludedPathsWarning(exclusions: readonly ScanExclusion[]): CodedWarning | null {
+  const count = (source: ScanExclusionSource): number => exclusions.filter((e) => e.source === source).length;
+  const auto = count('auto');
+  if (auto === 0) return null;
+  const parts = [`${auto} auto-excluded after a timeout`];
+  if (count('config') > 0) parts.push(`${count('config')} from config`);
+  if (count('cli') > 0) parts.push(`${count('cli')} from --exclude`);
+  const total = exclusions.length;
+  return codedWarning(
+    WARNING_CODES.SCAN_PATHS_EXCLUDED,
+    `${total} path pattern${total === 1 ? '' : 's'} excluded from this scan (${parts.join(', ')}), so results cover only part of the repository. Auto-excluded patterns are listed in .vibgrate/auto-excludes.json`,
+  );
+}
+
 export async function loadConfig(rootDir: string): Promise<VibgrateConfig> {
   let config = DEFAULT_CONFIG;
 
@@ -720,18 +777,10 @@ export async function loadConfig(rootDir: string): Promise<VibgrateConfig> {
   }
 
   // Merge sidecar auto-excludes (from stuck-dir detection)
-  const sidecarPath = path.join(rootDir, '.vibgrate', 'auto-excludes.json');
-  if (await pathExists(sidecarPath)) {
-    try {
-      const txt = await readTextFile(sidecarPath);
-      const autoExcludes = JSON.parse(txt);
-      if (Array.isArray(autoExcludes) && autoExcludes.length > 0) {
-        const existing = config.exclude ?? [];
-        config = { ...config, exclude: [...new Set([...existing, ...autoExcludes])] };
-      }
-    } catch {
-      // ignore corrupt sidecar
-    }
+  const autoExcludes = await readAutoExcludes(rootDir);
+  if (autoExcludes.length > 0) {
+    const existing = config.exclude ?? [];
+    config = { ...config, exclude: [...new Set([...existing, ...autoExcludes])] };
   }
 
   return config;

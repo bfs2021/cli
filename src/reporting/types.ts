@@ -1,4 +1,4 @@
-import type { DependencyLicense, SecuritySection, VulnerabilityScanResult } from '../core-open/types.js';
+import type { DependencyLicense, ScanExclusion, SecuritySection, VulnerabilityScanResult } from '../core-open/types.js';
 import type { CodedWarning } from '../core-open/warnings.js';
 
 // ── Core types for Vibgrate CLI ──
@@ -277,6 +277,11 @@ export interface ScanArtifact {
    * Omitted when there are none. Sorted by code, then by message.
    */
   degradations?: CodedWarning[];
+  /**
+   * Path patterns left out of this scan, with where each came from. Omitted
+   * when nothing was excluded. Sorted by pattern, then source.
+   */
+  excluded?: ScanExclusion[];
   /** Repo-relative path of the `--baseline` file, when one was compared. */
   baseline?: string;
   /** Present only after a baseline file was read. Absent means no comparison. */

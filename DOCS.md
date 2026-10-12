@@ -18,7 +18,7 @@ For a quick overview, see the [README](./README.md). This document covers everyt
   - [vg fix](#vg-fix)
   - [vg init](#vg-init)
   - [vg report](#vg-report)
-    - [Report format coverage](#report-format-coverage)
+    - [What each report format contains](#what-each-report-format-contains)
   - [vg review](#vg-review)
   - [vg sbom](#vg-sbom)
     - [Choosing CycloneDX or SPDX](#choosing-cyclonedx-or-spdx)
@@ -65,6 +65,7 @@ For a quick overview, see the [README](./README.md). This document covers everyt
   - [vg path](#vg-path)
   - [vg savings](#vg-savings)
   - [vg serve](#vg-serve)
+    - [Serving over HTTP](#serving-over-http)
   - [vg share](#vg-share)
   - [vg show](#vg-show)
   - [vg status](#vg-status)
@@ -93,11 +94,6 @@ For a quick overview, see the [README](./README.md). This document covers everyt
   - [vg policy](#vg-policy)
 - [DriftScore](#driftscore)
 - [Drift Baselines & Fitness Functions](#drift-baselines--fitness-functions)
-  - [Record and refresh](#record-and-refresh)
-  - [CI gates](#ci-gates)
-  - [Suppressions](#suppressions)
-  - [What to commit](#what-to-commit)
-  - [CI example](#ci-example)
   - [How the Score Is Calculated](#how-the-score-is-calculated)
   - [Risk Levels](#risk-levels)
   - [Score Components](#score-components)
@@ -191,7 +187,7 @@ Vibgrate evaluates **upgrade drift** in depth for:
 - **Python** (`requirements.txt`, `pyproject.toml`-style manifests)
 - **Java** (`pom.xml`, Gradle-style manifests). Which Maven profiles, scopes, and Gradle configurations become a `vg scan` row or a `vg build` edge is in [Maven and Gradle manifests](#maven-and-gradle-manifests).
 
-**Known-vulnerability detection** (`--vulns`) and **dependency attribution** (`vg why`, exposure windows) additionally cover npm / pnpm / yarn, pip / poetry / pipenv, cargo, composer, bundler, pub, hex, NuGet, and Maven/Gradle, read from each project's lockfile. Go is matched from direct `require` lines in `go.mod`. Pseudo-versions and `+incompatible` tags follow [Go modules: pseudo-versions and +incompatible](#go-modules-pseudo-versions-and-incompatible).
+**Known-vulnerability detection** (`--vulns`) and **dependency attribution** (`vg why`, exposure windows) additionally cover npm / pnpm / yarn, pip / poetry / pipenv, cargo, composer, bundler, pub, hex, NuGet, and Maven/Gradle, read from each project's lockfile. For npm, pnpm, and yarn, `--vulns` checks every package the lockfile resolves, not only the ones in `package.json`. A finding on a package pulled in by another dependency says `transitive` and names the shortest path from a dependency you declared. Other ecosystems are matched as described above. Go is matched from direct `require` lines in `go.mod`. Pseudo-versions and `+incompatible` tags follow [Go modules: pseudo-versions and +incompatible](#go-modules-pseudo-versions-and-incompatible).
 
 ### End-to-end workflow (recommended)
 
@@ -230,15 +226,15 @@ Drift scoring, baselines, reports, supply-chain evidence, and related local tool
 
 ### vg baseline
 
-Run a full scan and write `.vibgrate/baseline.json`. There is no `create` or `update` subcommand. Running the command again overwrites that file. That second run is how you refresh the snapshot after planned upgrades land on the main branch.
+Create a drift baseline snapshot for delta comparison. The CI gate, exit codes, suppressions, and what to commit are in [Drift Baselines & Fitness Functions](#drift-baselines--fitness-functions).
 
 ```bash
 vg baseline [path]
 ```
 
-`[path]` is the project directory to scan. It defaults to `.`. The file is always `<path>/.vibgrate/baseline.json`.
+`[path]` is the directory to scan. Leave it off to scan the current directory. The command has no `create` subcommand and no `update` subcommand.
 
-Gating, suppressions, what to commit, and a CI example: [Drift Baselines & Fitness Functions](#drift-baselines--fitness-functions).
+`vg baseline` runs a full scan and writes the artifact to `.vibgrate/baseline.json` in that directory, replacing the file when it already exists. The same run also writes `.vibgrate/scan_result.json`. Updating a baseline means running `vg baseline` again on the main branch after the upgrades you accept have landed, then committing the new `.vibgrate/baseline.json`.
 
 ---
 
@@ -351,20 +347,49 @@ No language model touches any figure in the evidence path, and every determinati
 Turn a drift scan into ranked, risk-tiered upgrade plans and **apply** the one
 you choose — bringing packages up to date with confidence.
 
-`vg fix` uses the hosted Vibgrate planner, so it needs a login: run `vg login`
-(or set `VIBGRATE_DSN`). The CLI only measures your project locally — your source
-never leaves your machine; only dependency versions and the aggregate usage
-signals the planner needs are sent.
+`vg fix` needs a DSN. The CLI checks `--dsn`, then `VIBGRATE_DSN`, then the
+DSN saved by `vg login`. It sends dependency names and versions, and aggregate
+usage signals, to the hosted planner. The signals are how widely each package
+is imported and, when the CLI can read them, which symbols those imports use.
+When available, the request also includes the repository name and commit. Your
+source stays on your machine. `--no-apply` and `--dry-run` still call the
+planner. They do not run the package manager. Applying does: it runs the
+project's own package manager, which reaches the registries that manager is
+configured to use.
 
 ```bash
-vg login                     # once, to authenticate
-vg fix                       # analyse, then choose/apply a plan
-vg fix --dry-run             # show exactly what would change, apply nothing
-vg fix --plan safe --yes     # apply a specific plan non-interactively (CI)
-vg fix --no-apply            # only print the plans
-vg fix --format json         # machine-readable report for CI or an agent (no apply)
+vg login                     # once; stores the DSN locally
+vg fix                       # plan, then choose or apply
+vg fix --format json         # machine-readable report (no apply)
 vg fix --kind patch --yes    # group and apply just the patch-level bumps
 vg fix --packages "lodash,chalk" --yes  # group and apply exactly this batch
+```
+
+**Preview, then apply.**
+
+| Step | Command | What it does |
+|---|---|---|
+| Print plans | `vg fix --no-apply` | Prints the plans. Never touches the project. |
+| Preview | `vg fix --dry-run` | Previews the plan from `--plan <tier>`. Never prompts. With several plans and no `--plan`, previews the recommended one. With only one plan that has upgrades, previews that plan. Does not run the package manager. |
+| Apply | `vg fix --yes` | Applies the recommended plan. No prompt. |
+| Apply a tier | `vg fix --plan <tier>` | Applies `safe`, `balanced`, or `aggressive`. No prompt. Add `--dry-run` to preview that tier instead. |
+
+```bash
+vg fix --no-apply
+vg fix --dry-run
+vg fix --plan balanced --dry-run
+vg fix --yes
+vg fix --plan safe --yes
+```
+
+In CI, set `VIBGRATE_DSN` from the secret store. Do not paste a token into the
+workflow, onto the command line, or into a committed env file.
+
+```yaml
+- name: Apply the low-risk plan
+  env:
+    VIBGRATE_DSN: ${{ secrets.VIBGRATE_DSN }}
+  run: vg fix --plan safe --yes
 ```
 
 **Grouping, instead of one PR per package.** `--packages` and `--kind` narrow
@@ -377,25 +402,43 @@ cross-package conflicts *within that batch* (e.g. two packages that would pin
 a shared peer dependency to incompatible ranges once bumped together) are
 still caught — a conflict blocks apply unless you pass `--force`.
 
-**Applying.** When there's more than one plan, `vg fix` shows them and asks which
-to apply; with a single plan it applies it directly. Applying runs your project's
-own package manager (pnpm/npm/yarn/bun, pip, cargo, go, composer, dotnet, dart, …)
-to pin each target version — editing the manifest and installing in one step.
-Ecosystems without a clean one-shot pin (e.g. Maven/Gradle) are reported for a
-manual edit rather than skipped silently. Changes are local and git-reversible;
-use `--dry-run` to preview, `--no-apply` to never touch the project, `--yes`/
-`--plan` for non-interactive runs. `--format json`/`md` are report-only.
+**Applying.** In text output, a single plan that contains upgrades is applied
+directly. With several plans on a terminal, `vg fix` lists them and asks which
+to apply. With several plans and no terminal, it applies nothing until you
+pass `--yes` or `--plan <tier>`. Applying runs the project's own package
+manager (pnpm, npm, yarn, bun, pip, cargo, go, composer, dotnet, dart, and
+others) to pin each target version, editing the manifest and installing in one
+step. That install reaches the registries the package manager is configured to
+use. Ecosystems without a clean one-shot pin (for example Maven or Gradle) are
+reported for a manual edit rather than skipped silently. The file changes are
+local and git-reversible. `--format json` and `--format md` print a report and
+do not apply, even with `--yes` or `--plan`.
 
-It reads the last scan artifact (`.vibgrate/scan_result.json`); if there isn't
-one it runs a drift scan first, skipping the code map. Every drifted dependency —
+It reads the last scan artifact (`.vibgrate/scan_result.json`). If that file
+is missing, or a dependency manifest or lockfile has changed since it was
+written, `vg fix` runs a drift scan first and skips the code map. That scan
+contacts package registries for current versions. Every drifted dependency —
 across all supported ecosystems (npm, PyPI, Go, Cargo, Maven/Gradle, NuGet,
 Composer, RubyGems, pub, Hex, …) — is sent to the planner, which builds three
-plans and names the categorical best one:
+plans and names the categorical best one.
 
-- **Low-risk** — patch and minor updates only, limited to lightly-used packages
+The report labels the tiers **Low-risk**, **Balanced**, and **Full**. `--plan`
+takes the tier id, not that label:
+
+| Report label | `--plan` value |
+|---|---|
+| Low-risk | `safe` |
+| Balanced | `balanced` |
+| Full | `aggressive` |
+
+Any other value is an error: `Unknown plan '<value>'. Use safe, balanced, or aggressive.`
+When two tiers list the same upgrades, the command keeps the lower-risk plan
+and accepts the other id as a name for that plan.
+
+- **Low-risk** (`safe`) — patch and minor updates only, limited to lightly-used packages
   with no breaking-change signals and no dependency conflicts.
-- **Balanced** — the low-risk set plus single, clean major upgrades.
-- **Full** — everything to latest stable, except upgrades that are mutually
+- **Balanced** (`balanced`) — the low-risk set plus single, clean major upgrades.
+- **Full** (`aggressive`) — everything to latest stable, except upgrades that are mutually
   incompatible at those versions.
 
 The analysis runs in two phases. A fast pass classifies every upgrade
@@ -410,7 +453,7 @@ Security is folded in with **real-world exploitability**. Each upgrade is checke
 against [OSV](https://vibgrate.com/glossary/osv) in both directions (advisories **remediated** vs. **introduced**), and
 current-version advisories are cross-referenced with the [**CISA KEV**](https://vibgrate.com/glossary/kev) (known-
 exploited) list and [**FIRST EPSS**](https://vibgrate.com/glossary/epss) (exploit-probability) scores. A package with a
-known-exploited advisory is treated as must-fix, so the recommendation prioritises
+known-exploited advisory is treated as must-fix, so the recommendation prioritizes
 "fix these few" over churning everything. Advisories with no upgrade path in any
 plan are called out as unresolved.
 
@@ -428,13 +471,13 @@ disruptive plan.
 | Flag | Meaning |
 |---|---|
 | `--format <text\|json\|md>` | Output format (default `text`; `json`/`md` are report-only, no apply). |
-| `--in <file>` | Scan artifact to read (default `.vibgrate/scan_result.json`, resolved against the analysed path). |
-| `--dsn <dsn>` | DSN token (or use `VIBGRATE_DSN` / `vg login`). |
+| `--in <file>` | Scan artifact to read (default `.vibgrate/scan_result.json`, resolved against the analyzed path). |
+| `--dsn <dsn>` | DSN. Checked before `VIBGRATE_DSN`, which is checked before the DSN saved by `vg login`. |
 | `--region <region>` | Override data residency region (`us`, `eu`). |
-| `--plan <tier>` | Apply a specific plan non-interactively (`safe`/`balanced`/`aggressive`). |
-| `--yes` | Apply the recommended plan without prompting. |
-| `--dry-run` | Show what would change without applying. |
-| `--no-apply` | Only print the plans; never modify the project. |
+| `--plan <tier>` | Apply `safe`, `balanced`, or `aggressive` with no prompt (report labels Low-risk, Balanced, and Full). With `--dry-run`, preview that tier instead. |
+| `--yes` | Apply the recommended plan with no prompt. |
+| `--dry-run` | Preview the `--plan` tier. Never prompts. With several plans and no `--plan`, previews the recommended one. With only one plan that has upgrades, previews that plan. Does not modify the project. |
+| `--no-apply` | Print the plans and stop. Never modifies the project. |
 | `--repository-name <name>` | Override the repository name recorded for this plan. |
 | `--packages <names>` | Plan/apply only these packages (comma-separated) — for grouping a specific batch instead of every drifted dependency. |
 | `--kind <patch\|minor\|major>` | Plan/apply only upgrades of this semver bump kind. Combine with `--packages` to target one Dependabot-style batch. |
@@ -470,34 +513,22 @@ Creates:
 
 ### vg report
 
-Render a saved scan artifact. The formats are `md`, `text`, `json`, and `html`.
-`text` is the default. `json` prints the artifact unchanged and is the only
-stable machine-readable contract. `sarif` is not a `vg report` format; write
-that with `vg scan --format sarif`.
+Read a saved scan artifact and print it. `vg report` does not run a new scan. The default format is `text`.
 
 ```bash
 vg report [--in <file>] [--format md|text|json|html]
 ```
 
-| Flag       | Default                      | Description                                                                      |
-| ---------- | ---------------------------- | -------------------------------------------------------------------------------- |
-| `--in`     | `.vibgrate/scan_result.json` | Input artifact file                                                              |
-| `--format` | `text`                       | `md`, `text`, `json`, or `html`. Any other value is a usage error (exit `5`)     |
+| Flag       | Default                      | Description                                        |
+| ---------- | ---------------------------- | -------------------------------------------------- |
+| `--in`     | `.vibgrate/scan_result.json` | Input artifact file                                |
+| `--format` | `text`                       | Output format: `md`, `text`, `json`, or `html`     |
 
-An unknown value is rejected before the file is read. The process exits `5`,
-writes nothing to stdout, and prints one stderr line that names the value and
-lists the valid ones:
+`--format` accepts `md`, `text`, `json`, and `html`. Any other value is a usage error (exit code `5`). The message names the value you passed and lists the valid ones. Stdout stays empty.
 
-```text
-error: unknown --format "sarif" (expected md, text, json, html)
-```
+`md`, `text`, and `json` are unchanged. `json` prints the scan artifact. `md` and `text` are the human-readable reports.
 
-The comparison is exact. `HTML`, `sarif`, and `md ` are unknown. Omitting
-`--format` stays on `text`.
-
-`md`, `text`, and `json` are unchanged. `html` writes one self-contained page
-from that same artifact. It does not call the network and does not load
-external files. The page opens with a summary:
+`html` writes one self-contained page from that same artifact. It does not call the network and does not load external files. The page opens with a summary:
 
 - DriftScore and the four component scores. A missing score is `n/a`. A measured `0` stays `0`.
 - Counts by severity for vulnerability findings and for security findings. A check that did not run stays "Not scanned" rather than a row of zeros. A check that finished with nothing to report shows zeros.
@@ -512,91 +543,76 @@ The same artifact always produces the same page. Save it with a shell redirect:
 vg report --format html > report.html
 ```
 
-#### Report format coverage
-
-`--format md` is `formatMarkdown` (`src/reporting/formatters/markdown.ts`).
-`--format text` is `formatText` (`src/reporting/formatters/text.ts`).
-`--format html` is `formatHtmlReport` (`src/reporting/formatters/html.ts`).
-All three read the same artifact. A section below is omitted when its guard is
-false. Lists follow artifact order except where a sort is named. Colours in the
-text report are terminal styling; under `NO_COLOR` the same words are plain. A
-null score is `n/a` in the human formats. A measured `0` stays `0`.
-
 The same artifact, four formats:
 
 ```bash
-vg report --in .vibgrate/scan_result.json --format md
 vg report --in .vibgrate/scan_result.json --format text
+vg report --in .vibgrate/scan_result.json --format md
 vg report --in .vibgrate/scan_result.json --format json
 vg report --in .vibgrate/scan_result.json --format html
 ```
 
+#### What each report format contains
+
+`json` prints the scan artifact unchanged: the object read from `--in`, serialized with two-space indentation. No fields are added or removed. It is the only stable machine-readable contract. `md`, `text`, and `html` are for people to read.
+
+A missing score is `n/a` in the human formats. A measured `0` stays `0`.
+
 ##### Markdown (`formatMarkdown`)
 
-Always:
+`vg report --format md` always prints:
 
-| Section | Fields |
-| --- | --- |
-| Title | `# Vibgrate Drift Report` |
-| Metrics table | **DriftScore** — `n/a`, or `{drift.score}/100` plus `_(lower is better; 0 = no drift)_`. **Risk Level** — `drift.riskLevel` uppercased, or `n/a` when it is missing. **Projects** — `projects.length`. **Scanned** — `timestamp`; when set, `durationMs` as seconds with one decimal, `filesScanned` as `{n} files`, and `treeSummary` as `{totalFiles} workspace files · {totalDirs} dirs`. **VCS** — `vcs.type`, only when `vcs` is set. **Branch** — `vcs.branch`, when set. **Commit** — `` `vcs.shortSha` ``, only when `vcs.sha` is set |
-| Score Breakdown | `drift.components.runtimeScore`, `frameworkScore`, `dependencyScore`, `eolScore` |
-| Projects | One `### {name} ({type})` per project. **Runtime**, when `runtime` is set: the runtime, then ` — {runtimeMajorsBehind} major(s) behind` when that count is greater than 0, otherwise ` — current`. **Frameworks**, when the list is non-empty: `name`, `currentVersion` or `?`, `latestVersion` or `?`, and `majorsBehind` as `current` (`0`), `{n} behind`, or `unknown` (`null`). **Dependencies**, when `current + oneBehind + twoPlusBehind + unknown` is greater than 0: those four `dependencyAgeBuckets` counts |
+- A title, `# Vibgrate Drift Report`.
+- A summary table with columns **Metric** and **Value**:
+  - **DriftScore** — `n/a` when `drift.score` is null, otherwise `{score}/100` with the note that lower is better and `0` means no drift.
+  - **Risk Level** — `drift.riskLevel` in uppercase, or `n/a` when it is absent.
+  - **Projects** — `projects.length`.
+  - **Scanned** — `timestamp`, then `{durationMs / 1000}` seconds to one decimal when `durationMs` is set, then `{filesScanned} files` when `filesScanned` is set, then `{treeSummary.totalFiles} workspace files · {treeSummary.totalDirs} dirs` when `treeSummary` is set. Parts are joined with ` · `.
+  - **VCS** — `vcs.type`, when `vcs` is set.
+  - **Branch** — `vcs.branch`, when it is set.
+  - **Commit** — `` `vcs.shortSha` ``, when `vcs.sha` is set.
+- `## Score Breakdown`, a table with columns **Component** and **Score**: **Runtime** (`drift.components.runtimeScore`), **Frameworks** (`frameworkScore`), **Dependencies** (`dependencyScore`), **EOL Risk** (`eolScore`).
+- `## Projects`, then one `### {name} ({type})` per project:
+  - **Runtime** when `runtime` is set: `{runtime} — {runtimeMajorsBehind} major(s) behind` when that count is greater than 0, otherwise `{runtime} — current`.
+  - **Frameworks** when `frameworks` is non-empty. Each row is `{name}: {currentVersion or ?} → {latestVersion or ?} ({lag})`. `lag` is `current` when `majorsBehind` is 0, `{n} behind` when it is a positive number, and `unknown` when it is null.
+  - **Dependencies** when any age bucket is non-zero: `{current} current, {oneBehind} 1-behind, {twoPlusBehind} 2+ behind, {unknown} unknown`.
 
-When the artifact carries the data:
+These sections are printed only when the artifact has the data:
 
-| Section | Guard and fields |
-| --- | --- |
-| Product Purpose Signals | `extended.uiPurpose`. **Frameworks** — `detectedFrameworks`, or `unknown`. **Evidence Items** — `topEvidence.length`, plus `(capped from {evidenceCount})` when `capped` is set. **Top Evidence** — the first 10 of `topEvidence`: `kind`, `value`, `file`. **Unknowns** — the first 5 of `unknownSignals` |
-| Recommended Standards | `extended.standards.recommended` is non-empty. **Detected purpose** — `projectPurposes` as `{project} → {category}`, when that list is non-empty. **Compliance framework coverage** — `frameworks`: `name`, `recommendedMembers`, `totalMembers`. **Top standards to consider** — the first 10 of `recommended`: `name`, `reason`, and `_(compliance)_` when `complianceRelevant` is set |
-| Findings | `findings` is non-empty. Table of `level` (error, warning, or anything else), `ruleId`, the stored `message`, and `location` |
-| Drift Delta | `delta` is set. The signed number, `vs baseline`, and `_(worsened)_` when positive, `_(improved)_` when negative, or neither when zero |
-| Baseline suppressions | `baselineComparison.compared` is true. `{n} finding suppressed by baseline` or `{n} findings suppressed by baseline`, where `n` is `baselineComparison.suppressed.length` |
+- `## Product Purpose Signals` when `extended.uiPurpose` is set. Fields: **Frameworks** (`detectedFrameworks`, or `unknown`), **Evidence Items** (the length of `topEvidence`, plus `capped from {evidenceCount}` when `capped` is true), **Top Evidence** (up to 10 rows, `[kind] value (file)`), **Unknowns** (up to 5 `unknownSignals`).
+- `## Recommended Standards` when `extended.standards.recommended` is non-empty. Fields: **Detected purpose** (`{project} → {category}` for each `projectPurposes` entry, omitted when that list is empty), **Compliance framework coverage** (`{name}: {recommendedMembers}/{totalMembers} member standards apply`, omitted when `frameworks` is empty), **Top standards to consider** (up to 10: `**{name}** — {reason}`, with `_(compliance)_` when `complianceRelevant` is true).
+- `## Findings` when `findings` is non-empty. Columns: **Level** (🔴 `error`, 🟡 `warning`, 🔵 otherwise, plus the level), **Rule** (`ruleId`), **Message** (`message`), **Location** (`location`).
+- `## Drift Delta` when `delta` is set: 📈 and `_(worsened)_` when the number is positive, 📉 and `_(improved)_` when it is negative, ➡️ when it is zero. The line includes the signed number and `vs baseline`.
+- The baseline sentence when `baselineComparison.compared` is set: `1 finding suppressed by baseline`, or `{n} findings suppressed by baseline`.
 
 ##### Text (`formatText`)
 
-Always, including an artifact with no projects:
+`vg report --format text` (and `vg report` with no `--format`) prints a terminal report. Color is used when the terminal allows it. Sections appear in this order:
 
-| Section | Fields |
-| --- | --- |
-| Banner | The word `vibgrate` and `Code Intelligence Engine v` plus the running CLI version. This version is not a field of the artifact |
-| Title | `Vibgrate Drift Report` |
-| DriftScore Summary | **DriftScore** — `n/a` or `{drift.score}/100`. **Risk Level** — `LOW`, `MODERATE`, or `HIGH` for `low`, `moderate`, and `high`; the raw string for any other non-empty level; `n/a` when missing. **Projects** — `projects.length`. **VCS**, when `vcs` is set — `vcs.type`, then `vcs.branch` and `vcs.shortSha` when those are set |
-| Score Breakdown | The same four component scores as Markdown, each drawn as a bar when measured |
-| Footer | `Scanned at {timestamp}`; when set, `durationMs` as seconds with one decimal, `{n} file scanned` or `{n} files scanned`, `{treeSummary.totalFiles} workspace files`, and `{treeSummary.totalDirs} dirs` |
-
-Per project, in artifact order:
-
-| Line | Guard and fields |
-| --- | --- |
-| Heading | `name`, `type`, `path` |
-| Runtime | `runtime` when set, and `runtimeMajorsBehind` as `{n} major` or `majors behind` when greater than 0, otherwise `current` |
-| Target | `targetFramework` when set |
-| Frameworks | Same version fields as Markdown (`name`, `currentVersion`, `latestVersion`, `majorsBehind`) |
-| Dependencies | The four `dependencyAgeBuckets` counts when their sum is greater than 0 |
-
-When set:
-
-| Section | Guard and fields |
-| --- | --- |
-| Drift Delta | `delta` is set. The signed number and `(vs baseline)`. Zero prints `0`. No worsened or improved word |
-| Baseline suppressions | Same sentence as Markdown, when `baselineComparison.compared` is true |
-| Tech Stack | `extended.toolingInventory` has a category with items. Category label, then each item's `name`. Labels: Frontend, Meta-frameworks, Bundlers, CSS / UI, Backend, ORM / Database, Testing, Lint & Format, API & Messaging, Observability, Payment, Auth, Email, Cloud, Databases, Messaging, CRM & Comms, Storage, Search & AI. An unlisted category key is printed as stored |
-| Services & Integrations | `extended.serviceDependencies`, same category labels. Each item's `name`, and `version` when set |
-| Breaking Change Exposure | `extended.breakingChangeExposure` has a deprecated package or a legacy polyfill. `exposureScore`, `deprecatedPackages`, `legacyPolyfills`, a peer-conflict line when `peerConflictsDetected` is set, `overallRecommendation`, and up to 3 `projectIntelligence` rows that have packages (project `project` and `recommendation`; up to 2 packages: `package`, `currentVersion`, `targetVersion`, `usage.touchedPercent`, `automatable`) |
-| TypeScript | `extended.tsModernity.typescriptVersion` is set. The version, `strict` (`strict` is omitted when it is neither true nor false), `moduleType`, and `target` |
-| Build & Deploy | `extended.buildDeploy` has CI entries, a Dockerfile, or a package manager. `ci`, Docker `dockerfileCount` and `baseImages`, `packageManagers`, `monorepoTools`, `iac` — each line only when that list or count is non-empty |
-| Product Purpose Signals | `extended.uiPurpose`. `detectedFrameworks` or `unknown`. Evidence count is `topEvidence.length`, and `of {evidenceCount} (capped)` when `capped` is set. **Top Signals** — the first 8 of `topEvidence`: `kind`, `value`, `file`. **Unknowns** — the first 4 of `unknownSignals` |
-| Security Posture | `extended.securityPosture`. `lockfilePresent`, `gitignoreCoversEnv`, `gitignoreCoversNodeModules`. `multipleLockfileTypes` and `envFilesTracked` only when true |
-| Platform | `extended.platformMatrix` has a native module or a Docker base image. `nativeModules` when non-empty. `osAssumptions` when non-empty. `dockerBaseImages` only decides whether the section exists; it is not its own line |
-| Code Quality | `extended.codeQuality`. `filesAnalyzed`, `functionsAnalyzed`, `avgCyclomaticComplexity`, `avgFunctionLength`, `maxNestingDepth`, `circularDependencies`, `deadCodePercent`. **God files** — the first 3 of `godFiles`: `path`, `lines` |
-| Database Schema | `extended.databaseSchema`. `providers`, model count, enum count. **Sources** when models use more than one `source`, sorted by source name. **Models** — the first 5 `name`s, then a remaining count |
-| Dependency Graph | `extended.dependencyGraph.lockfileType` is set. `lockfileType`, `totalUnique`, `totalInstalled`. Duplicated count when `duplicatedPackages` is non-empty. Phantom count when `phantomDependencies` is non-empty |
-| Findings | `findings` is non-empty. Counts of `error`, `warning`, and `note`. Each row is the message from `humanFindingText`, then `ruleId` and `location`, then a hint when that helper returns one. The helper drops a stored ` — no fix available` and adds `fix available (...)` from `details.fixedVersions` only when the message does not already contain `fix available` |
-| Top Priority Actions | Up to five derived lines, highest severity first. Each line has a title and an explanation; **Impact** is printed only for the runtime, framework, and dependency-rot actions. The triggers are: a runtime `runtimeMajorsBehind` of 3 or more; a framework `majorsBehind` of 3 or more; a project whose `twoPlusBehind / (current + oneBehind + twoPlusBehind)` is at least 40 percent; a framework exactly 2 majors behind; any deprecated package or legacy polyfill on `breakingChangeExposure`; 10 or more `phantomDependencies`; `securityPosture.envFilesTracked` or a missing lockfile; 3 or more `duplicatedPackages` that each have 3 or more versions. Explanations quote project `path`, runtime `runtime` / `runtimeLatest`, framework versions, dependency `package` / `resolvedVersion` or `currentSpec` / `latestStable` / `majorsBehind`, and the matching posture or graph fields |
-| Architecture Layers | `extended.architecture`. `archetype`, `archetypeConfidence`, `totalClassified`, `unclassified`. **Folders** — the first 12 of `folders`: `path`, `layer`, `confidence`, `fileCount`. **Coverage**, when set — `ratio`, `classified`, `unclassified`, and `bySource` counts sorted by count descending then source name. **Unclassified source** — `unclassifiedFiles.length` when that list is non-empty. **Unclassified by folder** — the first 8 of `unclassifiedFolders`: `count`, `path`. **Layers** with `fileCount` greater than 0: `layer`, `fileCount`, `driftScore`, `riskLevel`. **Boundary violations** — violations whose `rule` does not start with `graph-conflict:`, first 8: `fromFile`, `toFile`, `rule`. **Layer conflicts** — the `graph-conflict:` violations, first 8, same three fields. A capped violation list is marked when `violationsCapped` is set |
-| Solution Drift Summary | `solutions` is non-empty. `name`, `projectPaths.length`, and `drift.score` or `n/a` |
-
-`relationshipDiagram` is not rendered. Markdown, text, and HTML leave that diagram in the JSON artifact.
+- The wordmark and `Code Intelligence Engine v{CLI version}`.
+- The title `Vibgrate Drift Report`.
+- One block per project: `name`, `type`, and `path`. **Runtime** uses the same behind/current rule as Markdown. **Target** is `targetFramework` when it is set. **Frameworks** use the same name, current version, latest version, and lag as Markdown. **Dependencies** prints the four age buckets when any count is non-zero.
+- **Drift Delta** when `delta` is set: the signed number and `(vs baseline)`.
+- The same baseline suppression sentence as Markdown, when a comparison ran.
+- Extended sections when `extended` is set. Tech stack, services, breaking-change exposure, build and deploy, platform, and the dependency graph are skipped when their lists are empty. The others print when their object is present:
+  - **Tech Stack** — each non-empty `toolingInventory` category and the `name` of each item. Known category labels: Frontend, Meta-frameworks, Bundlers, CSS / UI, Backend, ORM / Database, Testing, Lint & Format, API & Messaging, Observability, Payment, Auth, Email, Cloud, Databases, Messaging, CRM & Comms, Storage, Search & AI. Any other key is printed as stored.
+  - **Services & Integrations** — the same category labels for `serviceDependencies`, each item's `name`, and `version` when it is set.
+  - **Breaking Change Exposure** when `deprecatedPackages` or `legacyPolyfills` is non-empty: **Exposure Score** (`exposureScore/100`), **Deprecated**, **Polyfills**, a peer-conflict line when `peerConflictsDetected` is true, **Recommendation** (`overallRecommendation`), and **Major Upgrade Intelligence** (up to 3 projects that have packages, up to 2 packages each: `project`, `recommendation`, `package`, `currentVersion`, `targetVersion`, `usage.touchedPercent`, `automatable`).
+  - **TypeScript** when `tsModernity.typescriptVersion` is set: the version, `strict` (present or absent), `moduleType`, and `target`.
+  - **Build & Deploy** when `ci`, a Dockerfile count, or `packageManagers` is non-empty: **CI**, **Docker** (`dockerfileCount` and `baseImages`), **Package Managers**, **Monorepo** (`monorepoTools`), **IaC**.
+  - **Product Purpose Signals** — **Frameworks**, **Evidence** (length of `topEvidence`, and `of {evidenceCount} (capped)` when capped), **Top Signals** (up to 8: `kind`, `value`, `file`), **Unknowns** (up to 4).
+  - **Security Posture** — lockfile present, `.env` covered by gitignore, `node_modules` covered by gitignore, multiple lockfile types, env files tracked.
+  - **Platform** when `nativeModules` or `dockerBaseImages` is non-empty: native module names, and **OS assumptions** when that list is non-empty.
+  - **Code Quality** — `filesAnalyzed`, `functionsAnalyzed`, `avgCyclomaticComplexity`, `avgFunctionLength`, `maxNestingDepth`, `circularDependencies`, `deadCodePercent`, and up to 3 **God files** (`path`, `lines`).
+  - **Database Schema** — `providers`, model count, enum count, a **Sources** tally when models come from more than one source, and up to 5 model names.
+  - **Dependency Graph** when `lockfileType` is set: lockfile type, `totalUnique`, `totalInstalled`, duplicated-package count, phantom-dependency count.
+- **Findings** when `findings` is non-empty: counts of `error`, `warning`, and `note`, then each finding. The message drops a stored `— no fix available` phrase. A hint line `fix available ({versions})` is added when `details.fixedVersions` lists versions and the message does not already say `fix available`. Each row also prints `ruleId` and `location`.
+- **Top Priority Actions**, up to 5, when any rule matches. Each action has a numbered **title**, an **explanation**, and an **Impact** line when the rule sets one. Rules, highest severity first: a runtime 3 or more majors behind; a framework 3 or more majors behind; a project whose known dependencies are at least 40% two or more majors behind; a framework exactly 2 majors behind; deprecated packages or legacy polyfills; 10 or more phantom dependencies; env files tracked in git, or no lockfile; 3 or more packages that are each installed in 3 or more versions.
+- **Architecture Layers** when `extended.architecture` is set: **Archetype** and confidence, files classified (and the unclassified count), **Folders classified** (up to 12: `path`, `layer`, confidence, `fileCount`), **Coverage** (`ratio`, classified, unclassified, and `bySource` counts), an unclassified-file sample, **Unclassified by folder** (up to 8: `count`, `path`), each layer with a non-zero file count (`layer`, `fileCount`, `driftScore`, `riskLevel`), **Boundary violations** and **Layer conflicts** (up to 8 each: `fromFile`, `toFile`, `rule`, plus a `+` when the list was capped).
+- **Solution Drift Summary** when `solutions` is non-empty: `name`, `projectPaths.length`, and `drift.score` as `{score}/100` or `n/a`.
+- **DriftScore Summary** — **DriftScore** (`n/a` or `{score}/100`), **Risk Level**, **Projects**, and **VCS** (`vcs.type`, then `branch` and `shortSha` when set).
+- **Score Breakdown** — the same four component scores as Markdown.
+- A footer: `Scanned at {timestamp}`, then duration in seconds, `{filesScanned} file(s) scanned`, workspace file count, and directory count, when those fields are set.
 
 ##### HTML (`formatHtmlReport`)
 
@@ -604,20 +620,15 @@ When set:
 
 ##### Differences
 
-- Markdown is a short table. Text is the terminal report: banner and CLI version, project `path` and `targetFramework`, the extended sections above, findings with a fix hint, derived priority actions, architecture, solutions, score bars, and the scanned-at footer.
-- Markdown prints **Recommended Standards**. Text does not.
-- Text prints Tech Stack, Services, Breaking Change Exposure, TypeScript, Build & Deploy, Security Posture, Platform, Code Quality, Database Schema, and Dependency Graph. Markdown does not.
-- Product purpose: Markdown shows 10 evidence rows and 5 unknowns (`Evidence Items`, `Top Evidence`). Text shows 8 and 4 (`Evidence`, `Top Signals`).
-- Findings: Markdown prints the stored `message` in a table. Text prints counts plus `humanFindingText` (the stored message, a removed ` — no fix available`, and the fix hint).
-- Drift delta: Markdown adds `_(worsened)_` or `_(improved)_`. Text prints the signed number only.
-- DriftScore: Markdown puts the lower-is-better gloss in the opening cell. Text puts the score in **DriftScore Summary** without that gloss.
-- VCS: Markdown uses separate VCS, Branch, and Commit rows, and Commit requires `vcs.sha`. Text uses one line and can show `shortSha` without requiring `sha`.
-- Runtime wording: Markdown always says `major(s)`. Text says `major` or `majors`.
+- Markdown leads with the summary table and score breakdown. Text prints project detail first and the DriftScore summary last.
+- Markdown includes **Recommended Standards**. Text includes the extended inventory (tech stack through dependency graph), **Top Priority Actions**, **Architecture Layers**, and **Solution Drift Summary**.
+- Text prints each project's `path` and `targetFramework`. Markdown prints the project name and type.
+- Text findings rewrite the message and can add a `fix available` hint. Markdown prints `message` as stored.
+- Text purpose signals show up to 8 evidence rows and 4 unknowns. Markdown shows up to 10 and 5.
+- Markdown's drift-delta line adds worsened or improved. Text prints the signed number and `(vs baseline)`.
+- Markdown's commit cell is present when `vcs.sha` is set and shows `shortSha`. Text's VCS line shows `shortSha` when that field is set.
+- Relationship diagrams stay on the JSON artifact. Markdown, text, and HTML leave them there.
 - HTML is the browser page: the summary above, then the vulnerability, security, and other-finding tables, then a collapsed advisory-data footer. A Fix available only checkbox starts unchecked and can hide findings that do not name a fix version. The page file still lists every finding. It does not print Markdown's recommended-standards section or the text inventory. Text's closing line is the scan time and file counts. Markdown has no advisory-source line.
-
-##### JSON
-
-`--format json` prints `JSON.stringify` of the loaded artifact with a two-space indent. Keys, values, and omissions are unchanged. Parse this when a script needs a field. Markdown, text, and HTML drop fields, cap lists, and add derived lines; they are not a stable contract.
 
 ---
 
@@ -2187,7 +2198,7 @@ vg scan [path] [--vulns] [--full] [--iac] [--format text|json|sarif|md] [--out <
 | `--out <file>` | — | Write output to a file |
 | `--junit <file>` | — | Also write a deterministic JUnit XML report of findings and gates. See [JUnit](#junit). Does not replace `--format` |
 | `--fail-on <level>` | — | Exit with code 2 if findings at this level exist. `warn` / `error` gate on drift findings. `architecture-finding` (hard boundary violations) and `architecture-warning` (violations and warnings) gate on the architecture module's boundary findings, judged under the policy pack in force — `hexagonal-v1` unless `.vibgrate/architecture.toml`, `VIBGRATE_ARCHITECTURE_POLICY` or `vg build --policy` says `layered-v1`. The output names the pack whether the gate passes or fails; each failing row is `file:line  symbol  violation: … (rule)`. Pick the pack before turning this on: see [Architecture policy packs](./docs/architecture-policies.md) |
-| `--baseline <file>` | — | Compare against a previous baseline. JSON records matching findings in `baselineComparison` (rule, location, and id, sorted). Text prints the count. SARIF lists the same ids as suppressions. Those findings stay in the report and still count toward `--fail-on`. See [Drift Baselines & Fitness Functions](#drift-baselines--fitness-functions) |
+| `--baseline <file>` | — | Compare against a previous baseline. JSON records matching findings in `baselineComparison` (rule, location, and id, sorted). Text prints the count. SARIF lists the same ids as suppressions. Those findings stay in the report |
 | `--changed-only` | — | Only scan changed files |
 | `--concurrency <n>` | `8` | Max concurrent npm registry calls |
 | `--drift-budget <score>` | — | Fitness gate: fail if drift score is above this budget |
@@ -4019,7 +4030,49 @@ The server exposes read-only tools your assistant can call over the code map and
 - `upgrade_impact` — what an upgrade will cost: version distance, how many files import the package, the vulnerabilities it fixes, and — with `changelog: true` — online breaking-change notes between your version and the latest.
 - `resolve_library`, `library_docs` — version-correct, drift-annotated library docs.
 
-All tools are read-only. The server is local-first: it always answers from your machine when it can, and its only network touches are the embedder's one-time model fetch, `upgrade_impact`'s `changelog`, and `library_docs`' fall-through to the hosted catalog when the local docs for a library are thin or missing. `--offline` is the hard airgap — it disables all three.
+All tools are read-only. The server is local-first: it always answers from your machine when it can, and its only network touches are the embedder's one-time model fetch, `upgrade_impact` with `changelog: true`, and `library_docs`' fall-through to the hosted catalog when the local docs for a library are thin or missing. `--offline` disables all three. `--local` implies `--offline`, so it disables them too.
+
+#### Serving over HTTP
+
+Pass `--http` to serve the same read-only server over stateless streamable HTTP. `--host` defaults to `127.0.0.1` and `--port` defaults to `7437`.
+
+```bash
+vg serve --http
+```
+
+Only `/mcp` is served. Any other path returns 404.
+
+Each request gets a fresh MCP server. The transport keeps no session, so `--dedup` only accumulates over stdio. On HTTP it starts over for every request.
+
+**Origin check.** A request with no `Origin` header is allowed. Command-line clients do not send one. A browser `Origin` must be loopback (`localhost`, an address in `127.0.0.0/8`, or `[::1]`) or listed in `VIBGRATE_ALLOWED_ORIGINS`. That variable is a comma-separated list of origins. `*` allows every origin, and it is an explicit escape hatch, never the default. Any other `Origin`, including an unparsable value such as `null`, returns 403.
+
+With `vg serve --http` running, a non-loopback Origin is rejected:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -H 'Origin: https://example.com' http://127.0.0.1:7437/mcp
+```
+
+That prints `403`.
+
+**No authentication.** The endpoint does not check a key or a token. Binding `--host` to an address other than loopback exposes the read-only code map to anyone who can reach that address. Leave the default `127.0.0.1` bind. For a client on another machine, forward the port with an SSH tunnel and keep the client on `http://127.0.0.1:7437/mcp`:
+
+```bash
+ssh -N -L 7437:127.0.0.1:7437 you@your-host
+```
+
+**Network.** The HTTP server has the same network boundary as stdio. The only network touches are the embedder's one-time model fetch, `upgrade_impact` with `changelog: true`, and `library_docs` falling through to the hosted catalog when the local docs for a library are thin or missing. `--offline` disables all three. `--local` implies `--offline`, so it disables them too.
+
+Point an MCP client at the endpoint:
+
+```json
+{
+  "mcpServers": {
+    "vg": {
+      "url": "http://127.0.0.1:7437/mcp"
+    }
+  }
+}
+```
 
 ---
 
@@ -4775,106 +4828,98 @@ Exit non-zero from `verify` when the production gate is not ready (so CI can blo
 
 ## Drift Baselines & Fitness Functions
 
-`vg baseline [path]` is one command. There is no `create` or `update` subcommand. `[path]` is the directory to scan (default `.`). The command runs a full scan and writes the scan artifact to `<path>/.vibgrate/baseline.json`, replacing the file when it already exists. Run that same command again after planned upgrades land on the main branch. That second run is the refresh.
+A drift baseline is a saved scan. Later scans compare DriftScore and findings against that file. [`vg baseline`](#vg-baseline) is the command that writes it, and the same command is how you replace it. There is no `vg baseline create` and no `vg baseline update`.
 
-The file is a full scan artifact: scores, findings, and VCS metadata (commit, branch, and remote URL). Userinfo and credential query parameters are stripped from the remote URL before it is stored. `timestamp` and `durationMs` change on every run, so a refresh rewrites the file even when the score is unchanged. See [JSON Artifact](#json-artifact).
+`[path]` is the directory to scan. Leave it off to scan the current directory. The snapshot is always `.vibgrate/baseline.json` inside that directory. The command runs a full scan and overwrites that file. It also writes `.vibgrate/scan_result.json`.
 
-Other files under `.vibgrate/`:
+Save the baseline on the main branch, from a scan you accept. When planned upgrades land on that branch, run `vg baseline` again and commit the new file. That is the update.
 
-- `.vibgrate/scan_result.json`: latest scan artifact
-- `.vibgrate/baseline.json`: the snapshot `vg baseline` wrote
-- `<project>/.vibgrate/project_score.json`: per-project score snapshots
+```bash
+vg baseline
+```
 
-### Record and refresh
+```bash
+vg scan --baseline .vibgrate/baseline.json --drift-budget 40 --drift-worsening 5 --fail-on error
+```
 
-1. On the main branch, record the snapshot:
-   ```bash
-   vg baseline
-   ```
-2. In CI, compare the pull request with that file and apply the gates:
-   ```bash
-   vg scan --baseline .vibgrate/baseline.json --drift-budget 40 --drift-worsening 5 --fail-on error
-   ```
-3. When planned upgrades land on the main branch, run `vg baseline` again and commit the new file.
+### CI gate
 
-### CI gates
+`--drift-budget` fails when the measured DriftScore is above the number you pass. A score equal to the budget passes. `--drift-worsening` fails when the score rose by more than that percent of the baseline score. A rise equal to the percent passes. A score that fell, or did not change, passes.
 
-A failed gate exits `2` (`GATE_FAILED`). See [Exit Codes](#exit-codes).
+The percent is `delta / max(|baseline score|, 0.0001) * 100`. Only a rise (`delta` > 0) is compared. `delta` is the current score minus the baseline score. Both flags take a non-negative number. A negative value, or a value that is not a number, stops the command before the scan. The exit code is `1`. The error line is `error: --drift-budget must be a non-negative number.` (or `--drift-worsening`, for that flag).
 
-| Gate | Exit `2` | Stays successful for this gate |
-| --- | --- | --- |
-| `--drift-budget <score>` | The measured DriftScore is above the budget. A score equal to the budget passes | An unmeasured score (`null`) is not compared. The message is `DriftScore is absent; --drift-budget <score> was not compared.` |
-| `--drift-worsening <percent>` | Worsening versus the baseline is above the percent. A measured score with no numeric `delta` also fails | Worsening equal to the percent, or `delta` ≤ 0. An unmeasured score is not compared. The message is `DriftScore is absent; --drift-worsening was not compared.` |
-| `--fail-on error` | Any finding at level `error`, including one the baseline already recorded | Warnings and notes |
-| `--fail-on warn` | Any finding at level `warning` or `error`, including one the baseline already recorded | Notes |
+Passing either flag ignores [`driftBudget`](#drift-budget) in the project config. That block has warn, enforce, and shadow modes. The flags do not: a breach exits `2`.
 
-An unmeasured DriftScore is `null`, not `0`. It skips both `--drift-budget` and `--drift-worsening`, and those two flags then leave the process exit code unchanged. `--fail-on` still applies to findings.
+`--fail-on error` is a separate gate on finding level. It runs before the two score flags. An error-level finding exits before the budget line is printed. `--fail-on warn` fails on a warning or an error.
 
-`delta` is set only when `--baseline` names a readable file, this scan's DriftScore is a number, and the baseline DriftScore is a number. With `--drift-worsening` set, a measured score and no `delta` exits `2`: `Failing fitness function: --drift-worsening requires --baseline to compare against previous drift.` That covers a missing `--baseline` flag, a missing or unreadable file, and a baseline whose score was not measured.
+| Situation | Exit |
+| --- | --- |
+| `--drift-budget 40`, DriftScore above 40 | `2` |
+| `--drift-budget 40`, DriftScore equal to 40 or lower | `0` |
+| `--drift-budget` or `--drift-worsening`, DriftScore not measured | `0` |
+| `--drift-worsening 5`, score measured, no numeric `delta` | `2` |
+| `--drift-worsening 5`, rise above 5% | `2` |
+| `--drift-worsening 5`, rise of 5% or less, or the score did not rise | `0` |
+| `--fail-on error`, at least one error-level finding | `2` |
+| `--fail-on warn`, at least one warning or error finding | `2` |
 
-With `--drift-budget` or `--drift-worsening` on the command line, the scan judges those flags. `driftBudget` in the project config is applied only when neither flag is set. A config `maxWorseningPercent` with no baseline is reported as not evaluated, and it does not fail the scan.
+Exit `2` is `GATE_FAILED`. See [Exit Codes](#exit-codes).
 
-JUnit `gates` cases follow the same rules. A breach is `<failure>`. An unmeasured score is `<skipped>`. `--drift-worsening` with a measured score and no baseline delta is `<failure>`. A config worsening limit with no baseline, and a warn-mode or shadow breach, are `<skipped>`. See [JUnit](#junit).
+An unmeasured score is absent. It is not compared, and it is not treated as 0. The command prints `DriftScore is absent; --drift-budget <n> was not compared.` or `DriftScore is absent; --drift-worsening was not compared.` and exits `0`. A measured 0 is a real score and is compared. `vg baseline` prints `Baseline score: n/a` when the snapshot's score is null. In JSON the score is `null`; in text it is `n/a`.
 
-### Suppressions
+"No numeric `delta`" means the scan could not subtract a baseline score. That happens when `--baseline` was omitted, the file is missing, the file could not be read, or the baseline DriftScore is not a number. A file that exists but cannot be read prints `Warning: Could not read baseline file:` and the path. With a measured score, `--drift-worsening` then prints `Failing fitness function: --drift-worsening requires --baseline to compare against previous drift.` and exits `2`. `--drift-budget` still compares the current score when there is no `delta`. A missing baseline file does not by itself fail `--drift-budget`.
 
-With `--baseline`, a finding that already appears in the snapshot — the same rule at the same location — stays in `findings`. The scan adds `baselineComparison` on the same document:
-
-- `compared` is `true` when the baseline file was read
-- `suppressed` is sorted by rule, then location, then id
-- each `id` is the first 32 hexadecimal characters of the SHA-256 of that rule and location
-
-The text report prints the count (`1 finding suppressed by baseline`, or `N findings suppressed by baseline`), including when the count is zero. SARIF keeps the result and adds a suppression (`kind: external`, `status: accepted`, justification `Matches the drift baseline`) that cites the same id.
-
-Baselined findings still count toward `--fail-on`. The exit path reads `findings` and does not skip ids listed in `baselineComparison`. An error that the baseline already recorded still fails `--fail-on error` with exit `2`. The suppression is the audit record in JSON, text, and SARIF.
-
-A row that exists only in the baseline is omitted. Nothing in the current scan was suppressed for it.
-
-### What to commit
-
-Commit `.vibgrate/baseline.json` on the main branch after you have read it, or produce that file as a CI artifact from the main branch and restore it in the gate job. The [example](#ci-example) checks the committed file out with the repository.
-
-Leave tokens, a DSN, and `~/.vibgrate/credentials.json` out of the repository. `vg baseline` has no `--dsn` flag. A `VIBGRATE_DSN` value in the environment is still read, and the workspace id is folded into project and solution ids. The DSN string itself is not written into the file. Unset `VIBGRATE_DSN` before you record a snapshot you will commit, and review the file: it holds findings and VCS metadata. `.vibgrate/scan_result.json` is the latest run, not the accepted snapshot.
-
-### CI example
-
-One job. Checkout brings the committed `.vibgrate/baseline.json`. The scan writes `vibgrate.sarif` before a failing gate exits, and the last step stores that file as a workflow artifact. The job sets no DSN and does not send the file to code scanning.
+The budget flag is checked first, then worsening. The first failure exits `2`, so a budget breach is the line you see when both would fail. With `--junit`, the XML is written and then the process exits `2`. See [JUnit](#junit).
 
 ```yaml
-name: Drift baseline
-
+name: Drift gate
 on:
   pull_request:
-
-permissions:
-  contents: read
-
 jobs:
   drift:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
-
-      - name: Drift gate
-        run: npx @vibgrate/cli scan --baseline .vibgrate/baseline.json --drift-budget 40 --drift-worsening 5 --fail-on error --format sarif --out vibgrate.sarif
-
-      - name: Save SARIF artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: vibgrate-sarif
-          path: vibgrate.sarif
+      - name: Gate on the committed baseline
+        run: npx @vibgrate/cli scan --baseline .vibgrate/baseline.json --drift-budget 40 --drift-worsening 5 --fail-on error
 ```
 
-Exit `2` fails the Drift gate step. Leave `continue-on-error` unset on that step. `if: always()` keeps `vibgrate.sarif` when the gate fails. Pin the CLI calendar version on a gate you keep; see `examples/github-actions/README.md`.
+Exit `2` fails the job. Leave `continue-on-error` off that step. Copy-paste workflows with SARIF upload are in [CI Integration](#ci-integration) and `examples/github-actions/`.
+
+### Baseline suppressions
+
+`vg scan --baseline` still records `delta` for the DriftScore comparison above. It also records findings that already appear in the snapshot — the same rule at the same location — on the scan document as `baselineComparison`.
+
+| Field | Meaning |
+| --- | --- |
+| `compared` | `true` when a baseline file was read |
+| `suppressedCount` | How many current findings matched |
+| `suppressed` | One record per match: `ruleId`, `location`, and `id`, sorted by rule, then location, then id |
+
+`id` is 32 lowercase hex characters, stable for that rule and location. The finding message is not part of it. Findings that exist only in the baseline are not listed. The field is omitted when no baseline file was read. Omitted is not a count of zero.
+
+The text report and the Markdown report print `1 finding suppressed by baseline`, or `N findings suppressed by baseline` (including `0` when a file was read and nothing matched). SARIF keeps each matched result and adds a suppression (`kind: external`, `status: accepted`, justification `Matches the drift baseline`) that cites the same id. The findings stay in `findings` and in the report.
+
+That record does not change the process exit code. `--fail-on error` and `--fail-on warn` still count a matched finding, so an error that was already in the baseline still exits `2` under `--fail-on error`. `--drift-budget` and `--drift-worsening` look at the score and `delta`. They do not read `baselineComparison`.
+
+### What to commit
+
+| Path | Commit |
+| --- | --- |
+| `.vibgrate/baseline.json` | Yes. CI reads this file. Replace it by running `vg baseline` on the main branch after accepted upgrades, then commit the new file. |
+| `.vibgrate/scan_result.json` | No. Every scan rewrites it, including `vg baseline`. It carries a timestamp and a duration. |
+| `.vibgrate/project_scores.json` | No. One file of per-project scores, written when a project has a drift result. |
+
+The `.vibgrate/.gitignore` that `vg` writes for local graph artifacts does not list `baseline.json`, `scan_result.json`, or `project_scores.json`. Add `scan_result.json` and `project_scores.json` there if you do not want the latest scan in git. `vg` leaves that file alone when its first line is not the `Created by vg` header. `vg baseline` does not create the ignore file.
+
+Do not commit secrets. The baseline file does not contain the workspace DSN. A git remote URL is stored only after userinfo and credential query parameters are removed. Keep these out of the repository:
+
+- a DSN (`VIBGRATE_DSN`, `~/.vibgrate/credentials.json`, or a file from `vg dsn create --write`)
+- `.env` files
+- the signing private key at `.vibgrate/attest-key.pem`
 
 ## DriftScore
 
@@ -5126,7 +5171,7 @@ A finding is a `<failure>` only when its level fails the drift gate you set. Any
 | `warning` | skipped | failure | skipped |
 | `note` | skipped | skipped | skipped |
 
-Budget cases follow the same exit rules as the CLI. A `--drift-budget` breach, or an enforced `driftBudget` breach, is a `<failure>`. An unmeasured score is `<skipped>` and does not fail `--drift-budget` or `--drift-worsening`. `--drift-worsening` with a measured score and no baseline delta is a `<failure>`, and the process exits `2`. A config `maxWorseningPercent` with no baseline, and a warn-mode or shadow breach, are `<skipped>` and do not fail the scan. Flag and config rules: [Drift Baselines & Fitness Functions](#drift-baselines--fitness-functions). Every requested gate is included, including gates after the one that stopped the process. The confirmation line goes to stderr, so `--format json` on stdout stays intact. See [Exit Codes](#exit-codes): the XML is written, then the process exits `2` when a gate fails. SARIF stays the code-scanning artifact; see [SARIF](#sarif).
+Budget cases follow the same exit rules as the CLI. `--drift-budget` / an enforced `driftBudget` breach is a `<failure>`. A score that was not measured, a worsening limit with no `--baseline`, and a warn-mode or shadow breach are `<skipped>` — they do not fail the scan. Every requested gate is included, including gates after the one that stopped the process. The confirmation line goes to stderr, so `--format json` on stdout stays intact. See [Exit Codes](#exit-codes): the XML is written, then the process exits `2` when a gate fails. SARIF stays the code-scanning artifact; see [SARIF](#sarif).
 
 ```bash
 vg scan --format sarif --out vibgrate.sarif --junit vibgrate.junit.xml --fail-on error --drift-budget 40
@@ -5938,7 +5983,9 @@ When the same code and the same reason apply to more than one file, stderr print
 
 `vg build --json` keeps `warnings` as strings and adds `codedWarnings`: an array of `{ code, message }` in that same order. Each string in `warnings` ends with ` [CODE]`. `codedWarnings` is left out when there are no warnings.
 
-`vg scan --format json` adds `degradations` when a path was skipped, a symlink was not followed, a baseline file could not be read, or the root `package.json` omitted `name` or `version`. The field is left out when there are none. `vg report` prints those same rows.
+`vg scan --format json` adds `degradations` when a path was skipped, a symlink was not followed, paths were auto-excluded after a timeout, a baseline file could not be read, or the root `package.json` omitted `name` or `version`. The field is left out when there are none. `vg report` prints those same rows. SARIF output carries the same rows as tool notifications.
+
+`vg scan --format json` also adds `excluded`, the list of exclude patterns in force. Each entry has a `pattern` and a `source` of `config`, `cli`, or `auto`. The field is left out when nothing was excluded. Only auto-excluded patterns raise `VG_WARN_SCAN_PATHS_EXCLUDED`, because they were applied without anyone asking for them on this run. They are listed in `.vibgrate/auto-excludes.json`.
 
 `vg sbom export` prints the code on stderr. CycloneDX adds a `vibgrate:warningCode` property next to the existing warning property. SPDX adds an annotation whose comment is `warningCode=VG_WARN_…`. The warning sentences already stored on the document stay as they are.
 
@@ -5962,6 +6009,7 @@ A truncated or invalid lockfile stops the command. Warning codes cover condition
 | `VG_WARN_WORKFLOW_STEP_CAP` | `vg build` | A workflow job listed more steps than the extractor enumerates. |
 | `VG_WARN_SCAN_PATH_SKIPPED` | `vg scan` | A scan path timed out and was skipped. |
 | `VG_WARN_SCAN_FILE_OVERSIZE` | `vg scan` | A scan file exceeded the size cap and was skipped. |
+| `VG_WARN_SCAN_PATHS_EXCLUDED` | `vg scan` | Paths were left out of the scan by exclude patterns, including paths auto-excluded after a timeout, so results cover only part of the repository. |
 | `VG_WARN_SYMLINK_SKIPPED` | `vg build`, `vg scan` | A walk skipped one or more symlinks and did not follow them. One warning names the links. |
 | `VG_WARN_BASELINE_UNREADABLE` | `vg scan` | A baseline file could not be read. The scan continues without a comparison. |
 | `VG_WARN_LICENSE_UNPARSEABLE` | `vg scan`, `vg sbom` | A declared license string could not be resolved to SPDX. |

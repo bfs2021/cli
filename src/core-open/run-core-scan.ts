@@ -36,7 +36,7 @@ import { compareBaselineFindings } from './baseline-suppressions.js';
 import { formatText } from './formatters/text.js';
 import { formatSarif } from './formatters/sarif.js';
 import { formatMarkdown } from './formatters/markdown.js';
-import { loadConfig, appendExcludePatterns } from './config.js';
+import { loadConfig, appendExcludePatterns, readAutoExcludes, classifyExcludes, excludedPathsWarning } from './config.js';
 import { pathExists, readJsonFile, writeJsonFile, writeTextFile, ensureDir, FileCache, quickTreeCount } from './utils/fs.js';
 import { formatNonTextWarning } from './utils/text-bytes.js';
 import { portableValue } from './utils/portable-path.js';
@@ -50,7 +50,7 @@ import { parseDsn } from './utils/dsn.js';
 import { loadPackageVersionManifest } from './package-version-manifest.js';
 import { generateWorkspaceRelationshipMermaid, generateProjectRelationshipMermaid, generateSolutionRelationshipMermaid } from './utils/mermaid.js';
 import { classifyProject, summarizeBilling } from './scanners/project-classification.js';
-import { collectVulnTargets, scanVulnerabilities, generateVulnerabilityFindings } from './scanners/vulnerability-scanner.js';
+import { collectVulnTargets, loadNpmLockGraphs, scanVulnerabilities, generateVulnerabilityFindings } from './scanners/vulnerability-scanner.js';
 import { findingsForDisplay, orderScanArtifactForEmit } from './findings-order.js';
 import { attributeVulnerabilities } from './scoring/vuln-attribution.js';
 import { gitHistoryAvailable, workingTreeDirty } from './utils/git-history.js';
@@ -193,6 +193,8 @@ export async function runCoreScan(
   // (--exclude). CLI patterns are additive and de-duplicated.
   const excludePatterns = [...new Set([...(config.exclude ?? []), ...(opts.exclude ?? [])])];
   fileCache.setExcludePatterns(excludePatterns);
+  // Record what was left out and why, so the results are never read as covering the whole repo.
+  const exclusions = classifyExcludes(config.exclude, opts.exclude, await readAutoExcludes(rootDir));
   const projectScanTimeoutMs = ((opts.projectScanTimeout ?? config.projectScanTimeout ?? 180) * 1000);
   fileCache.setMaxFileSize(config.maxFileSizeToScan ?? 5_242_880);
   fileCache.setProjectScanTimeout(projectScanTimeoutMs);
@@ -707,7 +709,14 @@ export async function runCoreScan(
   if (opts.vulns) {
     progress.insertStepBefore('drift', { id: 'vulns', label: 'Scanning for vulnerabilities', weight: 3 });
     progress.startStep('vulns');
-    const targets = collectVulnTargets(allProjects);
+    // A manifest lists only direct dependencies; the lockfile resolves the whole tree, so the
+    // packages a dependency pulls in are checked too (they are where most advisories live).
+    const lockGraphs = await loadNpmLockGraphs(rootDir, allProjects, {
+      exists: (p) => fileCache.pathExists(p),
+      readText: (p) => fileCache.readTextFile(p),
+      readJson: <T>(p: string) => fileCache.readJsonFile<T>(p),
+    });
+    const targets = collectVulnTargets(allProjects, { lockGraphs });
     const vulnerabilities = await scanVulnerabilities(targets, { sem, offline: offlineMode, manifest: packageManifest });
     // Attribute exposure to introducing commits via git history. Best-effort:
     // skipped silently when git history is unavailable. We also run it when a
@@ -729,10 +738,11 @@ export async function runCoreScan(
     }
     vulnFindings = generateVulnerabilityFindings(vulnerabilities);
     const affected = vulnerabilities.packages.length;
+    const transitiveAffected = vulnerabilities.packages.filter((p) => p.transitive).length;
     progress.completeStep(
       'vulns',
       affected > 0
-        ? `${vulnerabilities.totalAdvisories} advisor${vulnerabilities.totalAdvisories === 1 ? 'y' : 'ies'} across ${affected} package${affected === 1 ? '' : 's'}`
+        ? `${vulnerabilities.totalAdvisories} advisor${vulnerabilities.totalAdvisories === 1 ? 'y' : 'ies'} across ${affected} package${affected === 1 ? '' : 's'}${transitiveAffected > 0 ? ` (${transitiveAffected} transitive)` : ''}`
         // Distinguish "OSV unreachable" from a clean result so an empty answer is
         // never read as "no vulnerabilities" (GUARDRAILS §1.4 — absent ≠ zero).
         : vulnerabilities.source === 'unreachable'
@@ -788,6 +798,8 @@ export async function runCoreScan(
   if (rootIdentityWarning) {
     degradations.push(codedWarning(WARNING_CODES.ROOT_PACKAGE_IDENTITY, rootIdentityWarning));
   }
+  const excludedWarning = excludedPathsWarning(exclusions);
+  if (excludedWarning) degradations.push(excludedWarning);
   const stuckPaths = [...fileCache.stuckPaths].sort(compareCodeUnits);
   const skippedLarge = [...fileCache.skippedLargeFiles].sort(compareCodeUnits);
   const timeoutSeconds = Math.round(projectScanTimeoutMs / 1000);
@@ -821,13 +833,13 @@ export async function runCoreScan(
     }
   }
 
+  const symlinkWarning = skippedSymlinkWarning(fileCache.skippedSymlinks);
+  if (symlinkWarning) degradations.push(symlinkWarning);
+
   const nonTextMessage = formatNonTextWarning(fileCache.skippedNonTextFiles);
   if (nonTextMessage) {
     degradations.push(codedWarning(WARNING_CODES.NON_TEXT_FILE, nonTextMessage));
   }
-
-  const symlinkWarning = skippedSymlinkWarning(fileCache.skippedSymlinks);
-  if (symlinkWarning) degradations.push(symlinkWarning);
 
   fileCache.clear();
 
@@ -853,6 +865,7 @@ export async function runCoreScan(
     drift,
     findings,
     ...(Object.keys(extended).length > 0 ? { extended } : {}),
+    ...(exclusions.length > 0 ? { excluded: exclusions } : {}),
     durationMs,
     filesScanned,
     treeSummary: treeCount,

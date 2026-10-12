@@ -17,6 +17,7 @@
 import * as path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { assertLockfileText, LockfileParseError, rethrowLockfileParseError } from '../utils/lockfile-parse.js';
+import { compareCodeUnits } from '../utils/code-unit.js';
 import {
   type LockfileUnknownFields,
   notePackageLock,
@@ -33,6 +34,33 @@ export interface NpmLockIndex {
   size: number;
   /** Installed version for a direct dependency by name (disambiguated by the declared spec when possible). */
   resolve(name: string, spec?: string): string | null;
+  /**
+   * Every package the lockfile resolves, with its resolved dependency edges — the transitive tree,
+   * not just the direct dependencies. Built lazily on first call (a plain scan never needs it) and
+   * memoised.
+   */
+  graph(): LockGraph;
+}
+
+/** One resolved package in a lockfile. */
+export interface LockedPackage {
+  name: string;
+  version: string;
+}
+
+/**
+ * The resolved dependency graph of a lockfile. Nodes and edges are keyed `name@version` (see
+ * {@link lockKey}). Every node appears in `edges` (a leaf maps to an empty list), and every child
+ * list is sorted so traversal order — and anything derived from it — is deterministic.
+ */
+export interface LockGraph {
+  nodes: Map<string, LockedPackage>;
+  edges: Map<string, string[]>;
+}
+
+/** Node key for a resolved package. */
+export function lockKey(name: string, version: string): string {
+  return `${name}@${version}`;
 }
 
 interface PackageLockShape {
@@ -221,7 +249,9 @@ export async function loadNpmLockIndex(dir: string, io: LockfileIo): Promise<Npm
       throw new LockfileParseError(pnpmPath, 'YAML');
     }
     const map = parsePnpmLock(doc, pnpmPath);
-    if (map.size) return { source: 'pnpm', size: map.size, resolve: (name) => map.get(name) ?? null };
+    if (map.size) {
+      return { source: 'pnpm', size: map.size, resolve: (name) => map.get(name) ?? null, graph: memoGraph(() => parsePnpmLockGraph(doc)) };
+    }
   }
   // package-lock next: structured JSON and unambiguous.
   if (await io.exists(lockPath).catch(() => false)) {
@@ -233,7 +263,9 @@ export async function loadNpmLockIndex(dir: string, io: LockfileIo): Promise<Npm
       throw new LockfileParseError(lockPath, 'JSON');
     }
     const map = parsePackageLock(json, lockPath);
-    if (map.size) return { source: 'package-lock', size: map.size, resolve: (name) => map.get(name) ?? null };
+    if (map.size) {
+      return { source: 'package-lock', size: map.size, resolve: (name) => map.get(name) ?? null, graph: memoGraph(() => parsePackageLockGraph(json)) };
+    }
   }
   if (await io.exists(yarnPath).catch(() => false)) {
     const text = await io.readText(yarnPath);
@@ -251,8 +283,271 @@ export async function loadNpmLockIndex(dir: string, io: LockfileIo): Promise<Npm
         source: 'yarn',
         size: byName.size,
         resolve: (name, spec) => (spec ? bySpec.get(`${name}@${spec}`) : undefined) ?? byName.get(name) ?? null,
+        graph: memoGraph(() => parseYarnLockGraph(text)),
       };
     }
   }
   return null;
+}
+
+// ── Resolved dependency graph (transitive tree) ──────────────────────────────
+
+/** Compute a graph once, on first use. */
+function memoGraph(build: () => LockGraph): () => LockGraph {
+  let cached: LockGraph | undefined;
+  return () => (cached ??= build());
+}
+
+/** A registry version always starts with a digit; this skips `link:`, `file:`, `workspace:` and URL specs. */
+const REGISTRY_VERSION = /^\d/;
+
+class GraphBuilder {
+  private readonly nodes = new Map<string, LockedPackage>();
+  private readonly edges = new Map<string, Set<string>>();
+
+  /** Add a package; returns its key, or null when the version is not a registry version. */
+  addNode(name: string, version: unknown): string | null {
+    if (!name || typeof version !== 'string' || !REGISTRY_VERSION.test(version)) return null;
+    const key = lockKey(name, version);
+    if (!this.nodes.has(key)) {
+      this.nodes.set(key, { name, version });
+      this.edges.set(key, new Set());
+    }
+    return key;
+  }
+
+  addEdge(from: string, to: string): void {
+    if (from !== to) this.edges.get(from)?.add(to);
+  }
+
+  build(): LockGraph {
+    const edges = new Map<string, string[]>();
+    for (const [key, children] of this.edges) edges.set(key, [...children].sort(compareCodeUnits));
+    return { nodes: this.nodes, edges };
+  }
+}
+
+interface PackageLockEntry {
+  name?: string;
+  version?: string;
+  link?: boolean;
+  dependencies?: Record<string, unknown>;
+  optionalDependencies?: Record<string, unknown>;
+  peerDependencies?: Record<string, unknown>;
+}
+
+/**
+ * Resolve `dep` as `node_modules` resolution does: the dependent's own `node_modules`, then each
+ * enclosing one, then the root. `fromPath` is the dependent's lockfile path.
+ */
+function resolveNodeModulesPath(keyByPath: Map<string, string>, fromPath: string, dep: string): string | undefined {
+  let base = fromPath;
+  for (;;) {
+    const hit = keyByPath.get(base ? `${base}/node_modules/${dep}` : `node_modules/${dep}`);
+    if (hit) return hit;
+    if (base === '') return undefined;
+    const i = base.lastIndexOf('node_modules/');
+    base = i > 0 ? base.slice(0, i - 1) : '';
+  }
+}
+
+interface PackageLockV1Entry {
+  version?: string;
+  requires?: Record<string, unknown>;
+  dependencies?: Record<string, PackageLockV1Entry | null>;
+}
+
+function addPackageLockV1Nodes(g: GraphBuilder, scope: Record<string, PackageLockV1Entry | null> | undefined): void {
+  if (!scope || typeof scope !== 'object') return;
+  for (const [name, entry] of Object.entries(scope)) {
+    if (!entry || typeof entry !== 'object') continue;
+    g.addNode(name, entry.version);
+    addPackageLockV1Nodes(g, entry.dependencies);
+  }
+}
+
+function addPackageLockV1Edges(
+  g: GraphBuilder,
+  scope: Record<string, PackageLockV1Entry | null> | undefined,
+  enclosing: Array<Record<string, PackageLockV1Entry | null>>,
+): void {
+  if (!scope || typeof scope !== 'object') return;
+  for (const [name, entry] of Object.entries(scope)) {
+    if (!entry || typeof entry !== 'object') continue;
+    const from = g.addNode(name, entry.version);
+    // A `requires` entry resolves in the package's own nested installs first, then each enclosing scope.
+    const scopes = [entry.dependencies, scope, ...enclosing];
+    if (from) {
+      for (const dep of Object.keys(entry.requires ?? {})) {
+        const target = scopes.find((s) => s && typeof s === 'object' && s[dep]);
+        const to = target ? g.addNode(dep, target[dep]?.version) : null;
+        if (to) g.addEdge(from, to);
+      }
+    }
+    addPackageLockV1Edges(g, entry.dependencies, [scope, ...enclosing]);
+  }
+}
+
+/**
+ * The full dependency graph from a package-lock.json: every `node_modules` install in the v2/v3
+ * `packages` map (any depth), or the nested v1 `dependencies` tree. Workspace members, links and the
+ * root project are not registry packages and are left out.
+ */
+export function parsePackageLockGraph(json: unknown): LockGraph {
+  const g = new GraphBuilder();
+  if (!json || typeof json !== 'object') return g.build();
+  const lock = json as { packages?: Record<string, PackageLockEntry | null>; dependencies?: Record<string, PackageLockV1Entry | null> };
+
+  if (lock.packages && typeof lock.packages === 'object') {
+    const keyByPath = new Map<string, string>();
+    for (const [p, entry] of Object.entries(lock.packages)) {
+      if (!entry || typeof entry !== 'object' || entry.link) continue;
+      const at = p.lastIndexOf('node_modules/');
+      if (at < 0) continue; // the root ('') or a workspace member
+      // An aliased install (`node_modules/foo` → `bar`) records the real package name on the entry.
+      const name = typeof entry.name === 'string' && entry.name ? entry.name : p.slice(at + 'node_modules/'.length);
+      const key = g.addNode(name, entry.version);
+      if (key) keyByPath.set(p, key);
+    }
+    for (const [p, entry] of Object.entries(lock.packages)) {
+      const from = keyByPath.get(p);
+      if (!from || !entry) continue;
+      const deps = { ...entry.dependencies, ...entry.optionalDependencies, ...entry.peerDependencies };
+      for (const dep of Object.keys(deps)) {
+        const to = resolveNodeModulesPath(keyByPath, p, dep);
+        if (to) g.addEdge(from, to);
+      }
+    }
+    return g.build();
+  }
+
+  addPackageLockV1Nodes(g, lock.dependencies);
+  addPackageLockV1Edges(g, lock.dependencies, []);
+  return g.build();
+}
+
+/**
+ * Name and version from a pnpm `packages:` / `snapshots:` key. Handles v9/v6 (`name@1.2.3(peer@1)`,
+ * optionally `/`-prefixed) and v5 (`/name/1.2.3_peerhash`). Null for non-registry keys.
+ */
+export function parsePnpmPackageKey(key: string): LockedPackage | null {
+  const v5 = /^\/((?:@[^/]+\/)?[^/]+)\/(\d[^_/]*)/.exec(key);
+  if (v5) return { name: v5[1], version: v5[2].split('(')[0] };
+  const s = key.split('(')[0].trim().replace(/^\/+/, '');
+  const at = s.lastIndexOf('@');
+  if (at <= 0) return null;
+  const name = s.slice(0, at);
+  const version = s.slice(at + 1);
+  return REGISTRY_VERSION.test(version) ? { name, version } : null;
+}
+
+/** The package a pnpm dependency value points at: a bare version, or an alias (`bar@1.2.3`, `/bar/1.2.3`). */
+function pnpmDependencyTarget(dep: string, value: unknown): LockedPackage | null {
+  if (typeof value !== 'string') return null;
+  const bare = /^(\d[^_(]*)/.exec(value);
+  if (bare) return { name: dep, version: bare[1] };
+  return parsePnpmPackageKey(value);
+}
+
+/**
+ * The full dependency graph from a parsed pnpm-lock.yaml. v9 keeps edges under `snapshots:` (one
+ * entry per peer-dependency variant, merged here by name and version); v5/v6 keep them on `packages:`.
+ */
+export function parsePnpmLockGraph(doc: unknown): LockGraph {
+  const g = new GraphBuilder();
+  if (!doc || typeof doc !== 'object') return g.build();
+  const d = doc as Record<string, unknown>;
+  const isRecord = (v: unknown): v is Record<string, Record<string, unknown> | null> => !!v && typeof v === 'object';
+
+  const sections: Array<Record<string, Record<string, unknown> | null>> = [];
+  if (isRecord(d.packages)) sections.push(d.packages);
+  if (isRecord(d.snapshots)) sections.push(d.snapshots);
+
+  for (const section of sections) {
+    for (const key of Object.keys(section)) {
+      const pkg = parsePnpmPackageKey(key);
+      if (pkg) g.addNode(pkg.name, pkg.version);
+    }
+  }
+  for (const section of sections) {
+    for (const [key, entry] of Object.entries(section)) {
+      const pkg = parsePnpmPackageKey(key);
+      const from = pkg ? g.addNode(pkg.name, pkg.version) : null;
+      if (!from || !entry || typeof entry !== 'object') continue;
+      for (const field of ['dependencies', 'optionalDependencies'] as const) {
+        const deps = entry[field];
+        if (!deps || typeof deps !== 'object') continue;
+        for (const [dep, value] of Object.entries(deps as Record<string, unknown>)) {
+          const target = pnpmDependencyTarget(dep, value);
+          const to = target ? g.addNode(target.name, target.version) : null;
+          if (to) g.addEdge(from, to);
+        }
+      }
+    }
+  }
+  return g.build();
+}
+
+interface YarnBlock {
+  specs: string[];
+  version?: string;
+  deps: Array<[string, string]>;
+}
+
+/**
+ * The full dependency graph from a yarn.lock (classic or Berry). Each block's `dependencies` ranges are
+ * resolved through the block headers; Berry's `workspace:` / `link:` entries are not registry packages.
+ */
+export function parseYarnLockGraph(text: string): LockGraph {
+  const blocks: YarnBlock[] = [];
+  let current: YarnBlock | null = null;
+  let section = '';
+  for (const raw of text.split('\n')) {
+    if (!raw.trim() || raw.trimStart().startsWith('#')) continue;
+    if (!/^\s/.test(raw)) {
+      current = {
+        specs: raw.replace(/:\s*$/, '').split(',').map((x) => x.trim().replace(/^"|"$/g, '')).filter(Boolean),
+        deps: [],
+      };
+      blocks.push(current);
+      section = '';
+      continue;
+    }
+    if (!current) continue;
+    const indent = raw.length - raw.trimStart().length;
+    const line = raw.trim();
+    if (indent <= 2) {
+      const vm = /^version:?\s+"?([^"\s]+)"?/.exec(line);
+      if (vm) current.version = vm[1];
+      const sm = /^(\w+):\s*$/.exec(line);
+      section = sm ? sm[1] : '';
+    } else if (section === 'dependencies' || section === 'optionalDependencies') {
+      // Classic: `name "^1.0.0"`. Berry: `name: ^1.0.0` or `"@scope/name": "npm:^1.0.0"`.
+      const dm = /^"?(@?[^"\s:]+)"?:?\s+"?(.+?)"?$/.exec(line);
+      if (dm) current.deps.push([dm[1], dm[2]]);
+    }
+  }
+
+  const g = new GraphBuilder();
+  const keyBySpec = new Map<string, string>();
+  const blockKey = new Map<YarnBlock, string>();
+  for (const block of blocks) {
+    if (block.specs.some((spec) => /@(workspace|link|portal|file):/.test(spec))) continue;
+    for (const spec of block.specs) {
+      const name = specName(spec);
+      const key = name ? g.addNode(name, block.version) : null;
+      if (!key) continue;
+      keyBySpec.set(spec, key);
+      blockKey.set(block, key);
+    }
+  }
+  for (const block of blocks) {
+    const from = blockKey.get(block);
+    if (!from) continue;
+    for (const [dep, range] of block.deps) {
+      const to = keyBySpec.get(`${dep}@${range}`) ?? keyBySpec.get(`${dep}@npm:${range}`);
+      if (to) g.addEdge(from, to);
+    }
+  }
+  return g.build();
 }

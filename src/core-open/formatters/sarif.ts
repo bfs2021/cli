@@ -29,7 +29,6 @@ export function formatSarif(artifact: ScanArtifact, root?: string): object {
   const rules = buildRules(artifact.findings);
   const results = artifact.findings.map((f) => toSarifResult(f, suppressed.get(suppressionKey(f.ruleId, f.location))));
 
-  const degradationNotes = degradationNotifications(artifact);
   const runs: object[] = [
     {
       tool: {
@@ -45,7 +44,7 @@ export function formatSarif(artifact: ScanArtifact, root?: string): object {
         {
           executionSuccessful: true,
           startTimeUtc: artifact.timestamp,
-          ...(degradationNotes ? { toolExecutionNotifications: degradationNotes } : {}),
+          ...notificationsFor(artifact),
         },
       ],
     },
@@ -64,17 +63,20 @@ export function formatSarif(artifact: ScanArtifact, root?: string): object {
 }
 
 /**
- * Scan degradations, in the order already stored on the artifact. Absent when
- * the scan recorded none, so a document with no degradations is unchanged.
+ * Degrade-and-continue notices as SARIF tool notifications, so a consumer of the SARIF alone can see
+ * that part of the repository was skipped. Nothing is added when the scan had none, so a clean scan
+ * produces the same bytes as before.
  */
-function degradationNotifications(artifact: ScanArtifact): object[] | undefined {
-  const rows = artifact.degradations;
-  if (!rows || rows.length === 0) return undefined;
-  return rows.map((warning) => ({
-    descriptor: { id: warning.code },
-    level: 'warning',
-    message: { text: warning.message },
-  }));
+function notificationsFor(artifact: ScanArtifact): { toolExecutionNotifications?: object[] } {
+  const degradations = artifact.degradations;
+  if (!degradations || degradations.length === 0) return {};
+  return {
+    toolExecutionNotifications: degradations.map((warning) => ({
+      level: 'warning',
+      message: { text: warning.message },
+      descriptor: { id: warning.code },
+    })),
+  };
 }
 
 /** SARIF `level` for a pack severity: critical/high → error, medium → warning, low/info → note. */

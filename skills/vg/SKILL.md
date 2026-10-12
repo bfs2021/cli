@@ -39,7 +39,7 @@ measured and the tools improved):
 - **Upgrade drift:** `vg drift` lists what is outdated across dependencies
   (offline; `--online` for currency). `vg scan` scores upgrade drift
   (`text`, `json`, `sarif`, or `md`). `vg report` renders a saved scan
-  artifact as `text` (the default), `md`, `json`, or `html` (a self-contained page).
+  as `text`, `md`, `json`, or `html` (a self-contained page).
 - **Version-correct docs:** `vg lib <name>` returns drift-annotated, version-
   specific usage docs for a library — inject these instead of guessing an API.
 

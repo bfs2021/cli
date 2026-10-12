@@ -63,4 +63,11 @@ describe('scan VCS capture strips query-string credentials', () => {
     expect(vcs.remoteUrl).toBe('https://github.com/acme/private.git?ref=main');
     expect(JSON.stringify(vcs)).not.toContain('QUERYTOKEN123');
   });
+
+  it('drops a percent-encoded access_token from the captured origin URL', async () => {
+    const root = gitProject('https://github.com/acme/private.git?access%5Ftoken=QUERYTOKEN123&ref=main');
+    const vcs = await detectVcs(root);
+    expect(vcs.remoteUrl).toBe('https://github.com/acme/private.git?ref=main');
+    expect(JSON.stringify(vcs)).not.toContain('QUERYTOKEN123');
+  });
 });

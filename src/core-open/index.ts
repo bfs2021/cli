@@ -141,6 +141,7 @@ export {
 export {
   scanVulnerabilities,
   collectVulnTargets,
+  loadNpmLockGraphs,
   generateVulnerabilityFindings,
   isVersionAffected,
   parseOsvAdvisory,

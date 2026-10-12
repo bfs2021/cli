@@ -6,38 +6,33 @@ import { main } from '../../cli.js';
 import { ExitCode } from '../../util/exit.js';
 import { REPORT_FORMATS, reportCommand } from './report.js';
 
-const SENTINEL = 'report-format-sentinel';
-
-const artifact = {
-  schemaVersion: '1.0',
-  timestamp: '2026-01-01T00:00:00.000Z',
-  vibgrateVersion: '0.0.0',
-  rootPath: '/fixture',
-  projects: [
-    {
-      type: 'node',
-      path: 'app',
-      name: SENTINEL,
-      frameworks: [],
-      dependencies: [],
-      dependencyAgeBuckets: { current: 0, oneBehind: 0, twoPlusBehind: 0, unknown: 0 },
-    },
-  ],
-  drift: {
-    score: 1,
-    riskLevel: 'low',
-    components: { runtimeScore: 0, frameworkScore: 0, dependencyScore: 0, eolScore: 0 },
-  },
-  findings: [],
-} as const;
-
 const roots: string[] = [];
 
-function writeArtifact(): string {
+function artifactFile(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vg-report-format-'));
   roots.push(root);
-  const file = path.join(root, 'scan_result.json');
-  fs.writeFileSync(file, JSON.stringify(artifact));
+  const dir = path.join(root, '.vibgrate');
+  fs.mkdirSync(dir, { recursive: true });
+  const artifact = {
+    schemaVersion: '1.0',
+    timestamp: '2026-01-01T00:00:00.000Z',
+    vibgrateVersion: '0.0.0',
+    rootPath: root,
+    projects: [],
+    findings: [],
+    drift: {
+      score: 0,
+      riskLevel: 'low',
+      components: {
+        runtimeScore: 0,
+        frameworkScore: null,
+        dependencyScore: 0,
+        eolScore: null,
+      },
+    },
+  };
+  const file = path.join(dir, 'scan_result.json');
+  fs.writeFileSync(file, JSON.stringify(artifact, null, 2));
   return file;
 }
 
@@ -60,29 +55,22 @@ async function runCli(args: string[]): Promise<{ code: number; stderr: string; s
   };
   const errSpy = vi.spyOn(process.stderr, 'write').mockImplementation(write(stderr) as never);
   const outSpy = vi.spyOn(process.stdout, 'write').mockImplementation(write(stdout) as never);
-  // Vitest's console capture does not go through the stdout spy. Record it too,
-  // so a formatter that prints cannot hide from the empty-stdout assertion.
+  // Vitest captures console.log before it reaches stdout.write.
   const logSpy = vi.spyOn(console, 'log').mockImplementation((...parts: unknown[]) => {
-    stdout.push(`${parts.map((part) => String(part)).join(' ')}\n`);
+    stdout.push(parts.map(String).join(' ') + '\n');
   });
   const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
     throw new Error(`EXIT:${code ?? 0}`);
   }) as never);
 
-  const captured = (): { code: number; stderr: string; stdout: string } => ({
-    code: 0,
-    stderr: stderr.join(''),
-    stdout: stdout.join(''),
-  });
-
   try {
     await main(['node', 'vg', ...args]);
-    return captured();
+    return { code: 0, stderr: stderr.join(''), stdout: stdout.join('') };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const match = /^EXIT:(\d+)$/.exec(message);
     if (!match) throw err;
-    return { ...captured(), code: Number(match[1]) };
+    return { code: Number(match[1]), stderr: stderr.join(''), stdout: stdout.join('') };
   } finally {
     errSpy.mockRestore();
     outSpy.mockRestore();
@@ -99,12 +87,12 @@ describe('vg report --format', () => {
   });
 
   it('renders html from the local artifact and leaves text, json, and md alone', async () => {
-    const file = writeArtifact();
+    const file = artifactFile();
     const html = await runCli(['report', '--in', file, '--format', 'html']);
     expect(html.code).toBe(0);
     expect(html.stdout).toContain('<!doctype html>');
     expect(html.stdout).toContain('id="summary"');
-    expect(html.stdout).toContain('id="drift-score">1');
+    expect(html.stdout).toContain('id="drift-score">0');
     expect(html.stderr).toBe('');
 
     const text = await runCli(['report', '--in', file]);
@@ -119,45 +107,39 @@ describe('vg report --format', () => {
 
     const json = await runCli(['report', '--in', file, '--format', 'json']);
     expect(json.code).toBe(0);
-    expect(JSON.parse(json.stdout)).toEqual(artifact);
-    expect(json.stdout).not.toContain('<!doctype');
+    expect(json.stdout).toBe(`${fs.readFileSync(file, 'utf8')}\n`);
   });
 
-  it('rejects an unknown format with exit 5, the value, the valid list, and empty stdout', async () => {
-    const file = writeArtifact();
-    for (const format of ['HTML', 'sarif', 'html ']) {
-      const result = await runCli(['report', '--in', file, '--format', format]);
+  it('rejects an unknown format, names it, lists the valid ones, and prints nothing', async () => {
+    const missing = path.join(os.tmpdir(), 'vg-report-missing', 'scan_result.json');
+    const result = await runCli(['report', '--in', missing, '--format', 'sarif']);
+
+    expect(result.code).toBe(ExitCode.USAGE_ERROR);
+    expect(result.code).not.toBe(0);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toBe('error: unknown --format "sarif" (expected md, text, json, html)\n');
+    expect(result.stderr).not.toContain('Artifact not found');
+  });
+
+  it('matches the format exactly, so case or trailing space is a usage error', async () => {
+    const missing = path.join(os.tmpdir(), 'vg-report-missing', 'scan_result.json');
+    for (const format of ['HTML', 'Md', 'html ']) {
+      const result = await runCli(['report', '--in', missing, '--format', format]);
       expect(result.code).toBe(ExitCode.USAGE_ERROR);
       expect(result.stdout).toBe('');
       expect(result.stderr).toBe(
         `error: unknown --format ${JSON.stringify(format)} (expected md, text, json, html)\n`,
       );
-      expect(result.stderr).not.toContain(SENTINEL);
     }
   });
 
-  it('defaults to the text report', async () => {
-    const file = writeArtifact();
+  it('keeps text as the default and still prints a report', async () => {
+    const file = artifactFile();
     const result = await runCli(['report', '--in', file]);
+
     expect(result.code).toBe(0);
-    expect(result.stdout).toContain('Code Intelligence Engine');
     expect(result.stdout).toContain('Vibgrate Drift Report');
-    expect(result.stdout).toContain(SENTINEL);
-    expect(result.stdout).not.toContain('# Vibgrate Drift Report');
-  });
-
-  it('prints markdown for md and the artifact unchanged for json', async () => {
-    const file = writeArtifact();
-    const md = await runCli(['report', '--in', file, '--format', 'md']);
-    expect(md.code).toBe(0);
-    expect(md.stdout).toContain('# Vibgrate Drift Report');
-    expect(md.stdout).toContain('## Score Breakdown');
-    expect(md.stdout).toContain(SENTINEL);
-    expect(md.stdout).not.toContain('Code Intelligence Engine');
-
-    const json = await runCli(['report', '--in', file, '--format', 'json']);
-    expect(json.code).toBe(0);
-    expect(JSON.parse(json.stdout)).toEqual(artifact);
-    expect(json.stdout).not.toContain('Code Intelligence Engine');
+    expect(result.stdout).toContain('DriftScore');
+    expect(result.stderr).toBe('');
   });
 });

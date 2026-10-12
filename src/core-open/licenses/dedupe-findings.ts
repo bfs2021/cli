@@ -1,3 +1,6 @@
+// VENDORED from @vibgrate/core-open (packages/vibgrate-core-open) by
+// scripts/vendor-core-open.mjs. Do not edit here — change the source package
+// and re-run the vendor script. Apache-2.0.
 /**
  * Collapse identical license findings before text, JSON, and SARIF output.
  *

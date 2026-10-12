@@ -80,23 +80,14 @@ describe('redactForDisplay', () => {
   });
 });
 
-// Known gaps, recorded rather than fixed here: the helper is vendored from
-// @vibgrate/core-open, so the fix belongs upstream. Each case fails today;
-// `it.fails` turns red once the upstream fix lands, so flip it to `it` then.
-describe('redactForDisplay known gaps', () => {
-  // The query key is matched before percent-decoding, so `access%5Ftoken`
-  // (`access_token` encoded) is kept, and the token-shape patterns do not
-  // match the encoded key either. Today the input comes back unchanged.
-  it.fails('drops a percent-encoded credential query key', () => {
+describe('redactForDisplay credential query edges', () => {
+  it('drops a percent-encoded credential query key', () => {
     const out = redactForDisplay('https://registry.example/pkg?access%5Ftoken=EXAMPLEFAKE1234&page=2');
+    expect(out).toBe('https://registry.example/pkg?page=2');
     expect(out).not.toContain('EXAMPLEFAKE1234');
   });
 
-  // The query string is taken to run to the end of the text, so in an error
-  // sentence everything after a credential parameter is dropped with it.
-  // Today this returns 'GET https://registry.example/pkg' and the HTTP status
-  // is lost.
-  it.fails('keeps the rest of a sentence after a URL with a credential query parameter', () => {
+  it('keeps the rest of a sentence after a URL with a credential query parameter', () => {
     expect(redactForDisplay('GET https://registry.example/pkg?token=EXAMPLEFAKE1234 failed: 401 Unauthorized')).toBe(
       'GET https://registry.example/pkg failed: 401 Unauthorized',
     );

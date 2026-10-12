@@ -7,23 +7,25 @@ import { formatText } from '../formatters/text.js';
 import { formatMarkdown } from '../formatters/markdown.js';
 import { formatHtmlReport } from '../formatters/html.js';
 import { portableValue } from '../../core-open/utils/portable-path.js';
-import type { ReportFormat, ScanArtifact } from '../types.js';
+import type { ScanArtifact } from '../types.js';
 
 /** Formats `vg report` accepts. `text` is the default. */
-export const REPORT_FORMATS = ['md', 'text', 'json', 'html'] as const satisfies readonly ReportFormat[];
+export const REPORT_FORMATS = ['md', 'text', 'json', 'html'] as const;
+export type ReportFormat = (typeof REPORT_FORMATS)[number];
 
-function assertReportFormat(format: string): asserts format is ReportFormat {
-  if ((REPORT_FORMATS as readonly string[]).includes(format)) return;
-  throw usageError(`unknown --format ${JSON.stringify(format)} (expected ${REPORT_FORMATS.join(', ')})`);
+function isReportFormat(value: string): value is ReportFormat {
+  return (REPORT_FORMATS as readonly string[]).includes(value);
 }
 
 export const reportCommand = new Command('report')
   .description('Generate a drift report from a scan artifact')
   .option('--in <file>', 'Input artifact file', '.vibgrate/scan_result.json')
-  .option('--format <format>', `Output format (${REPORT_FORMATS.join('|')})`, 'text')
+  .option('--format <format>', 'Output format (md|text|json|html)', 'text')
   .action(async (opts: { in: string; format: string }) => {
-    // Before the artifact is read, so an unknown value never renders as text.
-    assertReportFormat(opts.format);
+    const format = opts.format;
+    if (!isReportFormat(format)) {
+      throw usageError(`unknown --format "${format}" (expected ${REPORT_FORMATS.join(', ')})`);
+    }
 
     const artifactPath = path.resolve(opts.in);
 
@@ -35,7 +37,7 @@ export const reportCommand = new Command('report')
 
     const artifact = portableValue(await readJsonFile<ScanArtifact>(artifactPath));
 
-    switch (opts.format) {
+    switch (format) {
       case 'md':
         console.log(formatMarkdown(artifact));
         break;

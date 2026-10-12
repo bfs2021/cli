@@ -14,13 +14,6 @@ backward compatible.
 
 ### Changed
 
-- **Machine-readable output drops absolute home-directory paths (#282).**
-  JSON, SARIF, and reports rewrite `/Users/<user>/` and `/home/<user>/`
-  paths. A path inside the scan or build root is written relative to that
-  root. A path under the same home directory but outside the root is written
-  as `../…`. Any other path only loses that prefix. The result does not use
-  `~/`. The same tree produces the same paths.
-
 - **`vg build` and `vg scan` do not follow symlinks, and they say so.** A
   directory symlink is not entered, so a link to its parent cannot hang the
   walk, and a file symlink is not read. When any are skipped, one stderr
@@ -44,7 +37,11 @@ backward compatible.
   that choice, summary counts stay complete, and the report still does not
   contact a registry.
 
-- **Unknown optional lockfile fields warn and continue.** When a lockfile still lists dependencies vg can read, an extra field does not drop that graph or the SBOM rows built from it. The command prints one warning per lockfile path and field name, sorted by path then field: `pnpm-lock.yaml: unknown optional lockfile field "<name>"; continuing with the fields this version understands.` A field name that is not a plain identifier is reported as `(name omitted)`. A truncated lockfile, or one missing the structure its format requires, still exits non-zero.
+- **Drift baselines and CI gating are documented.** `vg baseline` runs a full
+  scan and overwrites `.vibgrate/baseline.json`. There is no `create` or
+  `update` subcommand. The same section covers `--drift-budget` and
+  `--drift-worsening` (exit `2` when a gate fails), an unmeasured score, how
+  baseline suppressions are recorded, and what to commit.
 
 - **`vg build --attest` and `vg build --verify` are documented.** The docs
   cover the DSSE in-toto statement written to
@@ -101,60 +98,18 @@ backward compatible.
   so Node workers are not left running afterwards. A worker that fails still
   prints what happened and how to re-run (`--jobs 1` or `--exclude`).
 
-- **`vg build` and `vg scan` name a file when its parse fails.** A supported-language file the parser cannot read produces a warning with the file path, the language, and what to do next: correct the file or exclude the path. The map continues without that file's symbols. The same tree prints the same warning. The warning does not include a stack trace. (#289)
+- **`vg build` and `vg scan` name a file when its parse fails.** A supported-language file the parser cannot read produces a warning with the file path, the language, and what to do next: correct the file or exclude the path. The map continues without that file's symbols. The same tree prints the same warning. The warning does not include a stack trace.
 
-- **A truncated or syntactically invalid lockfile stops `vg scan` and `vg build` (#310).**
-  The check runs before a dependency graph is built and before source files are
-  parsed, so parse workers are not started and a partial map is not written.
-  The error names each bad file, in path order, including lockfiles the walk
-  otherwise skips (for example `bun.lock`, `mix.lock`, and `Cargo.lock`). It
-  tells you to regenerate the file with your package manager and does not
-  include the file's contents. The process exits non-zero. A valid lockfile is
-  scanned and built as before. An empty `go.sum` or `go.work.sum` is valid:
-  the module has no dependencies.
-
-- **A root `package.json` with no `name`, no `version`, or neither no longer stops `vg build`, `vg scan`, or `vg sbom export`.** The root component name falls back to the directory name. A missing version is omitted. Each command prints one `VG_WARN_ROOT_PACKAGE_IDENTITY` warning, and dependencies are still resolved. The fallback does not use an absolute path. (#359)
+- **A root `package.json` with no `name`, no `version`, or neither no longer stops `vg build`, `vg scan`, or `vg sbom export`.** The root component name falls back to the directory name. A missing version is omitted. Each command prints one `VG_WARN_ROOT_PACKAGE_IDENTITY` warning, and dependencies are still resolved. The fallback does not use an absolute path.
 
 - **`vg scan --format json` and `vg sbom export` keep SemVer build metadata.**
   A lockfile or manifest version such as `1.2.3+build.7` is recorded with
   the `+` suffix. A Go `v2.0.0+incompatible` require is recorded as
   `2.0.0+incompatible` in scan JSON (the leading `v` is still dropped) and
   as `v2.0.0+incompatible` in the SBOM, matching `go.sum`. Range checks
-  still ignore the suffix. (#298)
-
-- **Machine-readable output no longer follows the process locale (#410).**
-  String keys in scan JSON, SARIF, and SBOM — purls, package names, versions,
-  and the project names in `vibgrate:projects` — compare by UTF-16 code unit.
-  `LANG` and `LC_ALL` do not change those documents. Lockfiles are visited in
-  that same order of project path, and the first path wins when two lockfiles
-  repeat one identity. The package-name tie-break on dependency rows inside a
-  project uses the same comparison. SARIF results follow that finding order.
-  Degrade-and-continue warnings are ordered by code, then message.
+  still ignore the suffix.
 
 - **`vg build` and `vg scan` skip binary and non-UTF-8 files instead of crashing.** A file with a NUL byte, or bytes that are not UTF-8, is left out of the map and out of text parsers. One warning names the count, the first few paths, and how to ignore the files with a `.gitignore` entry or `--exclude`. The warning does not include file contents. A lockfile that is binary or not UTF-8 still stops the command, and that message does not include the file's bytes either.
-
-- **A key or value `vg` does not accept in `driftBudget` or `review` stops the command.**
-  A misspelt key, a value of the wrong type, or a `driftBudget` that sets no
-  limit exits with an error. The error names the file and, when the file makes
-  it clear, the line and the key. The value is not printed.
-  `.vibgrate/review.toml` still skips keys it does not recognise. (#316)
-
-- **SBOM component order no longer follows scan or filesystem order.**
-  `vg sbom export` and CycloneDX/SPDX graph export sort a component by its
-  Package URL when one is written, otherwise by package name, then by version.
-  Rows that share a Package URL and a version are ordered by name. CycloneDX
-  `components`, SPDX `packages`, and the package entries in CycloneDX
-  `dependencies` share that order, and `SPDXRef-Package-N` follows it. The
-  same artifact and the same lockfiles produce the same document on every run.
-  Reordering projects still changes which project's metadata is kept, and
-  therefore the document id, but it does not change component order or SPDX
-  IDs. (#286)
-
-- **`vg report --format` rejects values other than `md`, `text`, and `json`.**
-  An unknown value, including `html`, exits `5` with a usage error that names
-  the value and lists the valid ones. Stdout is empty. `text` stays the
-  default. There is no HTML report. Markdown, text, and JSON field coverage
-  is documented on `vg report`.
 
 - **`vg scan --format sarif` sets a content-stable fingerprint on every result.**
   `partialFingerprints["vg/finding-id/v1"]` is derived from the finding (rule,

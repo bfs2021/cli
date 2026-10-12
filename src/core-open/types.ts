@@ -580,6 +580,17 @@ export interface PackageVulnerabilities {
   ecosystem: VulnEcosystem;
   package: string;
   version: string;
+  /**
+   * True when the package is pulled in by another dependency rather than declared by a scanned
+   * project. Absent for a direct dependency (absent is not `false` on older artifacts).
+   */
+  transitive?: boolean;
+  /**
+   * The shortest dependency path from a direct dependency to this package, as `name@version`
+   * entries starting at the direct dependency and ending at this package's parent. Only present
+   * on a transitive package whose path could be traced in the lockfile.
+   */
+  via?: string[];
   advisories: VulnerabilityAdvisory[];
 }
 
@@ -781,6 +792,20 @@ export interface BillingSummary {
 
 // ── Full scan artifact (stable schema) ──
 
+/** Where a scan exclude pattern came from. */
+export type ScanExclusionSource =
+  /** The project config file's `exclude` list. */
+  | 'config'
+  /** A `--exclude` flag on this run. */
+  | 'cli'
+  /** `.vibgrate/auto-excludes.json`: a path an earlier scan timed out on. */
+  | 'auto';
+
+export interface ScanExclusion {
+  pattern: string;
+  source: ScanExclusionSource;
+}
+
 export interface ScanArtifact {
   schemaVersion: '1.0';
   timestamp: string;
@@ -798,6 +823,12 @@ export interface ScanArtifact {
    * Sorted by code, then by message. Does not change the exit code.
    */
   degradations?: CodedWarning[];
+  /**
+   * Path patterns left out of this scan, with where each came from. Omitted when
+   * nothing was excluded. Sorted by pattern, then source. A pattern that is in
+   * both the config file and `.vibgrate/auto-excludes.json` is listed as `auto`.
+   */
+  excluded?: ScanExclusion[];
   /**
    * Repo-relative path (or basename, when the file is outside the repo) of the
    * `--baseline` snapshot this scan compared against.

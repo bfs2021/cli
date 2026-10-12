@@ -348,12 +348,12 @@ export class FileCache {
   private _stuckPaths: string[] = [];
   /** Files skipped because they exceed maxFileSizeToScan */
   private _skippedLargeFiles: string[] = [];
+/** Symlinks the shared walk did not follow. One coalesced warning is built from these. */
+  private _skippedSymlinks: string[] = [];
   /** Absolute paths already recorded as binary or non-UTF-8. */
   private _nonTextAbs = new Set<string>();
   /** Root-relative labels for those files, de-duplicated. */
   private _skippedNonTextFiles: string[] = [];
-  /** Symlinks the shared walk did not follow. One coalesced warning is built from these. */
-  private _skippedSymlinks: string[] = [];
   /** Maximum file size (bytes) we will read. 0 = unlimited. */
   private _maxFileSize = 0;
   /** Per-project / per-directory scan timeout in ms. */
@@ -433,6 +433,15 @@ export class FileCache {
     return this._skippedLargeFiles;
   }
 
+/**
+   * Symlinks the shared walk did not follow, as root-relative paths.
+   * The scan turns this list into one `VG_WARN_SYMLINK_SKIPPED` degradation.
+   * The walk itself does not print it, so the scan says it once.
+   */
+  get skippedSymlinks(): readonly string[] {
+    return this._skippedSymlinks;
+  }
+
   /** Files skipped because they are binary or not UTF-8. Labels only, never bytes. */
   get skippedNonTextFiles(): readonly string[] {
     return this._skippedNonTextFiles;
@@ -450,15 +459,6 @@ export class FileCache {
     // root. A file whose name is actually `path` still has that basename.
     if (!label || (label === 'path' && !/(^|\/)path$/.test(posix))) return;
     this._skippedNonTextFiles.push(label);
-  }
-
-  /**
-   * Symlinks the shared walk did not follow, as root-relative paths.
-   * The scan turns this list into one `VG_WARN_SYMLINK_SKIPPED` degradation.
-   * The walk itself does not print it, so the scan says it once.
-   */
-  get skippedSymlinks(): readonly string[] {
-    return this._skippedSymlinks;
   }
 
   // ── Directory walking ──
@@ -555,7 +555,8 @@ export class FileCache {
     };
     // Symlinks are not followed. Dirent.isDirectory() is false for a link, so a
     // link to a parent cannot re-enter this walk. Paths are recorded; the scan
-    // prints one VG_WARN_SYMLINK_SKIPPED degradation after the walk.
+    // prints one VG_WARN_SYMLINK_SKIPPED degradation after the walk. Binary
+    // and non-UTF-8 files are recorded the same way, for one non-text warning.
     const skippedSymlinks = this._skippedSymlinks;
     const noteNonText = (abs: string): void => {
       this.noteNonText(abs);
