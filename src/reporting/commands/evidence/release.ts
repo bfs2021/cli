@@ -9,15 +9,15 @@
 
 import { readJsonFile, pathExists } from '../../utils/fs.js';
 import { CliError, ExitCode } from '../../../util/exit.js';
-import { assertExternalSbom, externalSbomKind, readSbomJsonFile, sbomDisplayPath } from '../sbom-input.js';
+import { assertExternalSbom, readSbomJsonFile, sbomDisplayPath, type ExternalSbomCheck } from '../sbom-input.js';
 import type { ProjectType, ScanArtifact } from '../../types.js';
 import type { FrozenComponent, Release, ReleaseBuild } from './types.js';
 import {
   buildFactsFromInspection,
-  componentsFromSpdx,
   inspectImage,
   isProvenancePredicateType,
   isSbomPredicateType,
+  isSpdxDocument,
   looksLikeProvenancePredicate,
   parseBuildxMetadata,
   summarizeProvenance,
@@ -26,7 +26,7 @@ import {
   type ProvenanceSummary,
   type SpdxDocument,
 } from './buildkit.js';
-import { ingestCycloneDx, type SbomIngest } from './sbom-ingest.js';
+import { readCycloneDxInput, readSpdxInput } from './sbom-input.js';
 
 /** Map a Vibgrate project type to the OSV ecosystem used for advisory matching. */
 export function ecosystemForProjectType(type: ProjectType): string | undefined {
@@ -77,9 +77,8 @@ export function componentsFromArtifact(artifact: ScanArtifact): FrozenComponent[
   return out.sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version));
 }
 
-/** CycloneDX components, including nested ones and rows with no purl and no CPE. */
-export function componentsFromCycloneDx(doc: unknown, sourceLabel = 'sbom'): SbomIngest {
-  return ingestCycloneDx(doc, sourceLabel);
+export function componentsFromCycloneDx(doc: { components?: Array<{ name?: string; version?: string; purl?: string }> }): FrozenComponent[] {
+  return readCycloneDxInput(doc, 'SBOM').components;
 }
 
 export interface FreezeInput {
@@ -104,8 +103,11 @@ export interface FreezeInput {
   image?: string;
   /** Process runner for `--image`; injectable for tests. */
   exec?: Exec;
-  /** Called once when this input skipped components. The release is still frozen. */
-  onWarning?: (warning: string) => void;
+  /**
+   * Called at most once when the SBOM read skipped components or stopped early.
+   * The message is the single warning for that file.
+   */
+  onWarning?: (message: string) => void;
 }
 
 interface CycloneDxDocument {
@@ -134,20 +136,29 @@ export function componentsFromSource(data: unknown, label: string): { components
   return { ...componentsFromSbom(data, label), attested: false };
 }
 
-function componentsFromSbom(data: unknown, label: string): FrozenComponent[] {
+/**
+ * Document fields are still required. A component missing `name` is not a
+ * document failure: the reader skips it and returns one warning for the file.
+ * CycloneDX document `version` is not required, so a file that identifies
+ * components by name, component version, and type still freezes.
+ */
+const releaseSbomCheck: ExternalSbomCheck = { componentNames: false, documentVersion: false };
+
+function componentsFromSbom(data: unknown, label: string): { components: FrozenComponent[]; warning?: string } {
   const display = sbomDisplayPath(label);
-  const kind = externalSbomKind(data);
-  if (kind === 'other') {
-    throw new CliError(
-      `unrecognised source format in ${display} — expected a Vibgrate scan artifact, a CycloneDX or SPDX SBOM, or an SBOM attestation`,
-      ExitCode.USAGE_ERROR,
-    );
+  const doc = data as CycloneDxDocument | SpdxDocument | null;
+  if (doc && (('bomFormat' in doc && doc.bomFormat === 'CycloneDX') || Array.isArray((doc as CycloneDxDocument).components))) {
+    assertExternalSbom(doc, display, releaseSbomCheck);
+    return readCycloneDxInput(doc, display);
   }
-  // Required fields are checked before any component is kept. A component
-  // missing `name` fails the document; it is not dropped.
-  const accepted = assertExternalSbom(data, display);
-  if (accepted === 'cyclonedx') return componentsFromCycloneDx(data as CycloneDxDocument);
-  return componentsFromSpdx(data as SpdxDocument);
+  if (isSpdxDocument(doc)) {
+    assertExternalSbom(doc, display, releaseSbomCheck);
+    return readSpdxInput(doc, display);
+  }
+  throw new CliError(
+    `unrecognised source format in ${display} — expected a Vibgrate scan artifact, a CycloneDX or SPDX SBOM, or an SBOM attestation`,
+    ExitCode.USAGE_ERROR,
+  );
 }
 
 async function readSource(file: string, what: string): Promise<unknown> {
@@ -184,7 +195,7 @@ export async function buildRelease(input: FreezeInput): Promise<Release> {
   let artefactDigest = input.artefactDigest;
   let buildId = input.buildId;
   let components: FrozenComponent[] | undefined;
-  let ingestWarning: string | undefined;
+  let componentWarning: string | undefined;
 
   if (input.image) {
     const inspection = await inspectImage(input.image, input.exec);
@@ -203,11 +214,11 @@ export async function buildRelease(input: FreezeInput): Promise<Release> {
     build.sourceUri ??= inspection.labels['org.opencontainers.image.source'];
     build.sourceRevision ??= inspection.labels['org.opencontainers.image.revision'];
     if (inspection.sbom && !input.fromExplicit) {
-      assertExternalSbom(inspection.sbom, `SBOM of ${input.image}`);
+      assertExternalSbom(inspection.sbom, `SBOM of ${input.image}`, releaseSbomCheck);
       build.sources.push('sbom-attestation');
-      const ingested = componentsFromSpdx(inspection.sbom, `SBOM of ${input.image}`);
-      components = ingested.components;
-      ingestWarning = ingested.warning;
+      const read = readSpdxInput(inspection.sbom, `SBOM of ${input.image}`);
+      components = read.components;
+      componentWarning = read.warning;
     }
   }
 
@@ -254,10 +265,10 @@ export async function buildRelease(input: FreezeInput): Promise<Release> {
     const label = sbomDisplayPath(input.from);
     const parsed = componentsFromSource(await readSbomJsonFile(input.from), label);
     components = parsed.components;
-    ingestWarning = parsed.warning;
+    componentWarning = parsed.warning;
     if (parsed.attested) build.sources.push('sbom-attestation');
   }
-  if (ingestWarning) input.onWarning?.(ingestWarning);
+  if (componentWarning) input.onWarning?.(componentWarning);
   if (components.length === 0) {
     const where = input.image && !input.fromExplicit ? `the SBOM of ${input.image}` : sbomDisplayPath(input.from);
     throw new CliError(`no components found in ${where} — cannot freeze an empty manifest`, ExitCode.USAGE_ERROR);

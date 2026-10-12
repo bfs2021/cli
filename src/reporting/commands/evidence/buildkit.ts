@@ -24,8 +24,8 @@
 
 import { execFile } from 'node:child_process';
 import { CliError, ExitCode } from '../../../util/exit.js';
-import type { ReleaseBuild } from './types.js';
-import { ingestSpdx, type SbomIngest } from './sbom-ingest.js';
+import type { FrozenComponent, ReleaseBuild } from './types.js';
+import { readSpdxInput } from './sbom-input.js';
 
 // ── `--metadata-file` ──
 
@@ -243,13 +243,13 @@ export function isSpdxDocument(data: unknown): data is SpdxDocument {
 }
 
 /**
- * SPDX 2.x `packages[]` → frozen components. The package that describes the
- * image itself (purpose `CONTAINER`, or a `pkg:oci/` purl) is not a component
- * of the release and is omitted. A package with a name and neither a purl nor
- * a CPE is kept; the version is empty when `versionInfo` was omitted.
+ * SPDX 2.x `packages[]` and `files[]` → frozen components. The package that
+ * describes the image itself (purpose `CONTAINER`, or a `pkg:oci/` purl) is
+ * not a component of the release. A component with neither a package URL nor
+ * a CPE is kept when it has a name, a version, and a type. See `readSpdxInput`.
  */
-export function componentsFromSpdx(doc: SpdxDocument, sourceLabel = 'sbom'): SbomIngest {
-  return ingestSpdx(doc, sourceLabel);
+export function componentsFromSpdx(doc: SpdxDocument): FrozenComponent[] {
+  return readSpdxInput(doc, 'SBOM').components;
 }
 
 // ── Local image inspection (`docker`) ──

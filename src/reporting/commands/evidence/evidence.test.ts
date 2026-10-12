@@ -104,6 +104,12 @@ describe('computeExposure', () => {
     expect(result.overallStatus).toBe('not-affected');
   });
 
+  it('does not match an advisory ecosystem to a component that has none', () => {
+    const firmware = release({ components: [{ name: 'netty', version: '4.1.104', type: 'firmware' }] });
+    const result = computeExposure(baseInput({ releasesByProduct: new Map([['sentinelgate', [firmware]]]) }));
+    expect(result.overallStatus).toBe('not-affected');
+  });
+
   it('returns undetermined (never a false clean) when a bound product has no frozen manifest', () => {
     const result = computeExposure(baseInput({ releasesByProduct: new Map([['sentinelgate', []]]) }));
     expect(result.overallStatus).toBe('undetermined');
@@ -145,8 +151,7 @@ describe('release freezing', () => {
   });
   it('extracts components from a CycloneDX SBOM', () => {
     const comps = componentsFromCycloneDx({ components: [{ name: 'netty', version: '4.1.104', purl: 'pkg:maven/io.netty/netty@4.1.104' }] });
-    expect(comps.components[0]).toMatchObject({ name: 'netty', version: '4.1.104', ecosystem: 'Maven' });
-    expect(comps.warning).toBeUndefined();
+    expect(comps[0]).toMatchObject({ name: 'netty', version: '4.1.104', ecosystem: 'Maven' });
   });
   it('extracts components from an SPDX document and from an SBOM attestation', () => {
     const spdx = { spdxVersion: 'SPDX-2.3', SPDXID: 'SPDXRef-DOCUMENT', name: 'netty-sbom', packages: [{ name: 'netty', versionInfo: '4.1.104', externalRefs: [{ referenceType: 'purl', referenceLocator: 'pkg:maven/io.netty/netty@4.1.104' }] }] };

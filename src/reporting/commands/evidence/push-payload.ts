@@ -34,9 +34,9 @@ export interface PushComponent {
   version: string;
   ecosystem?: string;
   purl?: string;
-  /** Fallback identity, present when the component had no purl and no CPE. */
+  /** Set when the component was kept by name, version, and type, or by a CPE. */
   type?: string;
-  /** Identity when the component had a CPE and no purl. */
+  /** Set when a CPE is the identity because the component has no package URL. */
   cpe?: string;
 }
 
@@ -113,12 +113,14 @@ export function pushRelease(r: Release): PushRelease {
     distribution: r.distribution,
     frozenAt: r.frozenAt,
     componentCount: r.components.length,
-    components: r.components.map((c) => {
-      const row: PushComponent = { name: c.name, version: c.version, ecosystem: c.ecosystem, purl: c.purl };
-      if (c.type) row.type = c.type;
-      if (c.cpe) row.cpe = c.cpe;
-      return row;
-    }),
+    components: r.components.map((c) => ({
+      name: c.name,
+      version: c.version,
+      ecosystem: c.ecosystem,
+      purl: c.purl,
+      ...(c.type ? { type: c.type } : {}),
+      ...(c.cpe ? { cpe: c.cpe } : {}),
+    })),
     ...(r.build ? { build: r.build } : {}),
   };
 }
