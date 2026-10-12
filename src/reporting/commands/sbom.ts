@@ -17,6 +17,8 @@ import {
   type CodedWarning,
   type WarningCode,
 } from '../../core-open/warnings.js';
+import { compareCodeUnits } from '../../core-open/utils/code-unit.js';
+import { readRootPackageIdentity, rootPackageIdentityMessage } from '../../core-open/utils/root-package-identity.js';
 
 export { describeUnrepresentableLicense } from './sbom-license.js';
 
@@ -309,13 +311,6 @@ function componentBomRef(ecosystem: Ecosystem, name: string, version: string): s
   return purlFor(ecosystem, name, version) ?? `vibgrate:${ecosystem}:${name}@${version}`;
 }
 
-/** Code-unit order, so the result does not depend on the process locale. */
-function cmpText(a: string, b: string): number {
-  if (a < b) return -1;
-  if (a > b) return 1;
-  return 0;
-}
-
 /**
  * Order for SBOM component and dependency rows. Primary key is the Package URL
  * when one was emitted, otherwise the package name. Version is next. The name
@@ -328,7 +323,7 @@ export function compareSbomOrder(
 ): number {
   const aPrimary = a.purl ? a.purl : a.name;
   const bPrimary = b.purl ? b.purl : b.name;
-  return cmpText(aPrimary, bPrimary) || cmpText(a.version ?? '', b.version ?? '') || cmpText(a.name, b.name);
+  return compareCodeUnits(aPrimary, bPrimary) || compareCodeUnits(a.version ?? '', b.version ?? '') || compareCodeUnits(a.name, b.name);
 }
 
 function compareFlattenedDependency(a: FlattenedDependency, b: FlattenedDependency): number {
@@ -336,7 +331,7 @@ function compareFlattenedDependency(a: FlattenedDependency, b: FlattenedDependen
     compareSbomOrder(
       { purl: purlFor(a.ecosystem, a.package, a.version), name: a.package, version: a.version },
       { purl: purlFor(b.ecosystem, b.package, b.version), name: b.package, version: b.version },
-    ) || cmpText(a.ecosystem, b.ecosystem)
+    ) || compareCodeUnits(a.ecosystem, b.ecosystem)
   );
 }
 
@@ -361,7 +356,7 @@ function licenseParseFindings(artifact: ScanArtifact): Finding[] {
   return artifact.findings
     .filter((f) => f.ruleId === LICENSE_PARSE_FAILED)
     .slice()
-    .sort((a, b) => a.location.localeCompare(b.location) || a.message.localeCompare(b.message));
+    .sort((a, b) => compareCodeUnits(a.location, b.location) || compareCodeUnits(a.message, b.message));
 }
 
 /** Identity of one installed package: ecosystem, name, and version. */
@@ -409,7 +404,7 @@ function sameEdges(a: string[], b: string[]): boolean {
 }
 
 function projectPhrase(names: string[]): string {
-  const unique = [...new Set(names)].filter((name) => name.length > 0).sort((a, b) => a.localeCompare(b));
+  const unique = [...new Set(names)].filter((name) => name.length > 0).sort(compareCodeUnits);
   const label = unique.length === 1 ? 'project' : 'projects';
   return `${label} ${unique.map((name) => `"${name}"`).join(', ')}`;
 }
@@ -447,7 +442,7 @@ function pushWarningCode(properties: Array<{ name: string; value: string }>, mes
 }
 
 function sortedUnique(names: Iterable<string>): string[] {
-  return [...new Set(names)].sort((a, b) => a.localeCompare(b));
+  return [...new Set(names)].sort(compareCodeUnits);
 }
 
 function addProjects(row: FlattenedDependency, names: Iterable<string>): void {
@@ -474,7 +469,7 @@ function manifestMetadataDiffers(row: FlattenedDependency, dep: DependencyRow): 
 function sbomSerialSeed(format: string, artifact: ScanArtifact, deps: FlattenedDependency[], graph?: LockfileGraph): string {
   const edgeLines = graph?.edges
     ? [...graph.edges.entries()]
-        .sort(([a], [b]) => a.localeCompare(b))
+        .sort(([a], [b]) => compareCodeUnits(a, b))
         .map(([from, to]) => `${from}>${uniqSorted(to).join(',')}`)
     : [];
   return [
@@ -586,11 +581,11 @@ export function flattenDependencies(
     const guessed = projectEcosystemGuessed(project.type);
     for (const dep of project.dependencies) {
       // Go always pins an exact version in go.mod, but the scanner's
-      // `resolvedVersion` runs it through `semver.clean` (for semver math
-      // elsewhere) and drops the `v` prefix go.sum's transitive entries keep
-      // — matching on `currentSpec` instead is what lets a direct Go
-      // dependency dedupe against its own go.sum-derived component instead
-      // of appearing as two, differently-versioned components.
+      // `resolvedVersion` drops the leading `v` (build metadata stays) while
+      // go.sum's transitive entries keep that `v` — matching on `currentSpec`
+      // instead is what lets a direct Go dependency dedupe against its own
+      // go.sum-derived component instead of appearing as two,
+      // differently-versioned components.
       const rawVersion = ecosystem === 'go' ? dep.currentSpec : (dep.resolvedVersion ?? dep.currentSpec);
       // A dependency with no lockfile/installed-tree resolution falls back
       // to its declared spec, which for npm/yarn/pnpm can be a semver range,
@@ -686,7 +681,7 @@ interface MergedComponentAcc {
  * every package a sub-project's own lockfile resolves.
  *
  * Components are keyed by ecosystem + name + version. Direct rows are applied
- * later, in `flattenDependencies`; here, lockfiles are visited in sorted
+ * later, in `flattenDependencies`; here, lockfiles are visited in code-unit
  * project-path order and the first occurrence wins. A later lockfile that
  * repeats the same identity adds its project names. A later lockfile with a
  * different dependency list is not applied — that drop is a warning on the
@@ -706,7 +701,7 @@ export function collectLockfileGraph(artifact: ScanArtifact, root: string): Lock
     projectsByPath.set(project.path, list);
   }
   const entries: LockfileMergeEntry[] = [];
-  for (const projectPath of [...projectsByPath.keys()].sort((a, b) => a.localeCompare(b))) {
+  for (const projectPath of [...projectsByPath.keys()].sort(compareCodeUnits)) {
     const graph = fullDependencyGraph(path.resolve(root, projectPath));
     if (!graph) continue;
     entries.push({ path: projectPath, graph, projects: projectsByPath.get(projectPath) ?? [] });
@@ -781,7 +776,7 @@ export function collectLockfileGraph(artifact: ScanArtifact, root: string): Lock
       ...(acc.component.hashes?.length ? { hashes: acc.component.hashes } : {}),
     }))
     .sort(
-      (a, b) => a.package.localeCompare(b.package) || a.version.localeCompare(b.version) || a.ecosystem.localeCompare(b.ecosystem),
+      (a, b) => compareCodeUnits(a.package, b.package) || compareCodeUnits(a.version, b.version) || compareCodeUnits(a.ecosystem, b.ecosystem),
     );
 
   const edges = anyEdges ? new Map<string, string[]>() : undefined;
@@ -1120,6 +1115,10 @@ const exportCommand = new Command('export')
     const sbom = format === 'cyclonedx' ? toCycloneDx(artifact, lockfileGraph) : toSpdx(artifact, lockfileGraph);
     const coded: CodedWarning[] = [];
     const plain: string[] = [];
+    const rootIdentityWarning = rootPackageIdentityMessage(readRootPackageIdentity(path.resolve(opts.root)));
+    if (rootIdentityWarning) {
+      coded.push(codedWarning(WARNING_CODES.ROOT_PACKAGE_IDENTITY, rootIdentityWarning));
+    }
     for (const warning of [
       ...collectPurlWarnings(artifact, lockfileGraph),
       ...collectLicenseWarnings(artifact, lockfileGraph),

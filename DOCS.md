@@ -325,6 +325,8 @@ vg evidence export [--out <dir>] [--regime <id>]
 
 `release` freezes the manifest from a Vibgrate scan artifact or an SBOM — CycloneDX, SPDX, or either one wrapped in an in-toto / DSSE **SBOM attestation**. Where the artefact is a container image, it can also take the facts straight from what BuildKit wrote instead of values typed in by hand: `--buildkit-metadata` reads the `docker buildx build --metadata-file` output for the image digest and build reference; `--provenance` reads a SLSA provenance attestation for the source repository, commit, and base images; and `--image <ref>` asks Docker for the image's digest, `org.opencontainers.image.*` labels, and any attached provenance and SBOM attestations (an attached SBOM becomes the manifest when `--from` is not given). `--image` runs `docker image inspect` and `docker buildx imagetools inspect`; the second contacts the image's registry when the reference is not present locally. Those facts are stored under `build` in the frozen manifest. A typed `--digest` that disagrees with what the build wrote is an error, never a silent preference, and attestation signatures are recorded as unverified — verify them with `cosign`.
 
+A `--from` file that is truncated, not valid JSON, or a CycloneDX or SPDX document missing a required field exits `1`. The message names that file and the format it expected: CycloneDX JSON with `bomFormat`, `specVersion`, and `version`, or SPDX JSON with `spdxVersion`, `SPDXID`, and `name`. It says to regenerate the SBOM and run the command again. The document and any home directory stay out of the message. A component or package missing `name` fails the command. The same check applies to an SBOM attached to an image. An unversioned component stays out of the frozen manifest: both formats allow a component without a version, and a manifest records a concrete one.
+
 `push` sends the product registry, every frozen release manifest (components, artefact digest, and the build facts read from BuildKit), and — when `--result` points at a bundle directory — the exposure result with its DSSE envelope and RFC 3161 token. Vibgrate Cloud verifies the signature itself and records the outcome as `intact`, `failed` or `absent`; it never takes a flag's word for it (the old `--signed` flag is accepted and ignored). Bodies above the 10 MB limit drop component lists from the oldest releases first and say so; `--no-releases` omits the manifests entirely. In Vibgrate Cloud → Govern ▸ Evidence the frozen releases appear with their chain of custody, every component is searchable across releases, and each ledger entry offers its archived bundle for download.
 
 `exposure` matches against manifests **frozen at ship time**, not the current tree, and never guesses: a bound product with no frozen manifest returns `undetermined` with a reason. It runs fully `--offline` against a local advisory file, and can emit a signed evidence bundle (`--bundle <dir>`) that `vg evidence verify` checks offline with honest `verified` / `unverified` / `failed` states. Pass `--tsa <url>` to anchor the bundle to a trusted **RFC 3161** timestamp (`timestamp.tsr`), fully verifiable with `openssl ts -verify`.
@@ -334,6 +336,8 @@ vg evidence export [--out <dir>] [--regime <id>]
 **Exit codes** (CI-usable): `0` no exposure · `2` exposure found · `3` undetermined (manual review) · `1` operational error.
 
 If a command cannot serialize or write a JSON or JSONL file — permission denied, a missing parent directory, a path that is a directory, a full disk, or a value that cannot be serialized — that is an operational error. The command exits `1`. The message names the file. Check the path and permissions, or choose another `--out` or `--bundle`.
+
+`vg evidence verify` reads the bundle before it reports `verified`, `unverified`, or `failed`. A missing bundle exits `3`. A bundle whose envelope or `result.json` is truncated, is not valid JSON, or is not an evidence document this version can read exits `1`. The message names the envelope or the result and tells you to restore the bundle or re-create it with `vg evidence exposure --bundle`. It does not print the file's contents or a stack trace. A readable bundle that was signed and then edited still reports `failed`.
 
 No language model touches any figure in the evidence path, and every determination carries an evidence-not-compliance disclaimer. Vibgrate Evidence produces evidence to support your obligations under a regime; it does not determine compliance and is not legal advice.
 
@@ -1554,6 +1558,11 @@ Read from the **trusted base branch** when `--base` is given, so a pull request
 cannot weaken the policy applied to itself. It is read as data: a `review` block
 in a `.ts`/`.js` config is never run, so keep it in YAML or JSON.
 
+A key `vg` does not recognise, or a value of the wrong type, stops the command.
+The error names the file and, when the file makes it clear, the line and the
+key. The value is not printed. `.vibgrate/review.toml` still skips keys it does
+not recognise.
+
 The first `vg review` in a repository with no policy writes an advisory starter
 policy: a new `.vibgrate/config.yml` when there is no config, or a `review` block
 added to an existing `.vibgrate/config.yml` / `vibgrate.config.json`. A `.ts` or
@@ -1694,6 +1703,8 @@ Match a component on its [package URL](https://github.com/package-url/purl-spec)
 | Scan JSON, advisory match | `extended.vulnerabilities.packages[].ecosystem`, `.package`, and `.version`. |
 
 `projects[].type` is the project kind (`java`, `node`, `python`). The vulnerability block uses the advisory ecosystem (`maven`, `npm`, `pypi`). `vg sbom export` turns those coordinates into the purl type (`pkg:maven`, `pkg:npm`, `pkg:pypi`).
+
+Build metadata stays on that recorded version. `1.2.3+build.7` is written as `1.2.3+build.7` in scan JSON (`resolvedVersion`) and as the SBOM component version. The package URL encodes `+` as `%2B` (`pkg:npm/example-build-meta@1.2.3%2Bbuild.7`). Range checks ignore the suffix. A Go scan drops a leading `v` and keeps the suffix, so `v1.2.3+build.7` is recorded as `1.2.3+build.7`. `vg sbom export` for Go uses the require token, which keeps the leading `v` and matches `go.sum`. The same shape is checked in at `examples/semver-build-metadata/`.
 
 These documents have no CPE field. The CLI does not write one, including when a name has several segments (a Maven `group:artifact`, an npm scope, a Go module path). A missing CPE is the normal record. Leave it missing. If a file from another cataloger carries a `cpe` property, keep the purl as the identity you match. A CPE does not replace a purl, rank above it, or stand in for a purl that was omitted.
 
@@ -1921,6 +1932,12 @@ inside one lockfile edge are sorted on their own. SPDX `SPDXID` values are
 `SPDXRef-Package-N` for that order, so they stay put when only discovery order
 changes. The document id stays a content-derived UUID.
 
+String keys in that order — purls, package names, versions, and the project
+names in `vibgrate:projects` — compare by UTF-16 code unit. `LANG` and
+`LC_ALL` do not change the document. Lockfiles are visited in that same
+code-unit order of project path, and the first path wins when two lockfiles
+repeat one identity.
+
 **Same inputs, same document.** For one scan artifact and the lockfiles under
 `--root`, `vg sbom export` writes the same JSON on every run, including the
 CycloneDX `serialNumber` and the SPDX `documentNamespace`. Those values are
@@ -2010,6 +2027,30 @@ root. It has no version and no purl. A scan that recorded no dependencies still
 writes that metadata component and an empty `components` array. SPDX `packages`
 is empty in that case, and `primaryPackagePurpose` is still absent because there
 is still no package.
+
+#### Root package.json without a name or version
+
+A root `package.json` may omit `name`, `version`, or both. A missing field is
+one that is absent, blank, or not a string. `vg build`, `vg scan`, and
+`vg sbom export` keep going. Each prints one warning,
+`warning [VG_WARN_ROOT_PACKAGE_IDENTITY]`. Dependencies declared in that file,
+and the versions the lockfile resolves, are still reported.
+
+The fallback name is the last segment of the directory you passed to the
+command. It is not an absolute path, so the same tree produces the same name
+on every machine. A missing version is omitted. The command does not write
+`0.0.0` in its place.
+
+| Field | When `package.json` has the field | When it does not |
+| --- | --- | --- |
+| Code-map package node, scan project `name`, and `repository.name` | the `name` string | the directory name |
+| `repository.version` | the `version` string | the field is omitted |
+| CycloneDX `metadata.component.name` | the directory name (`rootPath`) | the directory name (`rootPath`) |
+| CycloneDX `metadata.component.version` | omitted | omitted |
+| SPDX document `name` | `<rootPath>-sbom` | `<rootPath>-sbom` |
+
+The code map does not name that package `.`. `vg sbom export` still writes the
+root component and the dependency rows.
 
 **Gaps.** These are holes in the inventory, labeled as holes.
 
@@ -2165,6 +2206,8 @@ Switches (flags that take no value, such as `--vulns`, `--offline` or `--no-grap
 
 By default, the scan writes `.vibgrate/scan_result.json`. Use `--no-local-artifacts` or `--max-privacy` to suppress local JSON artifact files.
 
+A truncated or syntactically invalid lockfile stops the scan before a dependency graph is built. The error names the file (for example `package-lock.json`, `pnpm-lock.yaml`, or `yarn.lock`) and tells you to regenerate it with your package manager. The message does not include the lockfile, and the process exits non-zero. A valid lockfile is scanned as before.
+
 `vg scan` does not follow symlinks while it indexes the tree. A skipped link is named once on stderr. See [Symlinks](#symlinks).
 
 For offline drift scoring, pass `--package-manifest <file>` with a downloaded manifest bundle such as `https://github.com/vibgrate/manifests/latest-packages.zip`. The manifest shape, the fail-closed errors, and what offline mode skips are in [Offline scan with a package-version manifest](#offline-scan-with-a-package-version-manifest).
@@ -2181,7 +2224,7 @@ pnpm-lock.yaml: unknown optional lockfile field "futureOptional"; continuing wit
 
 The path is relative to the directory you ran the command from, when the lockfile is under that directory. Otherwise the warning uses the file name only. The warning names the field. It does not print the field's value, an environment value, or an authorization header. A field name that is not a plain identifier is reported as `(name omitted)`.
 
-A lockfile that is truncated, empty, or missing the structure its format requires still fails the command. The error names the file and the format, tells you to regenerate the file with your package manager, and the process exits non-zero. The error does not include the file's contents.
+A lockfile that is truncated or not valid syntax still fails the command, including the other lockfiles the walk skips (for example `bun.lock`, `mix.lock`, `Cargo.lock`). The error names each bad file, in path order, tells you to regenerate it with your package manager, and the process exits non-zero. The error does not include the file's contents. An empty `go.sum` or `go.work.sum` is valid: the module has no dependencies.
 
 `vg scan` and `vg sbom export` follow this for npm, pnpm, yarn, poetry, uv, pdm, Pipfile, Cargo, Composer, NuGet, Swift package pins, and pub. A Gradle lock line, a Gemfile spec, and a `go.sum` line do not have optional field names. A line that does not match that format is invalid, and the command fails.
 
@@ -2265,6 +2308,8 @@ The fail-closed path is covered by `src/reporting/commands/scan-package-manifest
 #### Determinism
 
 The same tree and the same manifest produce the same findings order and the same advisory ids. Vulnerability findings are ordered by ecosystem, then package name, then installed version. Advisories on one package are ordered by severity — critical, high, moderate, low, unknown — and then by advisory id. That id is the `id` from the manifest. JSON records it as `details.advisoryId`. The order of keys in the manifest file does not change the result. `timestamp` and `durationMs` on the scan artifact still change between runs. In a git checkout, an exposure window's day count follows the scan date. The advisory id and the finding order stay the same.
+
+Those string keys, and the package-name tie-break on dependency rows inside a project, compare by UTF-16 code unit. SARIF results follow that finding order. Degrade-and-continue warnings are ordered by code, then message, the same way. `LANG` and `LC_ALL` do not change the JSON or the SARIF.
 
 Registry, sign-in, and upload failures — the message `vg` prints and the next command — are in [Troubleshooting: registry, auth, and network](#troubleshooting-registry-auth-and-network).
 
@@ -2356,12 +2401,12 @@ Go modules pin an untagged commit as a pseudo-version (`v0.0.0-20191109021931-da
 The scan reads direct `require` lines in `go.mod`.
 
 - A concrete `v` version that is valid semver after the leading `v` is removed is the recorded version. `v1.2.3` is recorded as `1.2.3`.
-- Build metadata is dropped. `v2.0.0+incompatible` is recorded as `2.0.0`. The major stays 2.
+- Build metadata stays. `v2.0.0+incompatible` is recorded as `2.0.0+incompatible`. The major stays 2. Range checks ignore the suffix.
 - A pseudo-version keeps its pre-release suffix. `v0.0.0-20191109021931-daa7c04131f5` is recorded as `0.0.0-20191109021931-daa7c04131f5`.
 - A bare module path, a range such as `>=1.4.0`, a line marked `// indirect`, and a token that is not a full semver (`v1.2`) are not matched against advisories.
 - `go.sum` is not the version source for this match.
 
-A range is half-open: the version matches from `introduced` up to, and not including, `fixed`. `introduced` of `0` means from the beginning. Before that check, the recorded version is reduced to `major.minor.patch`. The pre-release suffix is not ordered against the tag. An explicit `versions` list matches the recorded string exactly, so the list entry still has the pre-release suffix and has no leading `v`.
+A range is half-open: the version matches from `introduced` up to, and not including, `fixed`. `introduced` of `0` means from the beginning. Before that check, the recorded version is reduced to `major.minor.patch`. The pre-release suffix and any build metadata are not ordered against the tag. An explicit `versions` list matches the recorded string exactly, so the list entry still has the pre-release suffix and any build metadata, and has no leading `v`.
 
 ##### Pseudo-versions and tagged releases
 
@@ -2376,11 +2421,11 @@ In Go's own order, `v1.2.4-0.<timestamp>-<commit>` is a commit after `v1.2.3` an
 
 An explicit list entry of `v0.0.0-20191109021931-daa7c04131f5` does not match the open finding. The entry `0.0.0-20191109021931-daa7c04131f5` does. The entry `0.0.0` does not: the list is exact, and the recorded string still has the pre-release suffix.
 
-Exposure windows replay the `require` token as written in `go.mod`, including the leading `v` and a `+incompatible` suffix. Range checks reduce that token to the same `major.minor.patch` as the open finding. An explicit `versions` list matches the string it is given, so `v2.0.0+incompatible` can match a history replay and miss the open finding (`2.0.0`), or the other way around.
+Exposure windows replay the `require` token as written in `go.mod`, including the leading `v` and a `+incompatible` suffix. Range checks reduce that token to the same `major.minor.patch` as the open finding. An explicit `versions` list matches the string it is given, so `v2.0.0+incompatible` can match a history replay and miss the open finding (`2.0.0+incompatible`), or the other way around.
 
 ##### `+incompatible`
 
-The suffix is dropped before the comparison. `v2.0.0+incompatible` matches a range from `2.0.0` up to `2.1.0`. It does not match a range that only covers `1.x`. An explicit list entry of `v2.0.0+incompatible` does not match the open finding. The entry `2.0.0` does.
+The suffix stays on the recorded version. `v2.0.0+incompatible` matches a range from `2.0.0` up to `2.1.0`, because the range check ignores the suffix. It does not match a range that only covers `1.x`. An explicit list entry of `v2.0.0+incompatible` does not match the open finding. The entry `2.0.0+incompatible` does. The entry `2.0.0` does not.
 
 ##### `replace` and `exclude`
 
@@ -2532,7 +2577,7 @@ vg scan --vulns --offline --package-manifest package-versions.json --format json
 | `example.com/pseudo-base` | `GHSA-example-pseudo-base` | reported (compared as `0.0.0`) |
 | `example.com/pseudo-base` | `GHSA-example-pseudo-explicit-v` | absent (the list has the leading `v`) |
 | `example.com/pseudo-base` | `GHSA-example-pseudo-explicit-clean` | reported |
-| `example.com/oldmajor` | `GHSA-example-incompatible-range` | reported (`2.0.0`) |
+| `example.com/oldmajor` | `GHSA-example-incompatible-range` | reported (compared as `2.0.0`; recorded `2.0.0+incompatible`) |
 | `example.com/oldmajor` | `GHSA-example-incompatible-v1` | absent (that range is `1.x`) |
 | `example.com/oldmajor` | `GHSA-example-incompatible-explicit` | absent (the list is `v2.0.0+incompatible`) |
 | `example.com/replaced-mod` | `GHSA-example-replaced` | reported (the `require` version; the `replace` is ignored) |
@@ -2737,6 +2782,8 @@ vg build [paths...]
 
 Maps source code into a graph artifact, enabling all downstream queries (`vg show`, `vg ask`, `vg impact`, etc.).
 
+A truncated or syntactically invalid lockfile stops the build before source files are parsed, so parse workers are not left running and a partial map is not written. The error names the file and tells you to regenerate it with your package manager. A valid lockfile builds as before.
+
 | Flag | Default | Description |
 |------|---------|-------------|
 | `[paths...]` | `.` | Folders or files to map |
@@ -2930,7 +2977,7 @@ A code-map `import` edge runs from the POM's `package` node to an `external` nod
 
 A scan row has `package` (`groupId:artifactId`), `section`, `currentSpec`, `resolvedVersion`, `latestStable`, `majorsBehind`, and `drift`. `section` is `dependencies` for every Java row, including `<scope>test</scope>` and `testImplementation`. Scope and the Gradle configuration name are not fields. A missing resolved version is `null`, and a missing major lag is `null`.
 
-`resolvedVersion` is the declared version when that string converts to a semantic version, with a missing patch padded (`1.2` becomes `1.2.0`). `32.1.3-jre` is kept. `1.2.3-SNAPSHOT` and a Maven range such as `[1.0,2.0)` stay in `currentSpec` and set `resolvedVersion` to `null`. With `--offline`, `latestStable` is `null` and `drift` is `unknown`. A run that can reach Maven Central fills `latestStable` and `drift` from that registry.
+`resolvedVersion` is the declared version when that string converts to a semantic version, with a missing patch padded (`1.2` becomes `1.2.0`). `32.1.3-jre` is kept. `1.2.3+build.7` stays `1.2.3+build.7`. `1.2.3-SNAPSHOT` and a Maven range such as `[1.0,2.0)` stay in `currentSpec` and set `resolvedVersion` to `null`. With `--offline`, `latestStable` is `null` and `drift` is `unknown`. A run that can reach Maven Central fills `latestStable` and `drift` from that registry.
 
 #### Maven
 
@@ -5090,7 +5137,9 @@ driftBudget:
   opened the pull request.
 - `--drift-budget` / `--drift-worsening` still work; passing either uses the flags
   and ignores `driftBudget`.
-- Misspelt keys are reported, never silently ignored.
+- A misspelt key, a wrong type, or a `driftBudget` that sets no limit stops the
+  command. The error names the file and, when the file makes it clear, the line
+  and the key. The value is not printed.
 
 The GitHub App reads `driftBudget` and `review` from the pull request's base
 branch, so a change cannot loosen the limits it is checked against. It reads
@@ -5159,6 +5208,18 @@ text only; it does not hide this notice.
 
 ```text
 notice: skipped 3 symlinks (alias.ts, nested/cycle, via). vg does not follow symlinks. Point the root at the link target, or pass --exclude or a narrower root.
+```
+
+### Binary and non-UTF-8 files
+
+`vg build` and `vg scan` read project files as text. A file that contains a NUL byte, or bytes that are not valid UTF-8, is not text. That includes a binary blob saved with a source or manifest extension, and UTF-16 saved as `.md` or `.json`.
+
+Those files are left out. The build does not parse them and does not put their bytes in the map. The scan does not feed them to text parsers. One warning names the count and the first few root-relative paths, in sorted order (at most five; further files are a `+N more` count). It tells you to leave the files out with a `.gitignore` entry, or to pass `--exclude`. The warning does not include the file's bytes.
+
+A lockfile that is binary or not UTF-8 still stops the command. That message names the file and tells you to leave it out the same way, or to replace it with a text lockfile. It does not include the file's bytes.
+
+```text
+warning [VG_WARN_NON_TEXT_FILE]: skipped 2 files that are binary or not UTF-8 (blob.ts, notes.md). Leave them out with a .gitignore entry, or pass --exclude.
 ```
 
 ---
@@ -5774,7 +5835,7 @@ Stderr lines look like `warning [VG_WARN_PARSE_FAILED]: …`. The code is the to
 
 `vg build --json` keeps `warnings` as strings and adds `codedWarnings`: an array of `{ code, message }` in that same order. Each string in `warnings` ends with ` [CODE]`. `codedWarnings` is left out when there are no warnings.
 
-`vg scan --format json` adds `degradations` when a path was skipped or a baseline file could not be read. The field is left out when there are none. `vg report` prints those same rows.
+`vg scan --format json` adds `degradations` when a path was skipped, a baseline file could not be read, or the root `package.json` omitted `name` or `version`. The field is left out when there are none. `vg report` prints those same rows.
 
 `vg sbom export` prints the code on stderr. CycloneDX adds a `vibgrate:warningCode` property next to the existing warning property. SPDX adds an annotation whose comment is `warningCode=VG_WARN_…`. The warning sentences already stored on the document stay as they are.
 
@@ -5784,7 +5845,7 @@ A truncated or invalid lockfile stops the command. Warning codes cover condition
 
 | Code | Command | Meaning |
 | --- | --- | --- |
-| `VG_WARN_PARSE_FAILED` | `vg build` | A source file failed to parse. The map continues without its symbols. |
+| `VG_WARN_PARSE_FAILED` | `vg build`, `vg scan` | A supported-language source file failed to parse. The message names the file and the language. The map continues without that file's symbols. Correct the file or exclude the path with `--exclude`. |
 | `VG_WARN_BUILD_FILE_OVERSIZE` | `vg build` | A file exceeded the per-file size cap and was left out of the map. |
 | `VG_WARN_TSC_RESOLVER_SKIPPED` | `vg build` | The TypeScript resolver was skipped because the corpus exceeded its file cap. |
 | `VG_WARN_YAML_PARSE_FAILED` | `vg build` | YAML for an infrastructure file failed to parse. |
@@ -5803,6 +5864,7 @@ A truncated or invalid lockfile stops the command. Warning codes cover condition
 | `VG_WARN_LICENSE_UNREPRESENTABLE` | `vg sbom` | A declared license cannot be represented in an SBOM. |
 | `VG_WARN_CVSS_UNPARSEABLE` | `vg scan` | A CVSS vector was present and could not be parsed. |
 | `VG_WARN_PURL_UNAVAILABLE` | `vg sbom` | A package URL could not be formed. The component is included without a purl. |
+| `VG_WARN_ROOT_PACKAGE_IDENTITY` | `vg build`, `vg scan`, `vg sbom` | The root `package.json` omitted `name`, `version`, or both. The root component uses the directory name when `name` is missing, and omits `version` when that field is missing. Dependencies are still resolved. |
 | `VG_WARN_SBOM_LOSSY_EDGES` | `vg sbom` | Merge dropped a different dependency list for one package. |
 | `VG_WARN_SBOM_LOSSY_MANIFEST` | `vg sbom` | Merge dropped differing manifest metadata for one package. |
 | `VG_WARN_SBOM_UNKNOWN_ECOSYSTEM` | `vg sbom` | Merge recorded an unknown ecosystem as npm. |

@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import * as semver from 'semver';
 import { XMLParser } from 'fast-xml-parser';
 import { readTextFile, readJsonFile, pathExists, FileCache } from '../utils/fs.js';
+import { recordedSemver, splitBuildMetadata } from '../utils/recorded-semver.js';
 import { withTimeout } from '../utils/timeout.js';
 import { MavenCache } from './maven-cache.js';
 import { rethrowLockfileParseError } from '../utils/lockfile-parse.js';
@@ -14,6 +15,7 @@ import { latestLts, runtimeEolStatus, extractCycle, eolDate } from '../runtimes/
 import { BUNDLED_RUNTIME_CATALOG } from '../runtimes/snapshot.js';
 import type { RuntimeCatalog } from '../runtimes/types.js';
 import type { ProjectScan, DependencyRow, DetectedFramework, ProjectReference } from '../types.js';
+import { compareCodeUnits } from '../utils/code-unit.js';
 
 const parser = new XMLParser({
   ignoreAttributes: false,
@@ -336,15 +338,18 @@ function parseGradleBuild(content: string, filePath: string): GradleData {
  * Convert a Maven version string to semver where possible.
  */
 function mavenToSemver(ver: string): string | null {
-  let v = ver.trim();
-  if (!v || v.includes('$')) return null;
+  const trimmed = ver.trim();
+  if (!trimmed || trimmed.includes('$')) return null;
+  // Peel `+build` before splitting on `.`, or a dotted build id (`+build.7`) is
+  // treated as extra numeric components and then dropped by `semver.valid`.
+  const { core, build } = splitBuildMetadata(trimmed);
   // Maven pre-release markers — both hyphen (-alpha, -rc) and dot (.Beta1, .RC1) forms
-  if (/(?:[-.](?:SNAPSHOT|alpha|beta|rc|M\d+|CR\d+))/i.test(v)) return null;
-  v = v.replace(/\.(?:RELEASE|Final|GA)$/i, '');
+  if (/(?:[-.](?:SNAPSHOT|alpha|beta|rc|M\d+|CR\d+))/i.test(core)) return null;
+  let v = core.replace(/\.(?:RELEASE|Final|GA)$/i, '');
   const parts = v.split('.');
   while (parts.length < 3) parts.push('0');
   v = parts.slice(0, 3).join('.');
-  return semver.valid(v);
+  return recordedSemver(build ? `${v}${build}` : v);
 }
 
 // ── Main scanner ──
@@ -561,7 +566,7 @@ async function scanOneJavaProject(
     const order = { 'major-behind': 0, 'minor-behind': 1, 'current': 2, 'unknown': 3 };
     const diff = (order[a.drift] ?? 9) - (order[b.drift] ?? 9);
     if (diff !== 0) return diff;
-    return a.package.localeCompare(b.package);
+    return compareCodeUnits(a.package, b.package);
   });
 
   // Count files (use cached walk to avoid redundant I/O)
