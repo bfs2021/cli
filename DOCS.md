@@ -1905,6 +1905,12 @@ inside one lockfile edge are sorted on their own. SPDX `SPDXID` values are
 `SPDXRef-Package-N` for that order, so they stay put when only discovery order
 changes. The document id stays a content-derived UUID.
 
+String keys in that order — purls, package names, versions, and the project
+names in `vibgrate:projects` — compare by UTF-16 code unit. `LANG` and
+`LC_ALL` do not change the document. Lockfiles are visited in that same
+code-unit order of project path, and the first path wins when two lockfiles
+repeat one identity.
+
 **Same inputs, same document.** For one scan artifact and the lockfiles under
 `--root`, `vg sbom export` writes the same JSON on every run, including the
 CycloneDX `serialNumber` and the SPDX `documentNamespace`. Those values are
@@ -2171,6 +2177,8 @@ Switches (flags that take no value, such as `--vulns`, `--offline` or `--no-grap
 
 By default, the scan writes `.vibgrate/scan_result.json`. Use `--no-local-artifacts` or `--max-privacy` to suppress local JSON artifact files.
 
+A truncated or syntactically invalid lockfile stops the scan before a dependency graph is built. The error names the file (for example `package-lock.json`, `pnpm-lock.yaml`, or `yarn.lock`) and tells you to regenerate it with your package manager. The message does not include the lockfile, and the process exits non-zero. A valid lockfile is scanned as before.
+
 `vg scan` does not follow symlinks while it indexes the tree. A skipped link is named once on stderr. See [Symlinks](#symlinks).
 
 For offline drift scoring, pass `--package-manifest <file>` with a downloaded manifest bundle such as `https://github.com/vibgrate/manifests/latest-packages.zip`. The manifest shape, the fail-closed errors, and what offline mode skips are in [Offline scan with a package-version manifest](#offline-scan-with-a-package-version-manifest).
@@ -2187,7 +2195,7 @@ pnpm-lock.yaml: unknown optional lockfile field "futureOptional"; continuing wit
 
 The path is relative to the directory you ran the command from, when the lockfile is under that directory. Otherwise the warning uses the file name only. The warning names the field. It does not print the field's value, an environment value, or an authorization header. A field name that is not a plain identifier is reported as `(name omitted)`.
 
-A lockfile that is truncated, empty, or missing the structure its format requires still fails the command. The error names the file and the format, tells you to regenerate the file with your package manager, and the process exits non-zero. The error does not include the file's contents.
+A lockfile that is truncated or not valid syntax still fails the command, including the other lockfiles the walk skips (for example `bun.lock`, `mix.lock`, `Cargo.lock`). The error names each bad file, in path order, tells you to regenerate it with your package manager, and the process exits non-zero. The error does not include the file's contents. An empty `go.sum` or `go.work.sum` is valid: the module has no dependencies.
 
 `vg scan` and `vg sbom export` follow this for npm, pnpm, yarn, poetry, uv, pdm, Pipfile, Cargo, Composer, NuGet, Swift package pins, and pub. A Gradle lock line, a Gemfile spec, and a `go.sum` line do not have optional field names. A line that does not match that format is invalid, and the command fails.
 
@@ -2271,6 +2279,8 @@ The fail-closed path is covered by `src/reporting/commands/scan-package-manifest
 #### Determinism
 
 The same tree and the same manifest produce the same findings order and the same advisory ids. Vulnerability findings are ordered by ecosystem, then package name, then installed version. Advisories on one package are ordered by severity — critical, high, moderate, low, unknown — and then by advisory id. That id is the `id` from the manifest. JSON records it as `details.advisoryId`. The order of keys in the manifest file does not change the result. `timestamp` and `durationMs` on the scan artifact still change between runs. In a git checkout, an exposure window's day count follows the scan date. The advisory id and the finding order stay the same.
+
+Those string keys, and the package-name tie-break on dependency rows inside a project, compare by UTF-16 code unit. SARIF results follow that finding order. Degrade-and-continue warnings are ordered by code, then message, the same way. `LANG` and `LC_ALL` do not change the JSON or the SARIF.
 
 Registry, sign-in, and upload failures — the message `vg` prints and the next command — are in [Troubleshooting: registry, auth, and network](#troubleshooting-registry-auth-and-network).
 
@@ -2742,6 +2752,8 @@ vg build [paths...]
 ```
 
 Maps source code into a graph artifact, enabling all downstream queries (`vg show`, `vg ask`, `vg impact`, etc.).
+
+A truncated or syntactically invalid lockfile stops the build before source files are parsed, so parse workers are not left running and a partial map is not written. The error names the file and tells you to regenerate it with your package manager. A valid lockfile builds as before.
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -5169,6 +5181,18 @@ text only; it does not hide this notice.
 notice: skipped 3 symlinks (alias.ts, nested/cycle, via). vg does not follow symlinks. Point the root at the link target, or pass --exclude or a narrower root.
 ```
 
+### Binary and non-UTF-8 files
+
+`vg build` and `vg scan` read project files as text. A file that contains a NUL byte, or bytes that are not valid UTF-8, is not text. That includes a binary blob saved with a source or manifest extension, and UTF-16 saved as `.md` or `.json`.
+
+Those files are left out. The build does not parse them and does not put their bytes in the map. The scan does not feed them to text parsers. One warning names the count and the first few root-relative paths, in sorted order (at most five; further files are a `+N more` count). It tells you to leave the files out with a `.gitignore` entry, or to pass `--exclude`. The warning does not include the file's bytes.
+
+A lockfile that is binary or not UTF-8 still stops the command. That message names the file and tells you to leave it out the same way, or to replace it with a text lockfile. It does not include the file's bytes.
+
+```text
+warning [VG_WARN_NON_TEXT_FILE]: skipped 2 files that are binary or not UTF-8 (blob.ts, notes.md). Leave them out with a .gitignore entry, or pass --exclude.
+```
+
 ---
 
 ## Extended Scanners
@@ -5792,7 +5816,7 @@ A truncated or invalid lockfile stops the command. Warning codes cover condition
 
 | Code | Command | Meaning |
 | --- | --- | --- |
-| `VG_WARN_PARSE_FAILED` | `vg build` | A source file failed to parse. The map continues without its symbols. |
+| `VG_WARN_PARSE_FAILED` | `vg build`, `vg scan` | A supported-language source file failed to parse. The message names the file and the language. The map continues without that file's symbols. Correct the file or exclude the path with `--exclude`. |
 | `VG_WARN_BUILD_FILE_OVERSIZE` | `vg build` | A file exceeded the per-file size cap and was left out of the map. |
 | `VG_WARN_TSC_RESOLVER_SKIPPED` | `vg build` | The TypeScript resolver was skipped because the corpus exceeded its file cap. |
 | `VG_WARN_YAML_PARSE_FAILED` | `vg build` | YAML for an infrastructure file failed to parse. |
