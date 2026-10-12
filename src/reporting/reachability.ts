@@ -35,7 +35,6 @@ import type {
   RiskySymbolManifestEntry,
   SymbolsPreflightDependency,
 } from '../core-open/index.js';
-import { compareReachabilityFindings } from '../core-open/findings-order.js';
 import type { VgGraph, GraphNode } from '../schema.js';
 import { indexFor } from '../engine/relations.js';
 import { compareCodeUnits } from '../core-open/utils/code-unit.js';
@@ -232,22 +231,20 @@ export async function analyzeReachability(
   const readFile = input.readFile ?? defaultReadFile;
 
   if (!input.graph) {
-    const findings = input.manifest.map((entry) => ({
-      advisoryId: entry.advisoryId,
-      ecosystem: entry.ecosystem,
-      package: entry.package,
-      version: entry.version,
-      tier: 'unknown' as ReachabilityTier,
-      evidence: 'no code map available for this scan',
-      graphConfidence: 0,
-    }));
-    findings.sort(compareReachabilityFindings);
     return {
       analyzerVersion: REACHABILITY_ANALYZER_VERSION,
       source: 'none',
       generatedAt,
       manifestAdvisoryCount: input.manifest.length,
-      findings: findings.slice(0, MAX_FINDINGS),
+      findings: input.manifest.slice(0, MAX_FINDINGS).map((entry) => ({
+        advisoryId: entry.advisoryId,
+        ecosystem: entry.ecosystem,
+        package: entry.package,
+        version: entry.version,
+        tier: 'unknown' as ReachabilityTier,
+        evidence: 'no code map available for this scan',
+        graphConfidence: 0,
+      })),
     };
   }
 

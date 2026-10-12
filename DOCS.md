@@ -2278,7 +2278,7 @@ The fail-closed path is covered by `src/reporting/commands/scan-package-manifest
 
 #### Determinism
 
-The same tree and the same manifest produce the same findings order and the same advisory ids. Vulnerability findings are ordered by ecosystem, then package name, then installed version. Advisories on one package are ordered by severity — critical, high, moderate, low, unknown — and then by advisory id. That id is the `id` from the manifest. JSON records it as `details.advisoryId`. The order of keys in the manifest file does not change the result. `timestamp` and `durationMs` on the scan artifact still change between runs. In a git checkout, an exposure window's day count follows the scan date. The advisory id and the finding order stay the same.
+The same tree and the same manifest produce the same findings order and the same advisory ids. JSON lists every finding by path (`location`), then rule id, then advisory id, then package URL when the finding carries an ecosystem and a package name. Alias lists on a finding are sorted. The text report prints errors, then warnings, then notes, and within a level it uses that same path order, so the terminal stays readable. SARIF keeps drift findings first. Vulnerability results then follow ecosystem, package name, and installed version, and within a package severity — critical, high, moderate, low, unknown — and then advisory id. That id is the `id` from the manifest. JSON records it as `details.advisoryId`. The order of keys in the manifest file does not change the result. `timestamp` and `durationMs` on the scan artifact still change between runs. In a git checkout, an exposure window's day count follows the scan date. The advisory id and the finding order stay the same.
 
 Those string keys, and the package-name tie-break on dependency rows inside a project, compare by UTF-16 code unit. SARIF results follow that finding order. Degrade-and-continue warnings are ordered by code, then message, the same way. `LANG` and `LC_ALL` do not change the JSON or the SARIF.
 
@@ -4887,13 +4887,11 @@ The default output. A coloured, human-readable report showing:
 
 The full scan artifact in JSON format. Contains all raw data, scores, findings, and VCS metadata. Stable schema (`schemaVersion: "1.0"`). This is the same artifact saved to `.vibgrate/scan_result.json`.
 
-`findings` is sorted before it is written, by rule id, then location, then message, then advisory id, package name, and package URL when those fields are present. Comparison is code-unit order, so a locale or a filesystem walk cannot reshuffle the array. `details.aliases` is sorted the same way. `fixedVersions` stays in range order. Infrastructure findings (`extended.security.findings`) stay in path, line, address, rule, id order. Reachability findings stay in ecosystem, package, advisory id, symbol, version order. Two scans of the same tree write those arrays in the same order. The text report still prints errors, then warnings, then notes.
-
 Dependency identity in this file is `projects[].type` plus `dependencies[].package` and `resolvedVersion`. An advisory match is `extended.vulnerabilities.packages[]` (`ecosystem`, `package`, `version`). `vg sbom export` writes those coordinates as a package URL. The file has no CPE field. See [Component identity](#component-identity). A dependency row has no package digest. `projects[].projectId` and `solutions[].solutionId` identify the project and the solution. See [Package digests](#package-digests).
 
 ### SARIF
 
-[Static Analysis Results Interchange Format](https://sarifweb.azurewebsites.net/) (SARIF) 2.1.0. GitHub code scanning and Azure DevOps read this file. It contains findings only. The DriftScore and the other metrics stay in the JSON artifact. Results follow the JSON `findings` order above, so drift rules come before `vibgrate/vulnerability`.
+[Static Analysis Results Interchange Format](https://sarifweb.azurewebsites.net/) (SARIF) 2.1.0. GitHub code scanning and Azure DevOps read this file. It contains findings only. The DriftScore and the other metrics stay in the JSON artifact. Drift findings come first. Vulnerability findings follow when the scan ran with `--vulns`.
 
 Every result includes `partialFingerprints`. Code scanning uses that object to recognize the same finding on a later run, so an unchanged finding stays one alert. The scan time, the result order, and the artifact timestamp are not part of the value. The message text is left as the scanner wrote it.
 

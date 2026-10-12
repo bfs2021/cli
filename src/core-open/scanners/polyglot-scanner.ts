@@ -95,7 +95,7 @@ function parseLineDependencies(content: string, regex: RegExp, capture = 1): str
     const match = line.match(regex);
     if (match?.[capture]) deps.add(match[capture]);
   }
-  return [...deps];
+  return [...deps].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
 function getProjectName(projectPath: string, rootDir: string): string {
@@ -160,7 +160,7 @@ async function parseDepsByManifest(manifestPath: string, cache?: FileCache): Pro
         for (const dep of Object.keys(section as Record<string, unknown>)) deps.add(dep);
       }
     }
-    return [...deps].map((dep) => makeDep(dep));
+    return [...deps].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).map((dep) => makeDep(dep));
   }
 
   const text = await readText();

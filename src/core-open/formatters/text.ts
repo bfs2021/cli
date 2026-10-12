@@ -4,7 +4,6 @@
 import chalk from 'chalk';
 import type { ScanArtifact, BillingSummary, ExtendedScanResults, InventoryItem, ServiceDependencyItem, ArchitectureResult, SecurityFinding, SecuritySection } from '../types.js';
 import { baselineSuppressionLabel } from '../baseline-suppressions.js';
-import { findingsForTerminal } from '../findings-order.js';
 import { humanFindingText } from './fix-hint.js';
 import { findingRuleLabel, formatDegradationLines } from '../warnings.js';
 import { driftBar } from '../ui/bar.js';
@@ -137,8 +136,7 @@ export function formatText(artifact: ScanArtifact, opts: FormatTextOptions = {})
     ].filter(Boolean).join(chalk.dim(', '));
 
     lines.push(chalk.bold.underline(`  Findings`) + chalk.dim(` (${summary})`));
-    // Errors, then warnings, then notes. JSON keeps rule/location/message order.
-    for (const f of findingsForTerminal(artifact.findings)) {
+    for (const f of artifact.findings) {
       const icon = f.level === 'error' ? chalk.red('✖') : f.level === 'warning' ? chalk.yellow('⚠') : chalk.blue('ℹ');
       const shown = humanFindingText(f);
       lines.push(`    ${icon} ${shown.message}`);

@@ -1,160 +1,157 @@
 // VENDORED from @vibgrate/core-open (packages/vibgrate-core-open) by
 // scripts/vendor-core-open.mjs. Do not edit here — change the source package
 // and re-run the vendor script. Apache-2.0.
-/**
- * Stable order for findings arrays in `vg scan` JSON and SARIF.
- *
- * Discovery walks the tree with concurrent `readdir` calls, so project order
- * (and therefore the order `generateFindings` appends rows) can follow
- * filesystem iteration. Map and Set iteration must not leak into the document
- * either. `orderArtifactFindings` runs after paths are made portable and
- * before JSON or SARIF is written, so both formats share one order.
- *
- * Drift and vulnerability findings (`ScanArtifact.findings`) sort by:
- *   1. rule id
- *   2. location (repo-relative path, or the package name for a vulnerability)
- *   3. message
- *   4. advisory id, package name, then package URL from `details`, when set
- *   5. level (error, warning, note)
- *
- * Comparison is code-unit order, not `localeCompare`, so the process locale
- * cannot change the result. The sort is stable: rows that tie on every key
- * keep their incoming order. No clock and no random id is added.
- *
- * `details.aliases` is an unordered set of ids. It is sorted the same way.
- * `fixedVersions` stays in the order the scanner recorded ranges.
- *
- * Security-pack findings keep their contract order: path, line, address,
- * rule, id. Absent line sorts with 0. `owasp`, `cwe`, and `cis` are id sets
- * and are sorted. Reachability findings sort by ecosystem, package, advisory
- * id, symbol, then version.
- *
- * The text report does not print this order. It groups errors, then warnings,
- * then notes, and keeps this order inside each group (`findingsForTerminal`).
- */
-import type {
-  Finding,
-  ScanArtifact,
-  ScanReachabilityFinding,
-  SecurityFinding,
-} from './types.js';
+import type { Finding, ScanArtifact, SecurityFinding, VulnerabilityAdvisory } from './types.js';
 
-/** Code-unit order. Independent of the process locale. */
-export function compareCodeUnit(a: string, b: string): number {
+/**
+ * Stable order for `vg scan` JSON findings.
+ *
+ * Discovery walks the tree concurrently, so project and file order is not a
+ * safe emit order. JSON sorts by path (`location`), then rule id, then
+ * advisory id, then package URL. Code-unit order, not locale order, so two
+ * machines agree. `via` and `fixedVersions` stay in their semantic order:
+ * one is a dependency path, the other is the advisory's fix list.
+ */
+
+/** Code-unit order. Locale-independent, unlike `localeCompare`. */
+function cmp(a: string, b: string): number {
   if (a < b) return -1;
   if (a > b) return 1;
   return 0;
 }
 
-/** Copy of `values` in code-unit order. */
-export function sortCodeUnit(values: readonly string[]): string[] {
-  return [...values].sort(compareCodeUnit);
-}
-
-function detailString(details: Finding['details'], key: string): string {
-  const value = details?.[key];
+function asString(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
-const LEVEL_RANK: Record<Finding['level'], number> = { error: 0, warning: 1, note: 2 };
+function sortStrings(values: readonly string[]): string[] {
+  return [...values].sort(cmp);
+}
+
+function sameStrings(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((item, index) => item === right[index]);
+}
+
+/** Package URL used as a sort key. An explicit `details.purl` wins. */
+export function findingPackagePurl(finding: Finding): string {
+  const details = finding.details;
+  if (!details) return '';
+  const explicit = asString(details.purl);
+  if (explicit) return explicit;
+  const name = asString(details.package);
+  if (!name) return '';
+  const ecosystem = asString(details.ecosystem) || 'generic';
+  const version = asString(details.installedVersion) || asString(details.version);
+  return version ? `pkg:${ecosystem}/${name}@${version}` : `pkg:${ecosystem}/${name}`;
+}
+
+function advisoryId(finding: Finding): string {
+  return asString(finding.details?.advisoryId);
+}
 
 /**
- * Machine order for drift and vulnerability findings.
- * See the module comment for the key.
+ * JSON order: path, rule id, advisory id, package URL, then message and level
+ * so two findings with the same identity still have one order.
  */
 export function compareScanFindings(a: Finding, b: Finding): number {
-  return compareCodeUnit(a.ruleId, b.ruleId)
-    || compareCodeUnit(a.location, b.location)
-    || compareCodeUnit(a.message, b.message)
-    || compareCodeUnit(detailString(a.details, 'advisoryId'), detailString(b.details, 'advisoryId'))
-    || compareCodeUnit(detailString(a.details, 'package'), detailString(b.details, 'package'))
-    || compareCodeUnit(detailString(a.details, 'purl'), detailString(b.details, 'purl'))
-    || (LEVEL_RANK[a.level] - LEVEL_RANK[b.level]);
+  return cmp(a.location, b.location)
+    || cmp(a.ruleId, b.ruleId)
+    || cmp(advisoryId(a), advisoryId(b))
+    || cmp(findingPackagePurl(a), findingPackagePurl(b))
+    || cmp(a.message, b.message)
+    || cmp(a.level, b.level);
 }
 
-/** Contract order for `extended.security.findings`: path, line, address, rule, id. */
-export function compareSecurityFindings(a: SecurityFinding, b: SecurityFinding): number {
-  const addressA = a.address ?? '';
-  const addressB = b.address ?? '';
-  return compareCodeUnit(a.path, b.path)
-    || ((a.line ?? 0) - (b.line ?? 0))
-    || compareCodeUnit(addressA, addressB)
-    || compareCodeUnit(a.rule, b.rule)
-    || compareCodeUnit(a.id, b.id);
+const DISPLAY_LEVEL: Record<Finding['level'], number> = { error: 0, warning: 1, note: 2 };
+
+/**
+ * Text-report order. Errors, then warnings, then notes, and within a level
+ * the same key as JSON. The terminal stays scannable; JSON stays path-ordered.
+ */
+export function compareFindingsForDisplay(a: Finding, b: Finding): number {
+  return (DISPLAY_LEVEL[a.level] - DISPLAY_LEVEL[b.level]) || compareScanFindings(a, b);
 }
 
-/** Reachability order: ecosystem, package, advisory id, symbol, version. */
-export function compareReachabilityFindings(a: ScanReachabilityFinding, b: ScanReachabilityFinding): number {
-  return compareCodeUnit(a.ecosystem, b.ecosystem)
-    || compareCodeUnit(a.package, b.package)
-    || compareCodeUnit(a.advisoryId, b.advisoryId)
-    || compareCodeUnit(a.symbol ?? '', b.symbol ?? '')
-    || compareCodeUnit(a.version, b.version);
+export function findingsForDisplay(findings: readonly Finding[]): Finding[] {
+  return [...findings].sort(compareFindingsForDisplay);
 }
 
-function sameStrings(a: readonly string[], b: readonly string[]): boolean {
-  return a.length === b.length && a.every((value, index) => value === b[index]);
-}
-
-function sortedAliases(finding: Finding): Finding {
-  const aliases = finding.details?.aliases;
-  if (!Array.isArray(aliases) || aliases.length < 2) return finding;
-  if (!aliases.every((item) => typeof item === 'string')) return finding;
-  const sorted = sortCodeUnit(aliases);
-  if (sameStrings(sorted, aliases)) return finding;
-  return { ...finding, details: { ...finding.details, aliases: sorted } };
-}
-
-const SECURITY_ID_LISTS = ['owasp', 'cwe', 'cis'] as const;
-
-function sortedSecurityFinding(finding: SecurityFinding): SecurityFinding {
-  let next: SecurityFinding | undefined;
-  for (const key of SECURITY_ID_LISTS) {
-    const list = finding[key];
-    if (!list || list.length < 2) continue;
-    const sorted = sortCodeUnit(list);
-    if (sameStrings(sorted, list)) continue;
-    next ??= { ...finding };
-    next[key] = sorted;
+/** Identifier lists copied off a set or an unordered advisory payload. */
+function orderDetails(details: Finding['details']): Finding['details'] {
+  if (!details || !Array.isArray(details.aliases) || details.aliases.some((item) => typeof item !== 'string')) {
+    return details;
   }
-  return next ?? finding;
+  const aliases = sortStrings(details.aliases as string[]);
+  if (sameStrings(aliases, details.aliases as string[])) return details;
+  return { ...details, aliases };
 }
 
-/** Drift and vulnerability findings in machine order, with alias lists sorted. */
-export function sortScanFindings(findings: readonly Finding[]): Finding[] {
-  return [...findings].map(sortedAliases).sort(compareScanFindings);
+function orderFinding(finding: Finding): Finding {
+  const details = orderDetails(finding.details);
+  if (details === finding.details) return finding;
+  return { ...finding, details };
+}
+
+export function orderScanFindings(findings: readonly Finding[]): Finding[] {
+  return findings.map(orderFinding).sort(compareScanFindings);
+}
+
+function orderAdvisory(advisory: VulnerabilityAdvisory): VulnerabilityAdvisory {
+  if (!Array.isArray(advisory.aliases)) return advisory;
+  const aliases = sortStrings(advisory.aliases.filter((item): item is string => typeof item === 'string'));
+  if (sameStrings(aliases, advisory.aliases)) return advisory;
+  return { ...advisory, aliases };
+}
+
+function orderSecurityFinding(finding: SecurityFinding): SecurityFinding {
+  const owasp = finding.owasp ? sortStrings(finding.owasp) : undefined;
+  const cwe = finding.cwe ? sortStrings(finding.cwe) : undefined;
+  const cis = finding.cis ? sortStrings(finding.cis) : undefined;
+  const owaspSame = !owasp || (finding.owasp && sameStrings(owasp, finding.owasp));
+  const cweSame = !cwe || (finding.cwe && sameStrings(cwe, finding.cwe));
+  const cisSame = !cis || (finding.cis && sameStrings(cis, finding.cis));
+  if (owaspSame && cweSame && cisSame) return finding;
+  return {
+    ...finding,
+    ...(owasp ? { owasp } : {}),
+    ...(cwe ? { cwe } : {}),
+    ...(cis ? { cis } : {}),
+  };
 }
 
 /**
- * Sort every findings array on the artifact, in place.
- * Call this once, after portable paths are applied and before serialize.
+ * Sort findings, and the identifier lists nested on them, before JSON emit.
+ * Security findings keep their path/line/rule order; only their set-like
+ * identifier lists are sorted. Dependency paths (`via`) are left alone.
  */
-export function orderArtifactFindings(artifact: ScanArtifact): ScanArtifact {
-  artifact.findings = sortScanFindings(artifact.findings);
-  const security = artifact.extended?.security;
-  if (security && Array.isArray(security.findings)) {
-    security.findings = security.findings.map(sortedSecurityFinding).sort(compareSecurityFindings);
+export function orderScanArtifactForEmit(artifact: ScanArtifact): ScanArtifact {
+  const findings = orderScanFindings(artifact.findings ?? []);
+  const extended = artifact.extended;
+  let nextExtended = extended;
+  if (extended?.vulnerabilities) {
+    nextExtended = {
+      ...extended,
+      vulnerabilities: {
+        ...extended.vulnerabilities,
+        packages: extended.vulnerabilities.packages.map((pkg) => ({
+          ...pkg,
+          advisories: pkg.advisories.map(orderAdvisory),
+        })),
+      },
+    };
   }
-  const reachability = artifact.reachability;
-  if (reachability && Array.isArray(reachability.findings)) {
-    reachability.findings = [...reachability.findings].sort(compareReachabilityFindings);
+  if (nextExtended?.security) {
+    nextExtended = {
+      ...nextExtended,
+      security: {
+        ...nextExtended.security,
+        findings: nextExtended.security.findings.map(orderSecurityFinding),
+      },
+    };
   }
-  return artifact;
-}
-
-const TERMINAL_RANK: Record<string, number> = { error: 0, warning: 1, note: 2 };
-
-/**
- * Order for the human text report: errors, then warnings, then notes.
- * Rows inside one level stay in the artifact's machine order.
- */
-export function findingsForTerminal<T extends { level: string }>(findings: readonly T[]): T[] {
-  const buckets: T[][] = [[], [], []];
-  const rest: T[] = [];
-  for (const finding of findings) {
-    const rank = TERMINAL_RANK[finding.level];
-    if (rank === undefined) rest.push(finding);
-    else buckets[rank]!.push(finding);
-  }
-  return [...buckets[0]!, ...buckets[1]!, ...buckets[2]!, ...rest];
+  return {
+    ...artifact,
+    findings,
+    ...(nextExtended ? { extended: nextExtended } : {}),
+  };
 }
