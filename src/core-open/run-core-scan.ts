@@ -53,6 +53,7 @@ import { collectVulnTargets, scanVulnerabilities, generateVulnerabilityFindings 
 import { findingsForDisplay, orderScanArtifactForEmit } from './findings-order.js';
 import { attributeVulnerabilities } from './scoring/vuln-attribution.js';
 import { gitHistoryAvailable, workingTreeDirty } from './utils/git-history.js';
+import { skippedSymlinkWarning } from './utils/skipped-symlinks.js';
 import { buildVersionTimelines } from './utils/version-timeline.js';
 import type {
   ScanArtifact, ScanOptions, ProjectScan, ExtendedScanResults, RepositoryInfo, SolutionScan,
@@ -822,6 +823,9 @@ export async function runCoreScan(
   if (nonTextMessage) {
     degradations.push(codedWarning(WARNING_CODES.NON_TEXT_FILE, nonTextMessage));
   }
+
+  const symlinkWarning = skippedSymlinkWarning(fileCache.skippedSymlinks);
+  if (symlinkWarning) degradations.push(symlinkWarning);
 
   fileCache.clear();
 
