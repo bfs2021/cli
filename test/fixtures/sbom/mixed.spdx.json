@@ -1,0 +1,141 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "device-firmware",
+  "packages": [
+    {
+      "name": "device-firmware",
+      "SPDXID": "SPDXRef-image",
+      "versionInfo": "1.0.0",
+      "primaryPackagePurpose": "CONTAINER",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:oci/device-firmware@1.0.0"
+        }
+      ]
+    },
+    {
+      "name": "left-pad",
+      "SPDXID": "SPDXRef-left-pad",
+      "versionInfo": "1.3.0",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/left-pad@1.3.0"
+        }
+      ],
+      "packages": [
+        {
+          "name": "vendored-openssl",
+          "SPDXID": "SPDXRef-vendored",
+          "versionInfo": "3.0.13",
+          "primaryPackagePurpose": "SOURCE"
+        }
+      ]
+    },
+    {
+      "name": "resnet50",
+      "SPDXID": "SPDXRef-model",
+      "versionInfo": "2.1.0",
+      "primaryPackagePurpose": "MACHINE-LEARNING-MODEL"
+    },
+    {
+      "name": "bootloader",
+      "SPDXID": "SPDXRef-firmware",
+      "versionInfo": "1.4.2",
+      "primaryPackagePurpose": "FIRMWARE"
+    },
+    {
+      "name": "openssl",
+      "SPDXID": "SPDXRef-openssl",
+      "versionInfo": "3.0.13",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "SECURITY",
+          "referenceType": "cpe23Type",
+          "referenceLocator": "cpe:2.3:a:openssl:openssl:3.0.13:*:*:*:*:*:*:*"
+        }
+      ]
+    },
+    {
+      "name": "both",
+      "SPDXID": "SPDXRef-both",
+      "versionInfo": "1.0.0",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/both@1.0.0"
+        },
+        {
+          "referenceCategory": "SECURITY",
+          "referenceType": "cpe23Type",
+          "referenceLocator": "cpe:2.3:a:example:both:1.0.0:*:*:*:*:*:*:*"
+        }
+      ]
+    },
+    {
+      "name": "dup",
+      "SPDXID": "SPDXRef-dup-lib",
+      "versionInfo": "1.0.0",
+      "primaryPackagePurpose": "LIBRARY"
+    },
+    {
+      "name": "dup",
+      "SPDXID": "SPDXRef-dup-lib-2",
+      "versionInfo": "1.0.0",
+      "primaryPackagePurpose": "LIBRARY"
+    },
+    {
+      "name": "dup",
+      "SPDXID": "SPDXRef-dup-file",
+      "versionInfo": "1.0.0",
+      "primaryPackagePurpose": "FILE"
+    },
+    {
+      "name": "loose",
+      "SPDXID": "SPDXRef-loose",
+      "versionInfo": "1.0.0"
+    },
+    {
+      "name": "no-version",
+      "SPDXID": "SPDXRef-no-version",
+      "primaryPackagePurpose": "LIBRARY"
+    },
+    {
+      "SPDXID": "SPDXRef-no-name",
+      "versionInfo": "1.0.0",
+      "primaryPackagePurpose": "LIBRARY"
+    }
+  ],
+  "files": [
+    {
+      "fileName": "vendor/openssl/crypto/aes.c",
+      "SPDXID": "SPDXRef-File-aes",
+      "versionInfo": "3.0.13"
+    },
+    {
+      "fileName": "README",
+      "SPDXID": "SPDXRef-File-readme"
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-left-pad",
+      "relatedSpdxElementId": "SPDXRef-vendored",
+      "relationshipType": "DEPENDS_ON"
+    },
+    {
+      "spdxElementId": "SPDXRef-vendored",
+      "relatedSpdxElementId": "SPDXRef-left-pad",
+      "relationshipType": "DEPENDS_ON"
+    }
+  ]
+}

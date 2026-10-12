@@ -104,6 +104,12 @@ describe('computeExposure', () => {
     expect(result.overallStatus).toBe('not-affected');
   });
 
+  it('does not match an advisory ecosystem to a component that has none', () => {
+    const firmware = release({ components: [{ name: 'netty', version: '4.1.104', type: 'firmware' }] });
+    const result = computeExposure(baseInput({ releasesByProduct: new Map([['sentinelgate', [firmware]]]) }));
+    expect(result.overallStatus).toBe('not-affected');
+  });
+
   it('returns undetermined (never a false clean) when a bound product has no frozen manifest', () => {
     const result = computeExposure(baseInput({ releasesByProduct: new Map([['sentinelgate', []]]) }));
     expect(result.overallStatus).toBe('undetermined');

@@ -23,6 +23,7 @@ For a quick overview, see the [README](./README.md). This document covers everyt
   - [vg sbom](#vg-sbom)
     - [Choosing CycloneDX or SPDX](#choosing-cyclonedx-or-spdx)
     - [Component identity](#component-identity)
+    - [Reading an SBOM that has no package URL and no CPE](#reading-an-sbom-that-has-no-package-url-and-no-cpe)
     - [Package digests](#package-digests)
     - [CycloneDX type and SPDX primaryPackagePurpose](#cyclonedx-type-and-spdx-primarypackagepurpose)
     - [Production, development, and optional scope](./docs/sbom-dependency-scope.md)
@@ -103,6 +104,7 @@ For a quick overview, see the [README](./README.md). This document covers everyt
 - [Output Formats](#output-formats)
   - [Text](#text)
   - [JSON Artifact](#json-artifact)
+    - [Score fields in the JSON artifact](#score-fields-in-the-json-artifact)
   - [SARIF](#sarif)
     - [Result fingerprints](#result-fingerprints)
     - [Advisories with several ids](#advisories-with-several-ids)
@@ -323,7 +325,7 @@ vg evidence export [--out <dir>] [--regime <id>]
 | `vg evidence push` | Push the product registry, every frozen release manifest, and an optional signed exposure bundle to Vibgrate Cloud, which verifies the signature |
 | `vg evidence export` | Air-gap bundle of all evidence state |
 
-`release` freezes the manifest from a Vibgrate scan artifact or an SBOM — CycloneDX, SPDX, or either one wrapped in an in-toto / DSSE **SBOM attestation**. Where the artefact is a container image, it can also take the facts straight from what BuildKit wrote instead of values typed in by hand: `--buildkit-metadata` reads the `docker buildx build --metadata-file` output for the image digest and build reference; `--provenance` reads a SLSA provenance attestation for the source repository, commit, and base images; and `--image <ref>` asks Docker for the image's digest, `org.opencontainers.image.*` labels, and any attached provenance and SBOM attestations (an attached SBOM becomes the manifest when `--from` is not given). `--image` runs `docker image inspect` and `docker buildx imagetools inspect`; the second contacts the image's registry when the reference is not present locally. Those facts are stored under `build` in the frozen manifest. A typed `--digest` that disagrees with what the build wrote is an error, never a silent preference, and attestation signatures are recorded as unverified — verify them with `cosign`.
+`release` freezes the manifest from a Vibgrate scan artifact or an SBOM — CycloneDX, SPDX, or either one wrapped in an in-toto / DSSE **SBOM attestation**. A component with neither a package URL nor a CPE is kept when it has a name, a version, and a type. A component that cannot be identified is skipped, and the command prints one warning for that file. See [Reading an SBOM that has no package URL and no CPE](#reading-an-sbom-that-has-no-package-url-and-no-cpe). Where the artefact is a container image, it can also take the facts straight from what BuildKit wrote instead of values typed in by hand: `--buildkit-metadata` reads the `docker buildx build --metadata-file` output for the image digest and build reference; `--provenance` reads a SLSA provenance attestation for the source repository, commit, and base images; and `--image <ref>` asks Docker for the image's digest, `org.opencontainers.image.*` labels, and any attached provenance and SBOM attestations (an attached SBOM becomes the manifest when `--from` is not given). `--image` runs `docker image inspect` and `docker buildx imagetools inspect`; the second contacts the image's registry when the reference is not present locally. Those facts are stored under `build` in the frozen manifest. A typed `--digest` that disagrees with what the build wrote is an error, never a silent preference, and attestation signatures are recorded as unverified — verify them with `cosign`.
 
 A `--from` file that is truncated, not valid JSON, or a CycloneDX or SPDX document missing a required field exits `1`. The message names that file and the format it expected: CycloneDX JSON with `bomFormat`, `specVersion`, and `version`, or SPDX JSON with `spdxVersion`, `SPDXID`, and `name`. It says to regenerate the SBOM and run the command again. The document and any home directory stay out of the message. A component or package missing `name` fails the command. The same check applies to an SBOM attached to an image. An unversioned component stays out of the frozen manifest: both formats allow a component without a version, and a manifest records a concrete one.
 
@@ -500,6 +502,7 @@ external files. The page opens with a summary:
 - DriftScore and the four component scores. A missing score is `n/a`. A measured `0` stays `0`.
 - Counts by severity for vulnerability findings and for security findings. A check that did not run stays "Not scanned" rather than a row of zeros. A check that finished with nothing to report shows zeros.
 - When a finding carries `details.fixedVersions`, how many of those findings name a fix.
+- A **Fix available only** checkbox. It starts unchecked, so the tables show every finding. Checking it hides findings that do not name a fix version. The page file still contains every finding, and the checkbox does not call the network.
 - Links to the full tables under the summary: vulnerabilities, security findings, and the other findings.
 
 The same artifact always produces the same page. Save it with a shell redirect:
@@ -596,7 +599,7 @@ When set:
 
 ##### HTML (`formatHtmlReport`)
 
-`vg report --format html` writes one self-contained page from the same artifact. It does not call the network and does not load external files. The page opens with the summary listed above (DriftScore, severity counts, a fix-available count when a finding carries `details.fixedVersions`, and links to the tables), then the full vulnerability, security, and other-finding tables. A check that did not run stays "Not scanned". A missing score is `n/a`. The same artifact always produces the same page.
+`vg report --format html` writes one self-contained page from the same artifact. It does not call the network and does not load external files. The page opens with the summary listed above (DriftScore, severity counts, a fix-available count when a finding carries `details.fixedVersions`, a Fix available only checkbox, and links to the tables), then the full vulnerability, security, and other-finding tables. The checkbox starts unchecked. Checking it hides findings that do not name a fix version. Those rows stay in the page file, and the summary counts stay the full set. A check that did not run stays "Not scanned". A missing score is `n/a`. The same artifact always produces the same page.
 
 ##### Differences
 
@@ -609,7 +612,7 @@ When set:
 - DriftScore: Markdown puts the lower-is-better gloss in the opening cell. Text puts the score in **DriftScore Summary** without that gloss.
 - VCS: Markdown uses separate VCS, Branch, and Commit rows, and Commit requires `vcs.sha`. Text uses one line and can show `shortSha` without requiring `sha`.
 - Runtime wording: Markdown always says `major(s)`. Text says `major` or `majors`.
-- HTML is the browser page: the summary above, then the vulnerability, security, and other-finding tables. It does not print Markdown's recommended-standards section or the text inventory.
+- HTML is the browser page: the summary above, then the vulnerability, security, and other-finding tables. A Fix available only checkbox starts unchecked and can hide findings that do not name a fix version. The page file still lists every finding. It does not print Markdown's recommended-standards section or the text inventory.
 
 ##### JSON
 
@@ -1741,15 +1744,34 @@ For `com.google.code.gson:gson` at `2.11.0` in a Java project, read these fields
 
 Key the join on `pkg:maven/com.google.code.gson/gson@2.11.0`, or on `maven` + `com.google.code.gson:gson` + `2.11.0`. The group `com.google.code.gson` is the purl namespace. SPDX stores the same purl on `externalRefs[].referenceLocator`.
 
+#### Reading an SBOM that has no package URL and no CPE
+
+`vg evidence release` reads a CycloneDX or SPDX document with `--from`, and it reads an SBOM attestation attached to `--image`. Vendored code, a file, firmware, and a machine-learning model often have a name and a version and neither a package URL nor a CPE. Those rows are part of what shipped.
+
+The read keeps them. The identity is the name, the version, and the type. The same three values are one component. A different type is a different component. The first copy in the document is the one that is kept. CycloneDX `type` is the type. An omitted type is `unknown`. An SPDX package uses `primaryPackagePurpose`, lowercased, with underscores written as hyphens. An omitted purpose is `package`. An SPDX file is `file`. The component has no ecosystem. An advisory that names an ecosystem does not match it.
+
+A component with a package URL is keyed on that URL. A component with no package URL and a CPE is keyed on the CPE. CycloneDX uses the `cpe` field. SPDX uses an external reference whose type is `cpe22Type` or `cpe23Type`. When both a package URL and a CPE are present, the package URL is the identity.
+
+A component with neither identifier, and with no name or no version, is not kept. The command prints one warning for that file. The warning gives the count. It does not print one line per component. The same warning also says when the read stopped: after 50,000 components, or at nesting deeper than 32. A cycle in nested `components` or nested `packages` is read once. The command does not loop, and it does not contact the network.
+
+Nested CycloneDX `components` are read, including components listed only under the metadata component. The metadata component itself is the document root and is not a row. Nested SPDX `packages` and SPDX `files` are read. Relationship edges are not a second inventory and are not followed, so a cycle there does not change the component list. The package that describes the image itself — SPDX purpose `CONTAINER`, or a `pkg:oci/` package URL — is not a component.
+
+The same file read twice produces the same components and the same warning.
+
+```bash
+vg evidence release device-firmware 1.0.0 --from sbom.cdx.json
+```
+
 #### Package digests
 
-A package digest is a hash of that package's bytes. `vg sbom export` and `vg scan --format json` do not write one. Match the component on its purl. The fields are in [Component identity](#component-identity).
+A package digest is a hash of that package's bytes. `vg sbom export` copies a digest the lockfile already recorded. It does not download the package, and it does not recompute the hash. `vg scan --format json` does not write one. Match the component on its purl. The fields are in [Component identity](#component-identity).
 
 | Output | Field | Shape | What is written |
 | --- | --- | --- | --- |
-| CycloneDX `components[]` and `metadata.component` | `hashes` | An array of `{ "alg", "content" }` | The key is omitted. |
-| SPDX `packages[]` | `checksums` | An array of `{ "algorithm", "checksumValue" }` | The key is omitted. |
-| SPDX `packages[]` | `filesAnalyzed` | Boolean | `false`. The package files were not hashed. |
+| CycloneDX `components[]` | `hashes` | An array of `{ "alg", "content" }` | One entry per digest the lockfile recorded. Sorted by `alg`, then by `content`. The key is omitted when the lockfile recorded none. |
+| CycloneDX `metadata.component` | `hashes` | An array of `{ "alg", "content" }` | The key is omitted. The root is the application, not a locked package. |
+| SPDX `packages[]` | `checksums` | An array of `{ "algorithm", "checksumValue" }` | The same digests, with SPDX algorithm names (`SHA256`, not `SHA-256`). Sorted by `algorithm`, then by `checksumValue`. Omitted when there are none. |
+| SPDX `packages[]` | `filesAnalyzed` | Boolean | `false`. The package files were not hashed. The checksum, when present, is the lockfile's recorded value. |
 | Scan JSON `projects[].dependencies[]` | — | — | No `integrity`, `checksum`, `hash`, or `digest` key. |
 | CycloneDX document | `serialNumber` | `urn:uuid:` and a version-8 UUID | A document identifier. The third UUID group starts with `8`. |
 | SPDX document | `documentNamespace` | `https://vibgrate.com/spdx/<rootPath>/<version-8 UUID>` | A document identifier. `<rootPath>` is the scan root. |
@@ -1758,32 +1780,44 @@ A package digest is a hash of that package's bytes. `vg sbom export` and `vg sca
 
 A missing digest stays omitted. The export does not write `[]`, `null`, or `""` where `hashes` or `checksums` would go. It does not hash the package name, the purl, or the document id and store that string as a digest. When you need a hash of the bytes, hash the artifact you fetched.
 
-**Document identifier.** CycloneDX and SPDX each get their own version-8 UUID. The value is derived from the scan artifact, including its timestamp, and from the ordered component list, contributing projects, merge warnings, declared licenses, license-parse notes, and edges. The same inputs produce the same UUID. A later scan records a new timestamp, so the UUID changes. The UUID identifies that export. It is not a SHA-256 digest of the JSON file or of a package. Stability of the whole document is in [Several versions of one package](#several-versions-of-one-package).
+**Document identifier.** CycloneDX and SPDX each get their own version-8 UUID. The value is derived from the scan artifact, including its timestamp, and from the ordered component list, contributing projects, merge warnings, declared licenses, license-parse notes, edges, and the ordered digests on each component. The same inputs produce the same UUID. A later scan records a new timestamp, so the UUID changes. The UUID identifies that export. It is not a SHA-256 digest of the JSON file or of a package. Stability of the whole document is in [Several versions of one package](#several-versions-of-one-package).
 
 **Project and solution identifiers.** `projectId` is the first 16 hexadecimal characters of the SHA-256 of `<path>:<name>`, using that project's `path` and `name`. When the scan has a workspace DSN (`--dsn` or `VIBGRATE_DSN`), the input is `<path>:<name>:<workspace id>`. A local scan without a DSN uses path and name only. The same inputs produce the same id. `solutionId` is the same construction from the solution file's path and name. Each project in that solution copies the id to `projects[].solutionId`. An id already stored for that solution path in `.vibgrate/solutions.json` is the id the scan writes. These strings name the project or the solution.
 
 Two other strings in the same file are easy to misread as package digests. `vcs.sha` is the git commit the scan recorded. `baselineComparison.suppressed[].id` is present only when `--baseline` compared findings: the first 32 hexadecimal characters of the SHA-256 of the finding's rule and location.
 
-**Lockfile digests stay in the lockfile.** The reader that feeds `vg sbom export` keeps `package` and `version`, and dependency edges when that format records them. It drops the digest:
+**Lockfile digests on the component.** The reader that feeds `vg sbom export` keeps `package` and `version`, and dependency edges when that format records them. It also copies a digest when the value is a recognized algorithm and a hex or base64 encoding of that algorithm's usual length (MD5, SHA-1, SHA-256, SHA-384, SHA-512, SHA3-256, SHA3-384, SHA3-512, BLAKE2b-256, BLAKE2b-384, BLAKE2b-512, BLAKE3). Anything else in the field is left out.
 
-| Lockfile | Digest field that is not copied |
-| --- | --- |
-| `package-lock.json` | `integrity` |
-| `pnpm-lock.yaml` | `resolution.integrity` |
-| `Cargo.lock` | `checksum` |
-| `uv.lock` | `hash` |
-| `go.sum` | `h1:` |
+| Lockfile | Digest field | What is copied |
+| --- | --- | --- |
+| `package-lock.json` | `integrity` | Each Subresource Integrity token on that package (`sha256-…`, `sha512-…`). |
+| `pnpm-lock.yaml` | `resolution.integrity` | The same tokens. |
+| `yarn.lock` | `integrity` | The same tokens. |
+| `Cargo.lock` | `checksum` | The SHA-256 hex of the crate. |
+| `poetry.lock`, `uv.lock` | `hash` | Each labeled hash on that package block (`sha256:…`). |
+| `go.sum` | `h1:` on `<module> <version>` | The module zip, as SHA-256. |
 
-**Several digests, one component.** A lockfile can list more than one digest for one package. The export still writes one component for that ecosystem, name, and version. It does not add a row per digest. `hashes` and `checksums` are omitted, so there is no digest array and no digest order to keep stable. Component order stays the order in [Several versions of one package](#several-versions-of-one-package): Package URL when the component has one, otherwise the package name, then the version. Digest text is not part of that sort, and it is not part of the document id. Exporting the same scan artifact again, after a lockfile edit that changes only those digest strings and leaves names, versions, and edges alone, writes the same JSON, including `serialNumber` and `documentNamespace`.
+**Several digests, one component.** A lockfile can list more than one digest for one package. The export still writes one component for that ecosystem, name, and version. It does not add a row per digest. `hashes` and `checksums` list every accepted digest on that component. The array is sorted by algorithm name, then by the digest value. The comparison is code-point order, so it does not follow the lockfile text, the install path, or the order of projects. The same digests produce the same array on every run. An identical algorithm and value is written once.
 
-`go.sum` lists a module twice: `<module> <version> h1:…` and `<module> <version>/go.mod h1:…`. The `/go.mod` line is not a second component. Both `h1:` values are dropped. A `uv.lock` package block can carry more than one `hash`. Those values are dropped, and the block stays one component, in the same order as the other rows. An npm `integrity` string and a pnpm `resolution.integrity` string are not read, including when the string names more than one algorithm.
+```json
+"hashes": [
+  { "alg": "SHA-256", "content": "<sha256 value>" },
+  { "alg": "SHA-512", "content": "<sha512 value>" }
+]
+```
+
+That order is the same when the lockfile listed `sha512` before `sha256`. SPDX writes `SHA256` then `SHA512` in `checksums`, which is the same rule on the SPDX algorithm names.
+
+Component order stays the order in [Several versions of one package](#several-versions-of-one-package): Package URL when the component has one, otherwise the package name, then the version. Digest text is not part of that sort. It is part of the document id. A lockfile edit that changes only those digest strings changes `serialNumber`, `documentNamespace`, and the hash arrays, and leaves the component order in place.
+
+`go.sum` lists a module twice: `<module> <version> h1:…` and `<module> <version>/go.mod h1:…`. The `/go.mod` line is not a second component, and its hash is not a second digest of the module. A `uv.lock` or `poetry.lock` package block can carry more than one `hash`. Those values stay on the one component, in the order above. An npm or pnpm integrity string that names more than one algorithm is read the same way. `--no-transitive` does not read the lockfile, so the hash arrays are omitted with the lockfile-only rows.
 
 ```bash
 vg scan --offline --no-graph --format json --out scan.json
 vg sbom export --in scan.json --format cyclonedx --out sbom.cdx.json
 ```
 
-Both commands read and write local files. In `scan.json`, a dependency object has no digest key. In `sbom.cdx.json`, a component has no `hashes` key. Join the two on the purl from [Component identity](#component-identity).
+Both commands read and write local files. In `scan.json`, a dependency object has no digest key. In `sbom.cdx.json`, `hashes` is present only when the lockfile recorded a digest for that component, in the order above. Join the two on the purl from [Component identity](#component-identity).
 
 #### Declared licenses
 
@@ -1916,11 +1950,11 @@ repeat one identity.
 CycloneDX `serialNumber` and the SPDX `documentNamespace`. Those values are
 document identifiers. Each one is derived from the scan artifact — timestamp
 included — and from the ordered component list, contributing projects, merge
-warnings, declared licenses, license-parse notes, and edges. A lockfile digest
-is not an input, so a change that touches only that digest leaves the document
-the same. A later scan of the same tree records a new timestamp, so the
-document id changes. Purls and CycloneDX `bom-ref` values do not. Field shapes
-are in [Package digests](#package-digests).
+warnings, declared licenses, license-parse notes, edges, and the ordered
+digests. A lockfile edit that changes only a digest changes the hash arrays
+and the document id. It does not reorder components. A later scan of the same
+tree records a new timestamp, so the document id changes. Purls and CycloneDX
+`bom-ref` values do not. Field shapes are in [Package digests](#package-digests).
 
 **Known limitations:**
 
@@ -2179,7 +2213,7 @@ By default, the scan writes `.vibgrate/scan_result.json`. Use `--no-local-artifa
 
 A truncated or syntactically invalid lockfile stops the scan before a dependency graph is built. The error names the file (for example `package-lock.json`, `pnpm-lock.yaml`, or `yarn.lock`) and tells you to regenerate it with your package manager. The message does not include the lockfile, and the process exits non-zero. A valid lockfile is scanned as before.
 
-`vg scan` does not follow symlinks while it indexes the tree. A skipped link is named once on stderr. See [Symlinks](#symlinks).
+`vg scan` does not follow symlinks while it indexes the tree. A skipped link is named once, as `warning [VG_WARN_SYMLINK_SKIPPED]`. See [Symlinks](#symlinks).
 
 For offline drift scoring, pass `--package-manifest <file>` with a downloaded manifest bundle such as `https://github.com/vibgrate/manifests/latest-packages.zip`. The manifest shape, the fail-closed errors, and what offline mode skips are in [Offline scan with a package-version manifest](#offline-scan-with-a-package-version-manifest).
 
@@ -2278,7 +2312,7 @@ The fail-closed path is covered by `src/reporting/commands/scan-package-manifest
 
 #### Determinism
 
-The same tree and the same manifest produce the same findings order and the same advisory ids. Vulnerability findings are ordered by ecosystem, then package name, then installed version. Advisories on one package are ordered by severity — critical, high, moderate, low, unknown — and then by advisory id. That id is the `id` from the manifest. JSON records it as `details.advisoryId`. The order of keys in the manifest file does not change the result. `timestamp` and `durationMs` on the scan artifact still change between runs. In a git checkout, an exposure window's day count follows the scan date. The advisory id and the finding order stay the same.
+The same tree and the same manifest produce the same findings order and the same advisory ids. JSON lists every finding by path (`location`), then rule id, then advisory id, then package URL when the finding carries an ecosystem and a package name. Alias lists on a finding are sorted. The text report prints errors, then warnings, then notes, and within a level it uses that same path order, so the terminal stays readable. SARIF keeps drift findings first. Vulnerability results then follow ecosystem, package name, and installed version, and within a package severity — critical, high, moderate, low, unknown — and then advisory id. That id is the `id` from the manifest. JSON records it as `details.advisoryId`. The order of keys in the manifest file does not change the result. `timestamp` and `durationMs` on the scan artifact still change between runs. In a git checkout, an exposure window's day count follows the scan date. The advisory id and the finding order stay the same.
 
 Those string keys, and the package-name tie-break on dependency rows inside a project, compare by UTF-16 code unit. SARIF results follow that finding order. Degrade-and-continue warnings are ordered by code, then message, the same way. `LANG` and `LC_ALL` do not change the JSON or the SARIF.
 
@@ -2775,7 +2809,7 @@ A truncated or syntactically invalid lockfile stops the build before source file
 | `--attestation <file>` | `.vibgrate/attestation.intoto.jsonl` | Where `--attest` writes, and where `--verify` reads |
 | `--pub <path>` | — | Public key PEM that pins the signer for `--verify` |
 
-`vg build` does not follow symlinks while it discovers files. A skipped link is named once on stderr. See [Symlinks](#symlinks). `.gitignore` and `--exclude` still apply.
+`vg build` does not follow symlinks while it discovers files. A skipped link is named once, as `warning [VG_WARN_SYMLINK_SKIPPED]`. See [Symlinks](#symlinks). `.gitignore` and `--exclude` still apply.
 
 **Local by default — no git churn.** The first time vg writes into `.vibgrate/` it also creates `.vibgrate/.gitignore`, keeping the graph artifacts (`graph.json`, `graph.html`, `GRAPH_REPORT.md`, `facts.jsonl`, `mcp-navigation.json`) and the cache out of git — so builds, auto-refreshes, and MCP use never leave your branch dirty. Run `vg share` when you want the map committed for your team (it rewrites that ignore file). vg never touches an existing `.vibgrate/.gitignore`, so edit it (or leave it empty) to manage the ignores yourself.
 
@@ -4889,6 +4923,89 @@ The full scan artifact in JSON format. Contains all raw data, scores, findings, 
 
 Dependency identity in this file is `projects[].type` plus `dependencies[].package` and `resolvedVersion`. An advisory match is `extended.vulnerabilities.packages[]` (`ecosystem`, `package`, `version`). `vg sbom export` writes those coordinates as a package URL. The file has no CPE field. See [Component identity](#component-identity). A dependency row has no package digest. `projects[].projectId` and `solutions[].solutionId` identify the project and the solution. See [Package digests](#package-digests).
 
+#### Score fields in the JSON artifact
+
+Every score `vg scan` computes locally lives under the top-level `drift` object. Read `drift.score`; the other fields explain it.
+
+| Field | Range | Present when |
+| --- | --- | --- |
+| `drift.score` | `0`-`100`, lower is better, or `null` | Always. `null` means nothing was measured |
+| `drift.riskLevel` | `low` (0-30), `moderate` (31-60), `high` (61-100), or `null` | Always. `null` when `score` is `null` |
+| `drift.components.runtimeScore` | `0`-`100` drift, or `null` | Always. `null` when the component had no input |
+| `drift.components.frameworkScore` | `0`-`100` drift, or `null` | Always |
+| `drift.components.dependencyScore` | `0`-`100` drift, or `null` | Always |
+| `drift.components.eolScore` | `0`-`100` drift, or `null` | Always |
+| `drift.measured` | Array of `runtime`, `framework`, `dependency`, `eol`, `freshness` | Always. Empty when nothing was measured |
+| `drift.methodologyVersion` | For example `driftscore-3.0` | Always on current CLIs |
+| `drift.confidence` | `0`-`1` | When at least one dependency row was classified |
+| `drift.mode` | `verified` or `estimated` | When there were scoreable dependencies |
+| `drift.dependencyDrift` | `p95`, `unsupportedShare`, `coverage`, `top[]` | When there were scoreable dependencies |
+| `delta` | Score change against `--baseline`, positive is worse | When `--baseline` names a readable file **and** this scan's `drift.score` and the baseline's `drift.score` are both numbers. Omitted otherwise, never `0` or `null` |
+
+Component scores are drift too: `0` is current, `100` is maximum drift, the same direction as `drift.score`.
+
+**An absent score stays absent.** `drift.score` is `null` when no component had data, and an individual component is `null` when only that pillar was unmeasurable. Neither is ever written as `0`. A `null` and a measured `0` are different results: `0` says the stack was measured and is current, `null` says nothing was measured. `--drift-budget` and `--drift-worsening` skip a `null` score rather than comparing it, and the JUnit XML reports it as a skipped case. The same rule applies to the summary file: an unmeasured `driftScore` is `null`, and `delta` and `baselineScore` are `null` without a `--baseline` comparison.
+
+**RiskScore and the combined DriftRisk Index are not in this file.** A local scan computes the DriftScore only. `riskScore` and `driftRisk` are not fields of the scan artifact, and they are not written as `0` or as an empty object: they are absent. RiskScore comes from Vibgrate Cloud on a Team plan or above, and the combined DriftRisk Index is the blend of the two axes, so both land in the dashboard rather than in free, offline CLI output. `drift.riskLevel` is the DriftScore band, not RiskScore. A `maxRiskScore` or `maxRiskWorseningPercent` limit in `driftBudget` is reported as not evaluated on a local scan, never as a silent pass; see [Drift budget](#drift-budget). The formulas, bands, and methodology tags for all three numbers are published in the [public scoring specification](./docs/public/SCORING-METHODOLOGY-PUBLIC.md), with the design rationale and limitations in the [risk modelling whitepaper](./docs/public/RISK-MODELLING-WHITEPAPER.md).
+
+CI example. A step that reads the score from a scan, with `--summary-out` written before any gate can fail the run:
+
+```yaml
+- name: Drift gate
+  run: vg scan --baseline .vibgrate/baseline.json --drift-budget 40 --summary-out drift-summary.json
+
+- name: Publish the measured score
+  if: always()
+  run: cat drift-summary.json >> "$GITHUB_STEP_SUMMARY"
+```
+
+```bash
+# Fail a build on an unmeasured score, and print the measured one either way.
+drift=$(jq -r '.driftScore' drift-summary.json)
+if [ "$drift" = "null" ]; then
+  echo "DriftScore was not measured; see drift.measured in scan_result.json."
+  exit 1
+fi
+echo "DriftScore $drift/100 ($(jq -r '.riskLevel' drift-summary.json))"
+```
+
+The values below are illustrative: every key and shape is copied from a real `--format json` run, but the numbers come from an offline scan of a two-dependency fixture, so your paths, versions, and counts will differ.
+
+```json
+{
+  "schemaVersion": "1.0",
+  "timestamp": "2026-10-10T07:09:12.481Z",
+  "vibgrateVersion": "2026.1007.1",
+  "rootPath": "/path/to/your/repo",
+  "drift": {
+    "score": 0,
+    "riskLevel": "low",
+    "components": {
+      "runtimeScore": null,
+      "frameworkScore": null,
+      "dependencyScore": 0,
+      "eolScore": null
+    },
+    "measured": ["dependency"],
+    "methodologyVersion": "driftscore-3.0",
+    "confidence": 0,
+    "mode": "estimated",
+    "dependencyDrift": {
+      "p95": 0,
+      "unsupportedShare": 0,
+      "coverage": 0,
+      "top": [
+        { "package": "lodash", "drift": 0, "mode": "estimated", "unsupported": false, "flags": [] }
+      ]
+    }
+  }
+}
+```
+
+Without `--baseline` there is no `delta` key at all: the field is left out, not written as `null`. `--baseline` alone does not add it either. `delta` appears only when the baseline file is readable and both this scan's DriftScore and the baseline's DriftScore are measured numbers; if either side is `null`, or the file is missing or unreadable, `delta` is still absent. Read it with a presence check, not a bare `jq .delta`.
+
+`confidence: 0` with `mode: "estimated"` is what an offline scan without a `--package-manifest` looks like: no release-date data was available, so only version-only estimates were possible. Supply a manifest to measure real drift offline; see [Offline scan with a package-version manifest](#offline-scan-with-a-package-version-manifest).
+
 ### SARIF
 
 [Static Analysis Results Interchange Format](https://sarifweb.azurewebsites.net/) (SARIF) 2.1.0. GitHub code scanning and Azure DevOps read this file. It contains findings only. The DriftScore and the other metrics stay in the JSON artifact. Drift findings come first. Vulnerability findings follow when the scan ran with `--vulns`.
@@ -5169,16 +5286,22 @@ link points at, point the root at that target, or pass a narrower directory
 that already contains them. To leave a link out without a notice, list it in
 `.gitignore` or pass `--exclude`.
 
-When a walk skips one or more symlinks, vg prints one notice on stderr and
-nothing when there are none. The notice is the count, then the first few
-root-relative paths in sorted order (at most five; further links are a
-`+N more` count). Paths are relative to the root you passed. Absolute paths
-are not printed. The line goes to stderr, so `--format json` and
-`vg build --json` keep a JSON document on stdout. `--quiet` hides promotional
-text only; it does not hide this notice.
+When a walk skips one or more symlinks, vg prints one warning and nothing when
+there are none. The warning code is `VG_WARN_SYMLINK_SKIPPED`. The sentence
+is the count, then the first few paths in sorted order (at most five; further
+links are a `+N more` count). Each path is a label for the link itself: a
+path inside the root stays root-relative, and an absolute path is reduced to
+its file name. The link target is not read and is not printed, so a home
+directory never appears in the line.
+
+`vg build` prints the warning on stderr with the other coded warnings.
+`vg build --json` lists it in `codedWarnings` and in `warnings`. `vg scan`
+lists it in `degradations` and prints the same line on stderr, including
+when the scan document is JSON on stdout. `--quiet` hides promotional text
+only; it does not hide this warning.
 
 ```text
-notice: skipped 3 symlinks (alias.ts, nested/cycle, via). vg does not follow symlinks. Point the root at the link target, or pass --exclude or a narrower root.
+warning [VG_WARN_SYMLINK_SKIPPED]: skipped 3 symlinks (alias.ts, nested/cycle, via). vg does not follow symlinks. Point the root at the link target, or pass --exclude or a narrower root.
 ```
 
 ### Binary and non-UTF-8 files
@@ -5806,7 +5929,7 @@ Stderr lines look like `warning [VG_WARN_PARSE_FAILED]: …`. The code is the to
 
 `vg build --json` keeps `warnings` as strings and adds `codedWarnings`: an array of `{ code, message }` in that same order. Each string in `warnings` ends with ` [CODE]`. `codedWarnings` is left out when there are no warnings.
 
-`vg scan --format json` adds `degradations` when a path was skipped, a baseline file could not be read, or the root `package.json` omitted `name` or `version`. The field is left out when there are none. `vg report` prints those same rows.
+`vg scan --format json` adds `degradations` when a path was skipped, a symlink was not followed, a baseline file could not be read, or the root `package.json` omitted `name` or `version`. The field is left out when there are none. `vg report` prints those same rows.
 
 `vg sbom export` prints the code on stderr. CycloneDX adds a `vibgrate:warningCode` property next to the existing warning property. SPDX adds an annotation whose comment is `warningCode=VG_WARN_…`. The warning sentences already stored on the document stay as they are.
 
@@ -5830,6 +5953,7 @@ A truncated or invalid lockfile stops the command. Warning codes cover condition
 | `VG_WARN_WORKFLOW_STEP_CAP` | `vg build` | A workflow job listed more steps than the extractor enumerates. |
 | `VG_WARN_SCAN_PATH_SKIPPED` | `vg scan` | A scan path timed out and was skipped. |
 | `VG_WARN_SCAN_FILE_OVERSIZE` | `vg scan` | A scan file exceeded the size cap and was skipped. |
+| `VG_WARN_SYMLINK_SKIPPED` | `vg build`, `vg scan` | A walk skipped one or more symlinks and did not follow them. One warning names the links. |
 | `VG_WARN_BASELINE_UNREADABLE` | `vg scan` | A baseline file could not be read. The scan continues without a comparison. |
 | `VG_WARN_LICENSE_UNPARSEABLE` | `vg scan`, `vg sbom` | A declared license string could not be resolved to SPDX. |
 | `VG_WARN_LICENSE_UNREPRESENTABLE` | `vg sbom` | A declared license cannot be represented in an SBOM. |
