@@ -1,17 +1,18 @@
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { describe, it, expect, afterEach } from 'vitest';
 import {
   buildModuleResolver,
+  compareWorkspacePackages,
   relativeResolver,
   parseJsonc,
-  compareWorkspacePackageKey,
-  workspaceDirsByName,
-  type WorkspacePackageKey,
 } from '../src/engine/module-resolver.js';
 import { buildGraph } from '../src/engine/build.js';
 import { discover } from '../src/engine/discover.js';
 import { findNodes } from '../src/engine/lookup.js';
-import { serializeGraph } from '../src/engine/serialize.js';
 import { makeProject, cleanup } from './helpers.js';
+import type { VgGraph } from '../src/schema.js';
 
 const dirs: string[] = [];
 function project(files: Record<string, string>): string {
@@ -74,11 +75,151 @@ describe('module resolver', () => {
     expect(r.resolve('app/main.ts', '@org/ui')).toBe('packages/ui/src/index.ts');
   });
 
+  it('prefers the longer workspace package name over a prefix', () => {
+    const root = project({
+      'package.json': JSON.stringify({ workspaces: ['packages/*'] }),
+      'packages/a/package.json': JSON.stringify({ name: '@org/a', version: '1.0.0' }),
+      'packages/a/src/index.ts': 'export const a = 1;\n',
+      'packages/ab/package.json': JSON.stringify({ name: '@org/a/b', version: '1.0.0' }),
+      'packages/ab/src/index.ts': 'export const b = 1;\n',
+      'app/main.ts': 'export const x = 1;\n',
+    });
+    const r = buildModuleResolver(root, relSet(root));
+    expect(r.resolve('app/main.ts', '@org/a/b')).toBe('packages/ab/src/index.ts');
+    expect(r.resolve('app/main.ts', '@org/a')).toBe('packages/a/src/index.ts');
+  });
+
   it('relativeResolver handles relative + dotted only', () => {
     const root = project({ 'a.ts': 'x', 'b.ts': 'x' });
     const r = relativeResolver(relSet(root));
     expect(r.resolve('a.ts', './b')).toBe('b.ts');
     expect(r.resolve('a.ts', '@org/x')).toBeNull();
+  });
+});
+
+const PIN = '2020-01-01T00:00:00.000Z';
+
+const COLLIDING_ROOT = JSON.stringify({
+  name: 'app',
+  version: '1.0.0',
+  workspaces: ['packages/*'],
+});
+const ALPHA_PKG = JSON.stringify({
+  name: 'widget',
+  version: '9.0.0',
+  dependencies: { 'left-pad': '1.0.0' },
+});
+const ZETA_PKG = JSON.stringify({
+  name: 'widget',
+  version: '1.0.0',
+  dependencies: { 'left-pad': '1.0.0' },
+});
+const ALPHA_SRC = 'export const marker = "alpha";\n';
+const ZETA_SRC = 'export const marker = "zeta";\n';
+const APP_SRC = 'import { marker } from "widget";\nexport const used = marker;\n';
+
+/** Write files in the given order so directory creation order differs per tree. */
+function projectOrdered(files: Array<[string, string]>): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vg-test-'));
+  dirs.push(dir);
+  for (const [rel, content] of files) {
+    const abs = path.join(dir, rel);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, content);
+  }
+  return dir;
+}
+
+function collisionFiles(packageOrder: 'alpha-first' | 'zeta-first'): Array<[string, string]> {
+  const alpha: Array<[string, string]> = [
+    ['packages/alpha/package.json', ALPHA_PKG],
+    ['packages/alpha/src/index.ts', ALPHA_SRC],
+  ];
+  const zeta: Array<[string, string]> = [
+    ['packages/zeta/package.json', ZETA_PKG],
+    ['packages/zeta/src/index.ts', ZETA_SRC],
+  ];
+  const packages = packageOrder === 'alpha-first' ? [...alpha, ...zeta] : [...zeta, ...alpha];
+  return [['package.json', COLLIDING_ROOT], ...packages, ['app/main.ts', APP_SRC]];
+}
+
+function packageNodes(graph: VgGraph) {
+  return graph.nodes
+    .filter((n) => n.kind === 'package')
+    .map((n) => ({ name: n.name, qualifiedName: n.qualifiedName, file: n.file }));
+}
+
+function dependencyEdges(graph: VgGraph) {
+  const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+  return graph.edges
+    .filter((e) => e.kind === 'import' || e.kind === 'depends_on')
+    .map((e) => {
+      const src = byId.get(e.src);
+      const dst = byId.get(e.dst);
+      const label = (n: typeof src) =>
+        n ? `${n.kind}:${n.file}:${n.qualifiedName}` : '';
+      return { kind: e.kind, src: label(src), dst: label(dst) };
+    });
+}
+
+describe('colliding bare workspace names', () => {
+  it('orders packages by path, then name, then version', () => {
+    const alpha = { dirRel: 'packages/alpha', name: 'widget', version: '9.0.0' };
+    const zeta = { dirRel: 'packages/zeta', name: 'widget', version: '1.0.0' };
+    const paths = (list: typeof alpha[]) => list.map((p) => p.dirRel);
+    expect(paths([zeta, alpha].sort(compareWorkspacePackages))).toEqual([
+      'packages/alpha',
+      'packages/zeta',
+    ]);
+    expect(paths([alpha, zeta].sort(compareWorkspacePackages))).toEqual([
+      'packages/alpha',
+      'packages/zeta',
+    ]);
+  });
+
+  it('binds the import to the same package whichever directory was created first', () => {
+    for (const order of ['alpha-first', 'zeta-first'] as const) {
+      const root = projectOrdered(collisionFiles(order));
+      const resolved = buildModuleResolver(root, relSet(root)).resolve('app/main.ts', 'widget');
+      expect(resolved).toBe('packages/alpha/src/index.ts');
+    }
+  });
+
+  it('emits the same package-node and dependency-edge order from two builds', async () => {
+    const build = (order: 'alpha-first' | 'zeta-first') =>
+      buildGraph({
+        root: projectOrdered(collisionFiles(order)),
+        generatedAt: PIN,
+        inline: true,
+        noCache: true,
+        noTsc: true,
+        noScip: true,
+        noIndex: true,
+        noCoverage: true,
+        noGround: true,
+      });
+    const [{ graph: first }, { graph: second }] = await Promise.all([
+      build('alpha-first'),
+      build('zeta-first'),
+    ]);
+
+    const nodes = packageNodes(first);
+    const edges = dependencyEdges(first);
+    expect(packageNodes(second)).toEqual(nodes);
+    expect(dependencyEdges(second)).toEqual(edges);
+    expect(nodes.map((n) => n.file).sort()).toEqual([
+      'package.json',
+      'packages/alpha/package.json',
+      'packages/zeta/package.json',
+    ]);
+    expect(edges).toContainEqual(
+      expect.objectContaining({
+        kind: 'import',
+        src: 'file:app/main.ts:app/main.ts',
+        dst: 'file:packages/alpha/src/index.ts:packages/alpha/src/index.ts',
+      }),
+    );
+    expect(edges.some((e) => e.dst.includes('packages/zeta/src/index.ts'))).toBe(false);
   });
 });
 
@@ -102,82 +243,3 @@ describe('resolution end-to-end (alias monorepo → cross-package call edge)', (
     void findNodes;
   });
 });
-
-const PIN = '2020-01-01T00:00:00.000Z';
-
-/**
- * Two workspace copies of the bare name `shared`. `packages/zeta` is the
- * higher version and, on a name-sorted directory walk, the last entry — the
- * old map kept whichever copy the walk inserted last. The content key keeps
- * `packages/alpha` (smaller path) even though its version is lower.
- */
-const COLLIDING_WORKSPACE: Record<string, string> = {
-  'package.json': JSON.stringify({ name: 'app', workspaces: ['packages/*'] }),
-  'packages/alpha/package.json': JSON.stringify({ name: 'shared', version: '0.1.0' }),
-  'packages/alpha/src/index.ts': 'export function value(): string { return "alpha"; }\n',
-  'packages/zeta/package.json': JSON.stringify({ name: 'shared', version: '9.9.9' }),
-  'packages/zeta/src/index.ts': 'export function value(): string { return "zeta"; }\n',
-  'app/main.ts': 'import { value } from "shared";\nexport function main(): string { return value(); }\n',
-};
-
-describe('workspace package name collisions', () => {
-  it('keeps the smallest content key when the same bare name is offered in either walk order', () => {
-    const alpha: WorkspacePackageKey = { dirRel: 'packages/alpha', name: 'shared', version: '0.1.0' };
-    const zeta: WorkspacePackageKey = { dirRel: 'packages/zeta', name: 'shared', version: '9.9.9' };
-    // These two orders are the two directory-walk orders. Last-write-wins would
-    // point `shared` at a different directory in each list.
-    const forward = workspaceDirsByName([alpha, zeta]);
-    const reverse = workspaceDirsByName([zeta, alpha]);
-    expect([...forward.entries()]).toEqual([...reverse.entries()]);
-    expect(forward.get('shared')).toBe('packages/alpha');
-    // Path outranks version: zeta's lower version would win if version were first.
-    expect(
-      compareWorkspacePackageKey(
-        { dirRel: 'packages/zeta', name: 'shared', version: '0.0.1' },
-        { dirRel: 'packages/alpha', name: 'shared', version: '9.9.9' },
-      ),
-    ).toBeGreaterThan(0);
-  });
-
-  it('prefers the longer package name over a path-length tie', () => {
-    const root = project({
-      'package.json': JSON.stringify({ workspaces: ['packages/*'] }),
-      'packages/a/package.json': JSON.stringify({ name: '@org/a', version: '1.0.0' }),
-      'packages/a/src/index.ts': 'export const short = 1;\n',
-      'packages/ab/package.json': JSON.stringify({ name: '@org/a/b', version: '1.0.0' }),
-      'packages/ab/src/index.ts': 'export const long = 1;\n',
-      'app/main.ts': 'export const x = 1;\n',
-    });
-    const r = buildModuleResolver(root, relSet(root));
-    expect(r.resolve('app/main.ts', '@org/a')).toBe('packages/a/src/index.ts');
-    expect(r.resolve('app/main.ts', '@org/a/b')).toBe('packages/ab/src/index.ts');
-  });
-
-  it('builds the same graph.json for a colliding workspace name across two builds', async () => {
-    const first = await buildSlice(project(COLLIDING_WORKSPACE));
-    const second = await buildSlice(project(COLLIDING_WORKSPACE));
-    // A name-sorted walk visits alpha, then zeta. Keeping the last directory
-    // would import packages/zeta (also the higher version). Both builds must
-    // import packages/alpha and serialize the same graph.json.
-    expect(second.graphJson).toBe(first.graphJson);
-    expect(first.importFiles).toEqual(['packages/alpha/src/index.ts']);
-    expect(second.importFiles).toEqual(['packages/alpha/src/index.ts']);
-
-    // Same tree written in the opposite order — the walk-order flip the
-    // collision used to follow.
-    const reversedEntries = Object.entries(COLLIDING_WORKSPACE).reverse();
-    const flipped = await buildSlice(project(Object.fromEntries(reversedEntries)));
-    expect(flipped.graphJson).toBe(first.graphJson);
-    expect(flipped.importFiles).toEqual(['packages/alpha/src/index.ts']);
-  });
-});
-
-async function buildSlice(root: string): Promise<{ graphJson: string; importFiles: string[] }> {
-  const { graph } = await buildGraph({ root, generatedAt: PIN, inline: true, noCache: true });
-  const byId = new Map(graph.nodes.map((n) => [n.id, n]));
-  const fileOf = (id: string): string => byId.get(id)?.file ?? '';
-  const importFiles = graph.edges
-    .filter((e) => e.kind === 'import' && fileOf(e.src) === 'app/main.ts' && byId.get(e.dst)?.kind === 'file')
-    .map((e) => fileOf(e.dst));
-  return { graphJson: serializeGraph(graph), importFiles };
-}

@@ -215,9 +215,6 @@ export function resolve(parses: FileParse[], resolver?: ModuleResolver): Resolve
   }
 
   // --- 3. import edges (file → file | external) ---
-  // Workspace imports of a duplicated bare package name follow the content key
-  // in loadWorkspacePackages (repo-relative path, then name, then version),
-  // not the order directories were walked.
   const importedFilesByRel = new Map<string, Set<string>>();
   for (const p of parses) {
     const fileId = fileNodeIdByRel.get(p.rel)!;
