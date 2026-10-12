@@ -2157,7 +2157,7 @@ vg scan [path] [--vulns] [--full] [--iac] [--format text|json|sarif|md] [--out <
 | `--concurrency <n>` | `8` | Max concurrent npm registry calls |
 | `--drift-budget <score>` | — | Fitness gate: fail if drift score is above this budget |
 | `--drift-worsening <percent>` | — | Fitness gate: fail if drift worsens by more than % vs baseline |
-| `--summary-out <file>` | — | Also write a small JSON summary for CI steps (`schemaVersion` stays `1`). Fields: `driftScore`, `riskLevel`, `components`, `delta` / `baselineScore` when `--baseline` is set, and `driftBudget` (the budget verdict, or `null` when none applies). An unmeasured score is `null`, never `0`. See [Scan summary](#scan-summary). Written before any gate can fail the run |
+| `--summary-out <file>` | — | Also write a small JSON summary for CI steps: `driftScore`, `riskLevel`, `components`, `delta` / `baselineScore` when `--baseline` is set, and `driftBudget`. `driftBudget` is the verdict (`source`, `mode`, `withinBudget`, `blocking`, `rules`), or `null` when no budget is set. A budget from `--drift-budget` or `--drift-worsening` has `source` `flags` and replaces the project config. An unmeasured score is `null`, never `0`, and is not compared. Written before any gate can fail the run |
 | `--push` | — | Upload scan artifact to Vibgrate Cloud after a successful scan |
 | `--dsn <dsn>` | `VIBGRATE_DSN` env | DSN used for `--push` authentication |
 | `--region <region>` | — | Override data residency (`us`, `eu`) during push |
@@ -2174,31 +2174,6 @@ vg scan [path] [--vulns] [--full] [--iac] [--format text|json|sarif|md] [--out <
 | `--quiet` | — | Suppress promotional output; scan results are unaffected |
 
 Switches (flags that take no value, such as `--vulns`, `--offline` or `--no-graph`) are off unless you pass them. They do not accept a value or an invented `--no-` form: `--vulns=false`, `--vulns=true` and `--no-vulns` stop with exit code `5` and name the form that works. In a CI template, add or leave out the flag itself rather than passing `true` or `false`.
-
-### Scan summary
-
-`--summary-out <file>` writes one JSON object for a later CI step. `schemaVersion` is `1`. Adding a field does not bump it, so a step that reads `driftScore` keeps working.
-
-| Field | Meaning |
-| --- | --- |
-| `driftScore` | DriftScore, 0–100, lower is better. `null` when drift was not measured, never `0` |
-| `riskLevel` | `low`, `moderate`, `high`, or `null` |
-| `components` | `runtimeScore`, `frameworkScore`, `dependencyScore`, `eolScore`. An unmeasured component is `null` |
-| `delta` | Change since `--baseline` (positive = worse). `null` without a comparison |
-| `baselineScore` | The baseline's score. `null` without a comparison, or when that score was unmeasured |
-| `driftBudget` | The budget verdict, or `null` when no budget was applied |
-
-`driftBudget` is `null` when the project has no `driftBudget`, neither `--drift-budget` nor `--drift-worsening` was passed, or the config block could not be parsed (the scan prints why, and does not apply it). Otherwise:
-
-| Field | Meaning |
-| --- | --- |
-| `source` | `config`, `--drift-budget`, `--drift-worsening`, or `--drift-budget --drift-worsening`. Either flag ignores `driftBudget` in the project config |
-| `mode` | `warn`, `enforce`, or `shadow`. The flags have no warn mode; they are reported as `enforce` |
-| `withinBudget` | `true` when no rule has status `breach`. A `not_evaluated` rule is not a pass and is not a breach |
-| `blocking` | `true` when `mode` is `enforce` and a rule breached. That is when the scan exits `2` |
-| `rules` | `{ id, status, message }` in evaluator order. `status` is `pass`, `breach`, or `not_evaluated` |
-
-An unmeasured DriftScore does not become `0`. Each configured limit is `not_evaluated`, and `blocking` stays false. A local scan does not compute RiskScore, so `maxRiskScore` and `maxRiskWorseningPercent` are `not_evaluated`. The file is written after that verdict is computed and before any gate exits, including an enforced breach.
 
 By default, the scan writes `.vibgrate/scan_result.json`. Use `--no-local-artifacts` or `--max-privacy` to suppress local JSON artifact files.
 
@@ -5132,9 +5107,11 @@ driftBudget:
 - `agents.maxWorseningPercent` is checked by the GitHub App, which knows who
   opened the pull request.
 - `--drift-budget` / `--drift-worsening` still work; passing either uses the flags
-  and ignores `driftBudget`.
-- `vg scan --summary-out` records the same verdict in `driftBudget`. See
-  [Scan summary](#scan-summary). `schemaVersion` stays `1`.
+  and ignores `driftBudget`. `--summary-out` records that verdict with
+  `source` `flags`.
+- `--summary-out` includes the budget that was judged: `mode`, `withinBudget`,
+  `blocking`, and `rules`. The field is `null` when no budget is set. An
+  unmeasured DriftScore is not compared and is not treated as 0.
 - A misspelt key, a wrong type, or a `driftBudget` that sets no limit stops the
   command. The error names the file and, when the file makes it clear, the line
   and the key. The value is not printed.

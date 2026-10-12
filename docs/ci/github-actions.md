@@ -40,7 +40,7 @@ summary:
 | `drift-score` | DriftScore, 0-100 (lower is better). Empty when drift could not be measured, never `0` |
 | `risk-level` | `low`, `moderate` or `high` |
 | `score-delta` | Change since the baseline (positive = worse). Empty without a baseline |
-| `summary-file` | Path of the JSON the scan wrote (`vibgrate-summary.json`) |
+| `summary-file` | Path of the JSON the scan wrote (`vibgrate-summary.json`). The file includes `driftBudget` (`source`, `mode`, `withinBudget`, `blocking`, `rules`) when a budget was set, or `null` when none was. `--drift-budget` and `--drift-worsening` are marked `source: "flags"` |
 
 ```yaml
 - id: drift
@@ -53,8 +53,6 @@ summary:
 The outputs need a scanner image that supports `--summary-out`, and `jq` on the
 runner (present on GitHub-hosted runners). With an older `image-tag` the scan
 still runs and the outputs stay empty, with a notice in the log.
-
-The summary file also carries `driftBudget`: `null` when no budget applies, otherwise the verdict (`source`, `mode`, `withinBudget`, `blocking`, and `rules` with status `pass`, `breach`, or `not_evaluated`). `schemaVersion` stays `1`. An unmeasured DriftScore stays `null` and is not treated as `0` in the budget. The file is written before a budget gate exits.
 
 ## Fail when drift gets worse
 

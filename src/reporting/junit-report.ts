@@ -249,9 +249,30 @@ export function driftWorseningFlagCase(
   delta: number | undefined,
   limit: number,
 ): JUnitTestCase {
-  const result = compareDriftWorsening(score, delta, limit);
-  if (result.exitCode === 2 && result.message) return failure(JUNIT_GATES_CLASS, 'drift-worsening', 'gate', result.message);
-  if (result.message) return skipped(JUNIT_GATES_CLASS, 'drift-worsening', result.message);
+  if (score === null) {
+    return skipped(JUNIT_GATES_CLASS, 'drift-worsening', 'DriftScore is absent; --drift-worsening was not compared.');
+  }
+  if (delta === undefined) {
+    return failure(
+      JUNIT_GATES_CLASS,
+      'drift-worsening',
+      'gate',
+      'Failing fitness function: --drift-worsening requires --baseline to compare against previous drift.',
+    );
+  }
+  if (delta > 0) {
+    const baselineScore = score - delta;
+    const denominator = Math.max(Math.abs(baselineScore), 0.0001);
+    const worseningPercent = (delta / denominator) * 100;
+    if (worseningPercent > limit) {
+      return failure(
+        JUNIT_GATES_CLASS,
+        'drift-worsening',
+        'gate',
+        `Failing fitness function: drift worsened by ${worseningPercent.toFixed(2)}% (threshold ${limit}%).`,
+      );
+    }
+  }
   return pass(JUNIT_GATES_CLASS, 'drift-worsening');
 }
 

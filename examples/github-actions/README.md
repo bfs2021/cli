@@ -152,8 +152,6 @@ A missing or invalid budget is neutral. The check does not block the merge unles
 
 `--junit vibgrate.junit.xml` writes that file before the process exits, including on exit 2. A warn-mode or shadow breach is `<skipped>` and does not fail the scan. An enforced budget breach is `<failure>`. The exit code is unchanged. See [JUnit](../../DOCS.md#junit) and [Exit Codes](../../DOCS.md#exit-codes).
 
-`--summary-out` writes the same budget verdict in `driftBudget` (`null` when none applies). The file is written before the process exits, including on exit 2. `schemaVersion` stays `1`. See [Scan summary](../../DOCS.md#scan-summary).
-
 ### Assertions
 
 The workflow above talks to the package registry, so DriftScore can move when a package publishes. That is the gate you want on a real repository.

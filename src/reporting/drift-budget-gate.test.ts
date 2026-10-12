@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compareDriftBudget, compareDriftWorsening, evaluateConfigDriftBudget } from './drift-budget-gate.js';
+import { compareDriftBudget, evaluateConfigDriftBudget } from './drift-budget-gate.js';
 
 const file = '.vibgrate/config.yml';
 
@@ -84,27 +84,5 @@ describe('compareDriftBudget', () => {
       exitCode: 2,
       message: 'Failing fitness function: DriftScore 44/100 exceeds budget 40.',
     });
-  });
-});
-
-describe('compareDriftWorsening', () => {
-  it('does not fail when the score is absent', () => {
-    expect(compareDriftWorsening(null, undefined, 5)).toEqual({
-      exitCode: 0,
-      message: 'DriftScore is absent; --drift-worsening was not compared.',
-    });
-  });
-
-  it('fails a measured score that has no baseline', () => {
-    expect(compareDriftWorsening(50, undefined, 5)).toEqual({
-      exitCode: 2,
-      message: 'Failing fitness function: --drift-worsening requires --baseline to compare against previous drift.',
-    });
-  });
-
-  it('fails only when worsening is strictly above the limit', () => {
-    expect(compareDriftWorsening(42, 0, 5)).toEqual({ exitCode: 0, message: null });
-    expect(compareDriftWorsening(50, 10, 5).exitCode).toBe(2);
-    expect(compareDriftWorsening(50, 10, 5).message).toContain('threshold 5%');
   });
 });
