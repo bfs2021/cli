@@ -400,7 +400,7 @@ export const scanCommand = new Command('scan')
     '--fail-on <gates>',
     'Fail on warn or error. architecture-finding (hard boundary violations) or architecture-warning (violations and warnings) gate on the architecture module\'s boundary findings, judged under the policy pack in force: .vibgrate/architecture.toml (policy = "hexagonal-v1" | "layered-v1" | "vertical-v1", plus any [[overlay]] rules), VIBGRATE_ARCHITECTURE_POLICY, or vg build --policy; default hexagonal-v1. The pack is named in the output. See docs/architecture-policies.md. iac-finding[=<severity>] fails on infrastructure findings from the iac-cis-v1 pack at or above <severity> (critical|high|medium|low|info; default high) and needs --iac (or --full) plus the code map — it exits 2 when the Architecture module is missing rather than passing an unevaluated tree; security-finding[=<severity>] is the umbrella across every security pack that ran. Comma-separated: at most one of warn/error/architecture-* plus any security gates, e.g. --fail-on error,iac-finding=medium',
   )
-  .option('--summary-out <file>', 'Also write a small JSON summary (DriftScore, risk level, components, change since --baseline) for CI steps to read')
+  .option('--summary-out <file>', 'Also write a small JSON summary (DriftScore, risk level, components, change since --baseline, drift budget verdict) for CI steps to read')
   .option('--baseline <file>', 'Compare against a baseline and record matching findings')
   .option('--changed-only', 'Only scan changed files')
   .option(
@@ -844,12 +844,27 @@ export const scanCommand = new Command('scan')
     let junitWritten = false;
     const measuredDrift = artifact.drift.score;
 
-    // Written before any gate can exit, so a CI step can read the score from a
-    // run that failed its budget. Confirmation goes to stderr; stdout stays the
-    // selected --format.
+    // Evaluate the pure budget first, then write the summary, then run gates.
+    // A CI step can read the verdict from a run that failed its budget.
+    // An unmeasured score is left null and is not compared as 0.
+    // Confirmation goes to stderr; stdout stays the selected --format.
     if (opts.summaryOut) {
+      let configRaw: unknown;
+      if (scanOpts.driftBudget === undefined && scanOpts.driftWorseningPercent === undefined) {
+        try {
+          configRaw = (await loadConfig(rootDir)).driftBudget;
+        } catch {
+          // The budget gate below reports a config that cannot be read.
+          // The summary still records the score, with no verdict.
+          configRaw = undefined;
+        }
+      }
       try {
-        await writeScanSummary(opts.summaryOut, artifact);
+        await writeScanSummary(opts.summaryOut, artifact, {
+          flagBudget: scanOpts.driftBudget,
+          flagWorseningPercent: scanOpts.driftWorseningPercent,
+          configRaw,
+        });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         throw new CliError(`Could not write the scan summary to ${opts.summaryOut}: ${message}`, ExitCode.ERROR);

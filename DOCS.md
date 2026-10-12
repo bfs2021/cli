@@ -2192,7 +2192,7 @@ vg scan [path] [--vulns] [--full] [--iac] [--format text|json|sarif|md] [--out <
 | `--concurrency <n>` | `8` | Max concurrent npm registry calls |
 | `--drift-budget <score>` | — | Fitness gate: fail if drift score is above this budget |
 | `--drift-worsening <percent>` | — | Fitness gate: fail if drift worsens by more than % vs baseline |
-| `--summary-out <file>` | — | Also write a small JSON summary for CI steps: `driftScore`, `riskLevel`, `components`, and `delta` / `baselineScore` when `--baseline` is set. An unmeasured score is `null`, never `0`. Written before any gate can fail the run |
+| `--summary-out <file>` | — | Also write a small JSON summary for CI steps: `driftScore`, `riskLevel`, `components`, `delta` / `baselineScore` when `--baseline` is set, and `driftBudget`. `driftBudget` is the verdict (`source`, `mode`, `withinBudget`, `blocking`, `rules`), or `null` when no budget is set. A budget from `--drift-budget` or `--drift-worsening` has `source` `flags` and replaces the project config. An unmeasured score is `null`, never `0`, and is not compared. Written before any gate can fail the run |
 | `--push` | — | Upload scan artifact to Vibgrate Cloud after a successful scan |
 | `--dsn <dsn>` | `VIBGRATE_DSN` env | DSN used for `--push` authentication |
 | `--region <region>` | — | Override data residency (`us`, `eu`) during push |
@@ -5225,7 +5225,11 @@ driftBudget:
 - `agents.maxWorseningPercent` is checked by the GitHub App, which knows who
   opened the pull request.
 - `--drift-budget` / `--drift-worsening` still work; passing either uses the flags
-  and ignores `driftBudget`.
+  and ignores `driftBudget`. `--summary-out` records that verdict with
+  `source` `flags`.
+- `--summary-out` includes the budget that was judged: `mode`, `withinBudget`,
+  `blocking`, and `rules`. The field is `null` when no budget is set. An
+  unmeasured DriftScore is not compared and is not treated as 0.
 - A misspelt key, a wrong type, or a `driftBudget` that sets no limit stops the
   command. The error names the file and, when the file makes it clear, the line
   and the key. The value is not printed.

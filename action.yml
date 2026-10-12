@@ -36,7 +36,7 @@ inputs:
     required: false
     default: ''
   summary:
-    description: 'Path of the small JSON summary the scan writes (DriftScore, risk level, change since baseline). Needs a scanner image that supports --summary-out; older images skip it with a notice.'
+    description: 'Path of the small JSON summary the scan writes (DriftScore, risk level, change since baseline, drift budget verdict). Needs a scanner image that supports --summary-out; older images skip it with a notice.'
     required: false
     default: 'vibgrate-summary.json'
   vulns:
