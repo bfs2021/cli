@@ -86,26 +86,18 @@ function schemaMessage(label: string, format: 'CycloneDX' | 'SPDX', reason: stri
   return `${label}: not a valid ${format} document (${reason}). ${expected} ${REGENERATE}`;
 }
 
-function cyclonedxProblem(
-  doc: Record<string, unknown>,
-  options?: { componentNames?: boolean; documentVersion?: boolean },
-): string | undefined {
-  const componentNames = options?.componentNames !== false;
-  const documentVersion = options?.documentVersion !== false;
+function cyclonedxProblem(doc: Record<string, unknown>): string | undefined {
   if (doc.bomFormat !== 'CycloneDX') {
     return typeof doc.bomFormat === 'string' ? 'bomFormat must be CycloneDX' : 'missing bomFormat';
   }
   if (typeof doc.specVersion !== 'string' || doc.specVersion.trim() === '') return 'missing specVersion';
   if (!CYCLONE_SPEC.test(doc.specVersion)) return 'specVersion must be a version such as 1.5';
-  if (documentVersion) {
-    if (!Object.prototype.hasOwnProperty.call(doc, 'version')) return 'missing version';
-    if (typeof doc.version !== 'number' || !Number.isInteger(doc.version) || doc.version < 0) {
-      return 'version must be an integer';
-    }
+  if (!Object.prototype.hasOwnProperty.call(doc, 'version')) return 'missing version';
+  if (typeof doc.version !== 'number' || !Number.isInteger(doc.version) || doc.version < 0) {
+    return 'version must be an integer';
   }
   if (!Object.prototype.hasOwnProperty.call(doc, 'components')) return undefined;
   if (!Array.isArray(doc.components)) return 'components must be an array';
-  if (!componentNames) return undefined;
   for (let i = 0; i < doc.components.length; i++) {
     const problem = componentNameProblem(doc.components[i], `component ${i + 1}`);
     if (problem) return problem;
@@ -113,8 +105,7 @@ function cyclonedxProblem(
   return undefined;
 }
 
-function spdxProblem(doc: Record<string, unknown>, options?: { componentNames?: boolean }): string | undefined {
-  const componentNames = options?.componentNames !== false;
+function spdxProblem(doc: Record<string, unknown>): string | undefined {
   if (typeof doc.spdxVersion !== 'string' || doc.spdxVersion.trim() === '') return 'missing spdxVersion';
   if (!SPDX_VERSION.test(doc.spdxVersion)) return 'spdxVersion must be an SPDX version such as SPDX-2.3';
   if (!Object.prototype.hasOwnProperty.call(doc, 'SPDXID')) return 'missing SPDXID';
@@ -124,7 +115,6 @@ function spdxProblem(doc: Record<string, unknown>, options?: { componentNames?: 
   if (doc.name.trim() === '') return 'missing name';
   if (!Object.prototype.hasOwnProperty.call(doc, 'packages')) return undefined;
   if (!Array.isArray(doc.packages)) return 'packages must be an array';
-  if (!componentNames) return undefined;
   for (let i = 0; i < doc.packages.length; i++) {
     const problem = componentNameProblem(doc.packages[i], `package ${i + 1}`);
     if (problem) return problem;
@@ -142,19 +132,6 @@ function componentNameProblem(value: unknown, where: string): string | undefined
 }
 
 /**
- * Which document checks to apply.
- *
- * `componentNames` defaults to true: a component or package missing `name`
- * fails the document. `vg evidence release` sets it false and skips those
- * rows with one warning instead. `documentVersion` defaults to true. A
- * release read sets it false so a CycloneDX document can omit `version`.
- */
-export interface ExternalSbomCheck {
-  componentNames?: boolean;
-  documentVersion?: boolean;
-}
-
-/**
  * Accept a CycloneDX or SPDX document, or throw {@link SbomInputError}.
  *
  * Checks the fields those formats require at the top of the document, and
@@ -162,7 +139,7 @@ export interface ExternalSbomCheck {
  * `name` fails the document; the component is not dropped. `version` stays
  * optional, matching both specs. Returns which format was accepted.
  */
-export function assertExternalSbom(data: unknown, label: string, check?: ExternalSbomCheck): 'cyclonedx' | 'spdx' {
+export function assertExternalSbom(data: unknown, label: string): 'cyclonedx' | 'spdx' {
   const shown = sbomDisplayPath(label);
   const kind = externalSbomKind(data);
   if (kind === 'other' || !isRecord(data)) {
@@ -172,11 +149,11 @@ export function assertExternalSbom(data: unknown, label: string, check?: Externa
     );
   }
   if (kind === 'cyclonedx') {
-    const reason = cyclonedxProblem(data, check);
+    const reason = cyclonedxProblem(data);
     if (reason) throw new SbomInputError(schemaMessage(shown, 'CycloneDX', reason, CYCLONE_EXPECT), 'schema');
     return 'cyclonedx';
   }
-  const reason = spdxProblem(data, check);
+  const reason = spdxProblem(data);
   if (reason) throw new SbomInputError(schemaMessage(shown, 'SPDX', reason, SPDX_EXPECT), 'schema');
   return 'spdx';
 }

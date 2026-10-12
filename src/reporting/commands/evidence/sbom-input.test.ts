@@ -150,7 +150,23 @@ describe('release freeze', () => {
     const { mkdirSync, writeFileSync } = await import('node:fs');
     mkdirSync(dir, { recursive: true });
     const from = path.join(dir, 'mixed.cdx.json');
-    writeFileSync(from, readFileSync(path.join(fixtureDir, 'mixed.cdx.json')));
+    // The reader fixture includes a nameless component and a null entry so a
+    // direct read can skip them. `vg evidence release` rejects those before
+    // the read (a missing name fails the document). This freeze uses the same
+    // inventory with those rows removed and a document version added, and
+    // still skips the named file that has no version.
+    const doc = JSON.parse(readFileSync(path.join(fixtureDir, 'mixed.cdx.json'), 'utf8')) as {
+      version?: number;
+      components?: unknown[];
+    };
+    doc.version = 1;
+    doc.components = (doc.components ?? []).filter(
+      (component) =>
+        component !== null &&
+        typeof component === 'object' &&
+        typeof (component as { name?: unknown }).name === 'string',
+    );
+    writeFileSync(from, JSON.stringify(doc));
     const warnings: string[] = [];
     const release = await buildRelease({
       productId: 'device',
@@ -162,7 +178,7 @@ describe('release freeze', () => {
       onWarning: (message) => warnings.push(message),
     });
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain('skipped 3 components');
+    expect(warnings[0]).toContain('skipped 1 component');
     expect(release.components.find((c) => c.name === 'resnet50')?.type).toBe('machine-learning-model');
     expect(release.components.find((c) => c.name === 'left-pad')?.purl).toBe('pkg:npm/left-pad@1.3.0');
     expect(release.components.some((c) => c.name === 'README')).toBe(false);

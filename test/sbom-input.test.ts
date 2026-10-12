@@ -123,7 +123,7 @@ describe('assertExternalSbom', () => {
     expect((catchAssert(doc, 'invalid.spdx.json') as SbomInputError).message).not.toContain('not-a-version');
   });
 
-  it('skips a CycloneDX component that is missing name and does not echo it', () => {
+  it('fails a CycloneDX document when a component is missing name, and does not keep the others', () => {
     const doc = {
       bomFormat: 'CycloneDX',
       specVersion: '1.5',
@@ -133,10 +133,14 @@ describe('assertExternalSbom', () => {
         { version: '9.9.9', purl: `pkg:npm/${SECRET}@9.9.9` },
       ],
     };
-    const read = componentsFromSource(doc, 'bom.cdx.json');
-    expect(read.components).toEqual([{ name: 'kept', version: '1.0.0', type: 'unknown' }]);
-    expect(read.warning).toBe('bom.cdx.json: skipped 1 component with no package URL, no CPE, and no name and version');
-    expect(JSON.stringify(read)).not.toContain(SECRET);
+    let caught: unknown;
+    try {
+      componentsFromSource(doc, 'bom.cdx.json');
+    } catch (err) {
+      caught = err;
+    }
+    assertInputError(caught, 'schema', cycloneMessage('bom.cdx.json', 'component 2 is missing name'));
+    expect((caught as SbomInputError).message).not.toContain('kept');
   });
 
   it('fails an SPDX document when a package is missing name', () => {

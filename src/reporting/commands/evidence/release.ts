@@ -9,7 +9,7 @@
 
 import { readJsonFile, pathExists } from '../../utils/fs.js';
 import { CliError, ExitCode } from '../../../util/exit.js';
-import { assertExternalSbom, readSbomJsonFile, sbomDisplayPath, type ExternalSbomCheck } from '../sbom-input.js';
+import { assertExternalSbom, externalSbomKind, readSbomJsonFile, sbomDisplayPath } from '../sbom-input.js';
 import type { ProjectType, ScanArtifact } from '../../types.js';
 import type { FrozenComponent, Release, ReleaseBuild } from './types.js';
 import {
@@ -17,14 +17,12 @@ import {
   inspectImage,
   isProvenancePredicateType,
   isSbomPredicateType,
-  isSpdxDocument,
   looksLikeProvenancePredicate,
   parseBuildxMetadata,
   summarizeProvenance,
   unwrapStatement,
   type Exec,
   type ProvenanceSummary,
-  type SpdxDocument,
 } from './buildkit.js';
 import { readCycloneDxInput, readSpdxInput } from './sbom-input.js';
 
@@ -110,11 +108,6 @@ export interface FreezeInput {
   onWarning?: (message: string) => void;
 }
 
-interface CycloneDxDocument {
-  bomFormat?: string;
-  components?: unknown[];
-}
-
 /**
  * Components from whatever `--from` points at: a Vibgrate scan artifact, a
  * CycloneDX or SPDX document, or either SBOM wrapped in an in-toto Statement /
@@ -136,29 +129,23 @@ export function componentsFromSource(data: unknown, label: string): { components
   return { ...componentsFromSbom(data, label), attested: false };
 }
 
-/**
- * Document fields are still required. A component missing `name` is not a
- * document failure: the reader skips it and returns one warning for the file.
- * CycloneDX document `version` is not required, so a file that identifies
- * components by name, component version, and type still freezes.
- */
-const releaseSbomCheck: ExternalSbomCheck = { componentNames: false, documentVersion: false };
-
 function componentsFromSbom(data: unknown, label: string): { components: FrozenComponent[]; warning?: string } {
   const display = sbomDisplayPath(label);
-  const doc = data as CycloneDxDocument | SpdxDocument | null;
-  if (doc && (('bomFormat' in doc && doc.bomFormat === 'CycloneDX') || Array.isArray((doc as CycloneDxDocument).components))) {
-    assertExternalSbom(doc, display, releaseSbomCheck);
-    return readCycloneDxInput(doc, display);
+  const kind = externalSbomKind(data);
+  if (kind === 'other') {
+    throw new CliError(
+      `unrecognised source format in ${display} — expected a Vibgrate scan artifact, a CycloneDX or SPDX SBOM, or an SBOM attestation`,
+      ExitCode.USAGE_ERROR,
+    );
   }
-  if (isSpdxDocument(doc)) {
-    assertExternalSbom(doc, display, releaseSbomCheck);
-    return readSpdxInput(doc, display);
-  }
-  throw new CliError(
-    `unrecognised source format in ${display} — expected a Vibgrate scan artifact, a CycloneDX or SPDX SBOM, or an SBOM attestation`,
-    ExitCode.USAGE_ERROR,
-  );
+  // Required fields are checked before any component is kept. A component
+  // missing `name` fails the document; it is not dropped. Components that
+  // have a name, a version, and a type are then kept even with no package
+  // URL and no CPE. Anything that still cannot be identified is skipped,
+  // and the read returns one warning for this file.
+  const accepted = assertExternalSbom(data, display);
+  if (accepted === 'cyclonedx') return readCycloneDxInput(data, display);
+  return readSpdxInput(data, display);
 }
 
 async function readSource(file: string, what: string): Promise<unknown> {
@@ -214,7 +201,7 @@ export async function buildRelease(input: FreezeInput): Promise<Release> {
     build.sourceUri ??= inspection.labels['org.opencontainers.image.source'];
     build.sourceRevision ??= inspection.labels['org.opencontainers.image.revision'];
     if (inspection.sbom && !input.fromExplicit) {
-      assertExternalSbom(inspection.sbom, `SBOM of ${input.image}`, releaseSbomCheck);
+      assertExternalSbom(inspection.sbom, `SBOM of ${input.image}`);
       build.sources.push('sbom-attestation');
       const read = readSpdxInput(inspection.sbom, `SBOM of ${input.image}`);
       components = read.components;
