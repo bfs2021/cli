@@ -1,6 +1,6 @@
 import { readFile, stat } from 'node:fs/promises';
 import * as path from 'node:path';
-import { ArchiveLimitError, readManifestZipMembers, ZipManifestError } from '../core-open/utils/zip-manifest.js';
+import { ArchiveLimitError, readBoundedArchive, readZipMember } from '../core-open/utils/archive-limits.js';
 
 export interface EcosystemVersionEntry {
   latest?: string;
@@ -106,10 +106,16 @@ function zipNotUsable(resolved: string): PackageManifestError {
   );
 }
 
+const ZIP_MANIFEST_NAMES = ['package-versions.json', 'manifest.json', 'index.json'] as const;
+
 function ioFailure(err: unknown, resolved: string): PackageManifestError {
   const code = errnoCode(err);
   if (code === 'ENOENT' || code === 'ENOTDIR') return notFound(resolved);
   return notReadable(resolved);
+}
+
+function limitError(err: ArchiveLimitError): PackageManifestError {
+  return new PackageManifestError(err.message, 'unusable');
 }
 
 function parseManifestObject(text: string, source: string): PackageVersionManifest {
@@ -134,24 +140,23 @@ function parseManifestObject(text: string, source: string): PackageVersionManife
 }
 
 async function loadManifestFromZip(zipPath: string): Promise<PackageVersionManifest> {
-  let members: string[];
+  // On-disk size is refused before the file is read. Entry count and declared
+  // uncompressed size are refused before any member is inflated.
+  let buf: Buffer;
   try {
-    // Central directory first. Over-limit archives throw before any member is
-    // inflated, and only the well-known manifest names are inflated at all.
-    members = await readManifestZipMembers(zipPath);
+    buf = await readBoundedArchive(zipPath);
   } catch (err) {
-    if (err instanceof ArchiveLimitError) throw new PackageManifestError(err.message, 'unusable');
-    if (err instanceof ZipManifestError) throw zipNotUsable(zipPath);
+    if (err instanceof ArchiveLimitError) throw limitError(err);
     throw err;
   }
-  for (const text of members) {
-    try {
-      return parseManifestObject(text, zipPath);
-    } catch {
-      // Unusable candidate — try the next well-known name.
-    }
+  let body: Buffer;
+  try {
+    body = readZipMember(buf, zipPath, ZIP_MANIFEST_NAMES);
+  } catch (err) {
+    if (err instanceof ArchiveLimitError) throw limitError(err);
+    throw zipNotUsable(zipPath);
   }
-  throw zipNotUsable(zipPath);
+  return parseManifestObject(body.toString('utf8'), zipPath);
 }
 
 async function loadResolved(resolved: string): Promise<PackageVersionManifest> {

@@ -4,7 +4,7 @@
 import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import type { RuntimeCatalog } from './runtimes/types.js';
-import { ArchiveLimitError, readManifestZipMembers, ZipManifestError } from './utils/zip-manifest.js';
+import { ArchiveLimitError, readBoundedArchive, readZipMember } from './utils/archive-limits.js';
 
 /**
  * An advisory entry as carried by an offline package-version manifest, used for
@@ -83,6 +83,8 @@ export interface PackageVersionManifest {
   terraform?: Record<string, EcosystemVersionEntry>;
 }
 
+const ZIP_MANIFEST_NAMES = ['package-versions.json', 'manifest.json', 'index.json'] as const;
+
 async function parseManifestText(text: string, source: string): Promise<PackageVersionManifest> {
   try {
     return JSON.parse(text) as PackageVersionManifest;
@@ -92,24 +94,17 @@ async function parseManifestText(text: string, source: string): Promise<PackageV
 }
 
 async function loadManifestFromZip(zipPath: string): Promise<PackageVersionManifest> {
-  let members: string[];
+  // Size cap is enforced before the file is read. Entry count and declared
+  // uncompressed size are enforced before any member is inflated.
+  const buf = await readBoundedArchive(zipPath);
+  let body: Buffer;
   try {
-    members = await readManifestZipMembers(zipPath);
+    body = readZipMember(buf, zipPath, ZIP_MANIFEST_NAMES);
   } catch (err) {
     if (err instanceof ArchiveLimitError) throw err;
-    if (err instanceof ZipManifestError) {
-      throw new Error('Zip must contain package-versions.json, manifest.json, or index.json');
-    }
-    throw err;
+    throw new Error('Zip must contain package-versions.json, manifest.json, or index.json');
   }
-  for (const text of members) {
-    try {
-      return await parseManifestText(text, zipPath);
-    } catch {
-      // keep searching the well-known names
-    }
-  }
-  throw new Error('Zip must contain package-versions.json, manifest.json, or index.json');
+  return parseManifestText(body.toString('utf8'), zipPath);
 }
 
 export async function loadPackageVersionManifest(filePath: string): Promise<PackageVersionManifest> {

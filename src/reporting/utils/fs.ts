@@ -43,9 +43,7 @@ const SKIP_EXTENSIONS = new Set([
   '.mp4', '.webm', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.m4v', '.mpg', '.mpeg', '.3gp', '.ogv',
   // Audio
   '.mp3', '.wav', '.ogg', '.flac', '.aac', '.wma', '.m4a', '.opus', '.aiff', '.mid', '.midi',
-  // Archives — skipped, never opened. ZIP package manifests are read
-  // only via `--package-manifest`, and only inside the bounds in
-  // `core-open/utils/zip-manifest.ts`.
+  // Archives
   '.zip', '.tar', '.gz', '.bz2', '.7z', '.rar',
   // Compiled / binary
   '.exe', '.dll', '.so', '.dylib', '.o', '.a', '.class', '.pyc', '.pdb',
