@@ -4,12 +4,14 @@
 import * as path from 'node:path';
 import * as semver from 'semver';
 import { readTextFile, FileCache } from '../utils/fs.js';
+import { recordedSemver } from '../utils/recorded-semver.js';
 import { withTimeout } from '../utils/timeout.js';
 import { GoCache } from './go-cache.js';
 import { latestStable, runtimeEolStatus, extractCycle, eolDate } from '../runtimes/catalog.js';
 import { BUNDLED_RUNTIME_CATALOG } from '../runtimes/snapshot.js';
 import type { RuntimeCatalog } from '../runtimes/types.js';
 import type { ProjectScan, DependencyRow, DetectedFramework } from '../types.js';
+import { compareCodeUnits } from '../utils/code-unit.js';
 
 /** Well-known Go frameworks / libraries to track */
 const KNOWN_GO_FRAMEWORKS: Record<string, string> = {
@@ -297,7 +299,7 @@ async function scanOneGoProject(
   const resolved = await Promise.all(metaPromises);
 
   for (const { dep, meta } of resolved) {
-    const resolvedVersion = dep.version ? semver.valid(semver.clean(dep.version)) : null;
+    const resolvedVersion = dep.version ? recordedSemver(dep.version) : null;
     const latestStable = meta.latestStableOverall;
 
     let majorsBehind: number | null = null;
@@ -352,7 +354,7 @@ async function scanOneGoProject(
     const order = { 'major-behind': 0, 'minor-behind': 1, 'current': 2, 'unknown': 3 };
     const diff = (order[a.drift] ?? 9) - (order[b.drift] ?? 9);
     if (diff !== 0) return diff;
-    return a.package.localeCompare(b.package);
+    return compareCodeUnits(a.package, b.package);
   });
 
   // Count files
