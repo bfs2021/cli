@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { stampWarning, WARNING_CODES, type CodedWarning } from '../core-open/warnings.js';
+import { formatSarif } from '../core-open/formatters/sarif.js';
+import { sortCodedWarnings, stampWarning, WARNING_CODES, type CodedWarning } from '../core-open/warnings.js';
+import type { ScanArtifact } from '../core-open/types.js';
 import { assembleEngineWarnings } from './warning-codes.js';
 import {
   coalesceHumanWarnings,
@@ -64,7 +66,7 @@ describe('coalesceHumanWarnings', () => {
     expect(text.length).toBeLessThan(events.length);
   });
 
-  it('keeps JSON rows complete and ordered', () => {
+  it('keeps JSON and SARIF rows complete and ordered', () => {
     const events = degradeFixture();
     const stored = events.map((warning) => stampWarning(warning.code, warning.message));
     const first = assembleEngineWarnings(stored);
@@ -74,6 +76,27 @@ describe('coalesceHumanWarnings', () => {
     expect(first.warnings).toHaveLength(events.length);
     const messages = new Set(first.codedWarnings.map((warning) => warning.message));
     for (const event of events) expect(messages.has(event.message)).toBe(true);
+
+    const sorted = sortCodedWarnings(events);
+    const artifact = {
+      schemaVersion: '1.0',
+      timestamp: '2020-01-01T00:00:00.000Z',
+      vibgrateVersion: 'test',
+      rootPath: 'repo',
+      projects: [],
+      findings: [],
+      degradations: sorted,
+    } as unknown as ScanArtifact;
+    const sarif = formatSarif(artifact) as {
+      runs: Array<{ invocations: Array<{ toolExecutionNotifications?: Array<{ message: { text: string }; descriptor: { id: string } }> }> }>;
+    };
+    const again = formatSarif(artifact);
+    expect(JSON.stringify(sarif)).toBe(JSON.stringify(again));
+    const notes = sarif.runs[0]!.invocations[0]!.toolExecutionNotifications ?? [];
+    expect(notes).toHaveLength(events.length);
+    expect(notes.map((note) => note.message.text)).toEqual(sorted.map((warning) => warning.message));
+    expect(notes.map((note) => note.descriptor.id)).toEqual(sorted.map((warning) => warning.code));
+    expect(notes.length).toBeGreaterThan(coalesceHumanWarnings(events).length);
   });
 
   it('does not print a home directory or a credential', () => {
