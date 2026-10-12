@@ -44,6 +44,7 @@ import { registerHcs } from './commands/hcs.js';
 import { registerReview } from './commands/review.js';
 import { ConfigFileError } from './core-open/config.js';
 import { LockfileParseError } from './core-open/utils/lockfile-parse.js';
+import { LockfileSyntaxError } from './engine/lockfile-guard.js';
 import { UnsafeRootError } from './core-open/utils/root-safety.js';
 import { CliError, ExitCode, usageError } from './util/exit.js';
 import { ParseWorkerError } from './engine/pool.js';
@@ -443,6 +444,7 @@ function handleError(err: unknown): never {
     err instanceof CliError ||
     err instanceof ParseWorkerError ||
     err instanceof LockfileParseError ||
+    err instanceof LockfileSyntaxError ||
     err instanceof ConfigFileError ||
     err instanceof UnsafeRootError
   ) {

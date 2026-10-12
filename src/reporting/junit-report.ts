@@ -19,7 +19,8 @@
  * drift gate; otherwise it is `<skipped>`. Notes never fail a gate.
  */
 import * as path from 'node:path';
-import { compareDriftBudget, compareDriftWorsening, type DriftBudgetGateResult } from './drift-budget-gate.js';
+import { compareDriftBudget, type DriftBudgetGateResult } from './drift-budget-gate.js';
+import { compareCodeUnits } from '../core-open/utils/code-unit.js';
 import { writeTextFile } from './utils/fs.js';
 
 export const JUNIT_FINDINGS_CLASS = 'vg.findings';
@@ -97,9 +98,7 @@ export interface SecurityJUnitFinding {
 
 /** Code-unit order. Locale-independent, unlike `localeCompare`. */
 function cmp(a: string, b: string): number {
-  if (a < b) return -1;
-  if (a > b) return 1;
-  return 0;
+  return compareCodeUnits(a, b);
 }
 
 const LEVEL_RANK: Record<JUnitFinding['level'], number> = { error: 0, warning: 1, note: 2 };
