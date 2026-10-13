@@ -137,8 +137,13 @@ export function restoreCheckpoint(
       continue;
     }
     // Absent from the snapshot → it was created after; undo means removing it.
-    const rm = git(['rm', '-f', '--ignore-unmatch', '--', file]);
-    if (rm.exitCode === 0) removed.push(file);
+    // `git rm` only knows tracked paths: a file the change created and nobody
+    // staged is untracked, and `--ignore-unmatch` would report success while
+    // leaving it on disk. `git clean` on that one path removes it (ignored or
+    // not — the checkpoint named it, so the user asked for it to go).
+    const rm = git(['rm', '-f', '-q', '--ignore-unmatch', '--', file]);
+    const clean = rm.exitCode === 0 ? git(['clean', '-f', '-x', '-q', '--', file]) : rm;
+    if (rm.exitCode === 0 && clean.exitCode === 0) removed.push(file);
     else failed.push(file);
   }
   return { restored, removed, failed };

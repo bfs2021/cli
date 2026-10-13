@@ -128,6 +128,26 @@ describe('restoreCheckpoint', () => {
     expect(out.restored).toEqual([]);
   });
 
+  it('removes an untracked created file too — git rm alone would leave it on disk', () => {
+    const { runner, calls } = fakeGit({ 'cat-file -e': { stdout: '', exitCode: 1 } });
+    const out = restoreCheckpoint(runner, { commit: 'c1', files: ['src/new.ts'] });
+    expect(out.removed).toEqual(['src/new.ts']);
+    const clean = calls.find((c) => c.args[0] === 'clean');
+    expect(clean?.args).toEqual(['clean', '-f', '-x', '-q', '--', 'src/new.ts']);
+    // Only ever the named path: never a sweeping clean.
+    expect(calls.filter((c) => c.args[0] === 'clean').every((c) => c.args[c.args.length - 1] === 'src/new.ts')).toBe(true);
+  });
+
+  it('reports a created file as failed when the untracked copy could not be removed', () => {
+    const { runner } = fakeGit({
+      'cat-file -e': { stdout: '', exitCode: 1 },
+      'clean -f -x -q -- src/new.ts': { stdout: '', exitCode: 1 },
+    });
+    const out = restoreCheckpoint(runner, { commit: 'c1', files: ['src/new.ts'] });
+    expect(out.failed).toEqual(['src/new.ts']);
+    expect(out.removed).toEqual([]);
+  });
+
   it('touches only the files it was given, never the whole tree', () => {
     const { runner, calls } = fakeGit({ 'cat-file -e': { stdout: '', exitCode: 0 } });
     restoreCheckpoint(runner, { commit: 'c1', files: ['src/a.ts'] });
