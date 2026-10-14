@@ -715,7 +715,7 @@ vg scan --offline --package-manifest ./package-versions.zip --max-privacy --form
 
 Add `.vibgrate/` to your `.gitignore` — those are regenerated local outputs.
 
-More on how Vibgrate handles code and data: [vibgrate.com/security](https://vibgrate.com/security), and the [subprocessor register](https://vibgrate.com/subprocessors).
+More on how Vibgrate handles code and data: [vibgrate.com/security](https://vibgrate.com/security), and the [subprocessor register](https://vibgrate.com/trust/subprocessors).
 
 ---
 

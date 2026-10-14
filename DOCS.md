@@ -5402,7 +5402,7 @@ The one exception where code truly leaves your machine is the **remediation
 agent**: when you ask it to write a fix, it clones your repository into an
 isolated virtual machine Vibgrate controls, makes the change, and hands you a
 pull request. That only happens when you ask for it. See
-[vibgrate.com/subprocessors](https://vibgrate.com/subprocessors) for who processes what.
+[vibgrate.com/trust/subprocessors](https://vibgrate.com/trust/subprocessors) for who processes what.
 
 ### Platform Matrix
 
