@@ -2,10 +2,12 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { VgGraph } from '../schema.js';
 import { REVIEW_TOOLS } from './review-tools.js';
-import { extraToolsFor } from './server.js';
+import { createServer, extraToolsFor, GraphSource, type ServeOptions } from './server.js';
 import { HOT_TOOLS, TOOLS } from './tools.js';
 
 /**
@@ -18,6 +20,48 @@ const names = (opts: Parameters<typeof extraToolsFor>[0]) => extraToolsFor(opts,
 const tool = REVIEW_TOOLS[0];
 const call = (root: string, args: Record<string, unknown>) =>
   Promise.resolve(tool.handler({} as VgGraph, args, { root })) as Promise<Record<string, unknown>>;
+
+/** Files the tool can create, relative to the workspace, `.git` left out. */
+function workspaceFiles(root: string): string[] {
+  const out: string[] = [];
+  const walk = (dir: string): void => {
+    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (ent.name === '.git') continue;
+      const abs = path.join(dir, ent.name);
+      if (ent.isDirectory()) walk(abs);
+      else out.push(path.relative(root, abs).split(path.sep).join('/'));
+    }
+  };
+  walk(root);
+  return out.sort();
+}
+
+const hintsOf = (t: { annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean } }) => ({
+  readOnlyHint: t.annotations?.readOnlyHint,
+  destructiveHint: t.annotations?.destructiveHint,
+});
+
+/** What `tools/list` actually advertises, including the server's annotation defaults. */
+async function withClient<T>(opts: ServeOptions, fn: (client: Client) => Promise<T>): Promise<T> {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vg-review-list-'));
+  const source = new GraphSource(path.join(root, '.vibgrate', 'graph.json'), false, { root });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = createServer(source, { refresh: false, ...opts, root, local: true, daemon: false });
+  const client = new Client({ name: 'review-list-test', version: '0.0.0' });
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    return await fn(client);
+  } finally {
+    await client.close().catch(() => {});
+    await server.close().catch(() => {});
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function toolText(result: unknown): string {
+  const content = (result as { content?: { type?: string; text?: string }[] }).content;
+  return content?.find((c) => c.type === 'text')?.text ?? '';
+}
 
 describe('what `vg serve` advertises', () => {
   it('a default `vg serve` lists no review tool; `--review` adds exactly one', () => {
@@ -37,6 +81,53 @@ describe('what `vg serve` advertises', () => {
     expect(tool.graphless).toBe(true);
     expect(tool.description).toMatch(/write what and why first/);
     expect(tool.description).toMatch(/recorded as origin "agent"/);
+  });
+
+  it('`--review` is the exact tool-list diff, and every other tool keeps its readOnlyHint', async () => {
+    const plain = await withClient({}, async (client) => {
+      const listed = await client.listTools();
+      const denied = await client.callTool({ name: 'review_doc', arguments: { op: 'open' } });
+      expect(denied.isError).toBe(true);
+      expect(toolText(denied)).toBe('unknown tool "review_doc"');
+      return listed.tools;
+    });
+    const reviewed = await withClient({ review: true }, async (client) => (await client.listTools()).tools);
+
+    const plainNames = plain.map((t) => t.name);
+    const reviewedNames = reviewed.map((t) => t.name);
+    expect(reviewedNames.filter((n) => !plainNames.includes(n))).toEqual(['review_doc']);
+    expect(plainNames.filter((n) => !reviewedNames.includes(n))).toEqual([]);
+    expect(plainNames).not.toContain('review_doc');
+
+    const reviewedByName = new Map(reviewed.map((t) => [t.name, t]));
+    for (const t of plain) {
+      expect(hintsOf(reviewedByName.get(t.name)!), t.name).toEqual(hintsOf(t));
+      expect(t.annotations?.readOnlyHint, t.name).toBe(true);
+      expect(t.annotations?.destructiveHint ?? false, t.name).toBe(false);
+    }
+    expect(reviewedByName.get('review_doc')?.annotations).toEqual({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    });
+
+    // Naming the tool without the flag does not register it.
+    const namedOnly = await withClient({ toolSurface: { tools: ['review_doc'] } }, async (client) => (await client.listTools()).tools);
+    expect(namedOnly.map((t) => t.name)).not.toContain('review_doc');
+
+    // Writers that were already opt-in keep their own hints; review is still the only addition.
+    const withWriters = await withClient({ compressTools: true, memory: true }, async (client) => (await client.listTools()).tools);
+    const withReview = await withClient({ compressTools: true, memory: true, review: true }, async (client) => (await client.listTools()).tools);
+    expect(withReview.map((t) => t.name).filter((n) => !withWriters.map((t) => t.name).includes(n))).toEqual(['review_doc']);
+    const before = new Map(withWriters.map((t) => [t.name, t]));
+    for (const t of withReview) {
+      if (t.name === 'review_doc') continue;
+      expect(hintsOf(t), t.name).toEqual(hintsOf(before.get(t.name)!));
+    }
+    expect(hintsOf(before.get('compress_content')!)).toEqual({ readOnlyHint: false, destructiveHint: false });
+    expect(hintsOf(before.get('memory_save')!)).toEqual({ readOnlyHint: false, destructiveHint: false });
+    expect(hintsOf(before.get('memory_search')!)).toEqual({ readOnlyHint: true, destructiveHint: undefined });
   });
 });
 
@@ -142,6 +233,78 @@ describe('review_doc, as an agent uses it', () => {
     expect(await call(root, { op: 'get', doc_id: 'rd_000000000000' })).toMatchObject({ error: 'review_doc_failed' });
   });
 
+  it('refuses a write outside .vibgrate/review-docs/, and a pin that leaves the repository', async () => {
+    const root = repo();
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'vg-review-outside-'));
+    roots.push(outside);
+    const opened = await call(root, { op: 'open' });
+    const id = opened.doc_id as string;
+    const store = path.join(root, '.vibgrate', 'review-docs');
+    const before = workspaceFiles(root);
+    expect(before.every((f) => f === '.gitignore' || f === '.vibgrate/.gitignore' || f.startsWith('.vibgrate/review-docs/') || f.startsWith('src/'))).toBe(true);
+    expect(before.some((f) => f.startsWith(`.vibgrate/review-docs/${id}/`))).toBe(true);
+
+    const escapes = [
+      '../outside-review.json',
+      '../../escaped.json',
+      'rd_0123456789ab/../../escaped-from-id.json',
+      '..\\..\\escaped-win.json',
+      path.join(outside, 'absolute.json'),
+      'C:\\Windows\\review.json',
+      '\\\\server\\share\\review.json',
+    ];
+    for (const doc_id of escapes) {
+      const res = await call(root, { op: 'patch', doc_id, version: 1, ops: [{ op: 'set_title', title: 'escaped' }] });
+      expect(res, doc_id).toEqual({
+        error: 'review_doc_failed',
+        message: `refusing to write outside .vibgrate/review-docs/: "${doc_id}" is not inside that directory`,
+      });
+      expect(await call(root, { op: 'restore', doc_id, version: 1 }), doc_id).toEqual(res);
+    }
+    expect(fs.existsSync(path.resolve(store, '../outside-review.json'))).toBe(false);
+    expect(fs.existsSync(path.resolve(store, '../../escaped.json'))).toBe(false);
+    expect(fs.existsSync(path.resolve(store, 'rd_0123456789ab/../../escaped-from-id.json'))).toBe(false);
+    expect(fs.existsSync(path.join(outside, 'absolute.json'))).toBe(false);
+    expect(workspaceFiles(root)).toEqual(before);
+
+    const outline = opened.outline as { sections: { blocks: { id: string }[] }[] };
+    const first = outline.sections[0].blocks[0].id;
+    const pinPaths = ['../etc/passwd', '/etc/passwd', 'src/../../../../../../etc/passwd', '..\\..\\secret.ts'];
+    for (const pinPath of pinPaths) {
+      const res = await call(root, {
+        op: 'patch',
+        doc_id: id,
+        version: 1,
+        ops: [{ op: 'set_text', block: first, text: `See [it](head:${pinPath}#L1-L1).` }],
+      });
+      expect(res, pinPath).toMatchObject({ saved: false, doc_id: id, version: 1 });
+      expect(res.issues, pinPath).toEqual(
+        expect.arrayContaining([expect.objectContaining({ code: 'pin_path', message: 'path must be repository-relative' })]),
+      );
+    }
+    const peek = await call(root, {
+      op: 'patch',
+      doc_id: id,
+      version: 1,
+      ops: [{ op: 'insert', section: 'implementation', block: { type: 'code_peek', pin: { side: 'head', path: '/etc/passwd', start: 1, end: 1 } } }],
+    });
+    expect(peek).toMatchObject({ saved: false, version: 1 });
+    expect(peek.issues).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'pin_path', message: 'path must be repository-relative' })]),
+    );
+    expect(workspaceFiles(root)).toEqual(before);
+
+    const patched = await call(root, {
+      op: 'patch',
+      doc_id: id,
+      version: 1,
+      ops: [{ op: 'set_text', block: first, text: 'Validates `b` before export — [the change](head:src/a.ts#L2).' }],
+    });
+    expect(patched).toMatchObject({ saved: true, version: 2 });
+    const added = workspaceFiles(root).filter((f) => !before.includes(f));
+    expect(added).toEqual([`.vibgrate/review-docs/${id}/v2.json`]);
+  });
+
   it('works outside a git repository only to say so', async () => {
     const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'vg-review-tool-nogit-')));
     roots.push(dir);
@@ -194,6 +357,35 @@ describe('review_doc op "explain"', () => {
     expect(res).toMatchObject({ saved: true, version: 2 });
     expect(await call2({ op: 'history', doc_id: 'scratchpad' })).toMatchObject({ error: 'bad_request' });
     expect(await call2({ op: 'clear', doc_id: 'scratchpad' })).toEqual({ cleared: true, was_version: 2 });
+  });
+
+  it('refuses a scratchpad write that leaves .vibgrate/review-docs/ or pins a path outside the repository', async () => {
+    setup();
+    const kept = await explain({ symbol: 'main', to: 'save', keep: true });
+    expect(kept).toMatchObject({ doc_id: 'scratchpad', version: 1, saved: true });
+    const pad = path.join(root, '.vibgrate', 'review-docs', 'scratchpad.json');
+    const before = fs.readFileSync(pad, 'utf8');
+    const call2 = (args: Record<string, unknown>) => Promise.resolve(tool.handler(graph, args, { root })) as Promise<Record<string, unknown>>;
+    const got = await call2({ op: 'get', doc_id: 'scratchpad' });
+    const heading = (got.doc as { sections: { blocks: { id: string }[] }[] }).sections[0].blocks[0].id;
+    const pinned = await call2({
+      op: 'patch',
+      doc_id: 'scratchpad',
+      version: 1,
+      ops: [{ op: 'set_text', block: heading, text: '#### See [secret](head:/etc/passwd#L1-L1)' }],
+    });
+    expect(pinned).toMatchObject({ saved: false, doc_id: 'scratchpad', version: 1 });
+    expect(pinned.issues).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'pin_path', message: 'path must be repository-relative' })]),
+    );
+    const outside = path.join(path.dirname(root), `vg-scratch-escape-${path.basename(root)}.json`);
+    const escaped = await call2({ op: 'patch', doc_id: outside, version: 1, ops: [{ op: 'set_title', title: 'nope' }] });
+    expect(escaped).toEqual({
+      error: 'review_doc_failed',
+      message: `refusing to write outside .vibgrate/review-docs/: "${outside}" is not inside that directory`,
+    });
+    expect(fs.readFileSync(pad, 'utf8')).toBe(before);
+    expect(fs.existsSync(outside)).toBe(false);
   });
 
   it('says what is missing: a code map, a symbol, or a path', async () => {
