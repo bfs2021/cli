@@ -19,6 +19,7 @@ import { gatherSystemMemory } from '../code/local-runtime.js';
 import { buildLocalInferenceStatus, type LocalInferenceStatus } from '../runtime/local-inference-status.js';
 import { VERSION } from '../version.js';
 import { findConfigFile, readDataConfigSync, shadowedConfigFiles } from '../core-open/config.js';
+import { driftBudgetConflictNote } from './drift-budget-conflict.js';
 import { c, info, json } from '../util/output.js';
 import { applyGlobalOptions, readGlobal, type GlobalOpts } from '../cli-options.js';
 import { rootOf } from './util.js';
@@ -61,12 +62,15 @@ const LEGACY_REVIEW_SETTINGS = ['.vibgrate/review.toml', '.vibgrate/review/setti
 /**
  * Config files present but not read. Only one config file is ever used, so a
  * second one — or a legacy review settings file behind a `review` block — is
- * a trap worth naming.
+ * a trap worth naming. A different `driftBudget` in an ignored YAML or JSON
+ * file is named with both values.
  */
 export function configNotes(root: string): string[] {
   const file = findConfigFile(root);
   if (!file) return [];
   const notes = shadowedConfigFiles(root).map((other) => `${other} is ignored: ${file} is the config in use`);
+  const conflict = driftBudgetConflictNote(root);
+  if (conflict) notes.push(conflict);
   const read = readDataConfigSync(root);
   if (read.error && !read.error.includes('is code')) notes.push(read.error);
   if (read.config?.review !== undefined) {
