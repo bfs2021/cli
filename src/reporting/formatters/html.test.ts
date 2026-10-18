@@ -239,6 +239,75 @@ describe('formatHtmlReport', () => {
     expect(html).toContain('[REDACTED]');
   });
 
+  it('renders an unmeasured DriftScore as n/a and a skipped IaC pack as Not scanned', () => {
+    const html = formatHtmlReport(artifact({
+      extended: {
+        security: {
+          schema: 'vg.security.v1',
+          engine: 'engine/1',
+          packs: { 'iac-cis-v1': 'unavailable' },
+          facts: { received: 0, evaluated: 0, rejected: 0 },
+          findings: [],
+        },
+      },
+    }));
+
+    expect(block(html, 'drift-score')).toBe('<dd id="drift-score">n/a</dd>');
+    expect(block(html, 'risk-level')).toBe('<dd id="risk-level">n/a</dd>');
+    expect(block(html, 'score-runtime')).toBe('<dd id="score-runtime">n/a</dd>');
+    expect(block(html, 'score-framework')).toBe('<dd id="score-framework">n/a</dd>');
+    expect(block(html, 'score-dependency')).toBe('<dd id="score-dependency">n/a</dd>');
+    expect(block(html, 'score-eol')).toBe('<dd id="score-eol">n/a</dd>');
+    expect(html).not.toContain('0/100');
+    expect(html).not.toContain('id="drift-score">0');
+    expect(html).not.toContain('id="risk-level">low');
+    expect(html).not.toContain('id="risk-level">LOW');
+
+    expect(block(html, 'vuln-counts')).toContain('Not scanned');
+    expect(block(html, 'vuln-counts')).not.toContain('critical');
+    expect(section(html, 'vulnerabilities')).toContain('Not scanned');
+
+    const securityCounts = block(html, 'security-counts');
+    expect(securityCounts).toBe('<p id="security-counts" class="absent" data-evaluated="no">Not scanned</p>');
+    expect(securityCounts).not.toContain('critical');
+    expect(section(html, 'security')).toContain('<p class="absent">Not scanned</p>');
+    expect(section(html, 'security')).not.toContain('None');
+    expect(html).not.toContain('engine/1');
+    expect(html).not.toContain('2026-02-16T00:00:00.000Z');
+  });
+
+  it('renders a finished IaC pack with no findings as zeros, and a measured zero score as 0', () => {
+    const html = formatHtmlReport(artifact({
+      drift: {
+        score: 0,
+        riskLevel: 'low',
+        components: {
+          runtimeScore: 0,
+          frameworkScore: 0,
+          dependencyScore: 0,
+          eolScore: 0,
+        },
+      },
+      extended: {
+        security: {
+          schema: 'vg.security.v1',
+          engine: 'engine/1',
+          packs: { 'iac-cis-v1': '1' },
+          facts: { received: 0, evaluated: 0, rejected: 0 },
+          findings: [],
+        },
+      },
+    }));
+
+    expect(block(html, 'drift-score')).toBe('<dd id="drift-score">0</dd>');
+    expect(block(html, 'risk-level')).toBe('<dd id="risk-level">low</dd>');
+    expect(block(html, 'security-counts')).toContain('data-evaluated="yes"');
+    expect(block(html, 'security-counts')).toContain('critical 0');
+    expect(section(html, 'security')).toContain('None');
+    expect(section(html, 'security')).not.toContain('Not scanned');
+    expect(html).not.toContain('engine/1');
+  });
+
   it('does not invent a zero for a score or a check that did not run', () => {
     const html = formatHtmlReport(artifact());
     expect(block(html, 'drift-score')).toBe('<dd id="drift-score">n/a</dd>');

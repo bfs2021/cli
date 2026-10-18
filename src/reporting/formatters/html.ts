@@ -22,6 +22,10 @@ import type { Finding, ScanArtifact } from '../types.js';
  * footer. It names the advisory source recorded on the artifact, and it says
  * "Not scanned", "Not checked", or "Not recorded" when that fact is absent.
  * A missing advisory total is omitted rather than printed as zero.
+ *
+ * A security section whose packs are all `unavailable` did not run. The
+ * summary and the security section say "Not scanned", not a row of zeros.
+ * A measured score of 0 stays 0. An unmeasured DriftScore stays `n/a`.
  */
 
 /** Row attribute the Fix available only checkbox selects on. `yes` or `no`. */
@@ -233,7 +237,16 @@ function vulnerabilityEvaluated(artifact: ScanArtifact, vulnFindings: Finding[])
 function securityFindings(artifact: ScanArtifact): SecurityFinding[] | null {
   const section = artifact.extended?.security;
   if (!section || !Array.isArray(section.findings)) return null;
+  // An empty list is a clean result only when a pack actually ran. Every
+  // pack `unavailable` is a skip (the module did not carry it), not a pass.
+  if (section.findings.length === 0 && everyPackUnavailable(section.packs)) return null;
   return section.findings;
+}
+
+function everyPackUnavailable(packs: Record<string, string> | undefined): boolean {
+  if (!packs) return false;
+  const versions = Object.values(packs);
+  return versions.length > 0 && versions.every((version) => version === 'unavailable');
 }
 
 function countVuln(findings: Finding[]): Record<VulnSeverityName | 'unspecified', number> {
