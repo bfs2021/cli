@@ -647,7 +647,7 @@ vg review                            # the working tree + index, vs HEAD
 vg review --in-place                 # the same, stated explicitly
 vg review --local                    # deterministic scanners; no hosted model
 vg review --loop                     # review → deterministic patch → re-review
-vg review --base origin/main         # merge-base of HEAD and the base branch
+vg review --base origin/main         # merge-base of HEAD and the base branch; policy from that ref
 vg review explain arch:<rule>:<path> # the evidence behind one finding
 vg review findings-from-diff         # deterministic graph/policy findings only
 vg review groups --base origin/main  # the change grouped for reading
@@ -660,7 +660,7 @@ vg review propose blast:<node_id> --model forge --json
 | `--in-place`          | off     | Review the working tree as-is (already the default without `--base`)        |
 | `--local` (global)    | off     | Deterministic pass on this machine — never a hosted model (implies `--offline`) |
 | `--loop`              | off     | Explicit review → apply deterministic patches → re-review. Never automatic. CLI only. |
-| `--base <ref>`        | —       | Review HEAD against the merge-base with `<ref>`                             |
+| `--base <ref>`        | —       | Review commits from the merge-base of HEAD and `<ref>` through HEAD. The review policy and `.vibgrate/review/` are read from `<ref>`, not from this change. See [Where base reads policy](#where-base-reads-policy) |
 | `--format <fmt>`      | `text`  | `text`, `json` (the receipt), `sarif` (security findings only), `md`        |
 | `-o, --out <file>`    | —       | Write the formatted result to a file                                        |
 | `--push`              | off     | Send the receipt to Vibgrate Cloud (needs a DSN)                            |
@@ -1569,29 +1569,71 @@ review:
     validatedTaint: true
 ```
 
-Read from the **trusted base branch** when `--base` is given, so a pull request
-cannot weaken the policy applied to itself. It is read as data: a `review` block
-in a `.ts`/`.js` config is never run, so keep it in YAML or JSON.
+#### Where base reads policy
 
-A key `vg` does not recognise, or a value of the wrong type, stops the command.
-The error names the file and, when the file makes it clear, the line and the
-key. The value is not printed. `.vibgrate/review.toml` still skips keys it does
-not recognise.
+This is the behavior shipped in [CLI 2026.930.1](https://github.com/vibgrate/cli/releases/tag/v2026.930.1).
+
+`vg review --base <ref>` reads the review policy with `git show <ref>:<file>`.
+`<ref>` is the name you passed, such as `origin/main`: the commit that name
+points at now, not the merge-base and not HEAD. The change set is still
+`merge-base(HEAD, <ref>)..HEAD`. HEAD and the working tree are not consulted,
+so a pull request cannot weaken the policy applied to itself. The same read is
+what `vg review explain`, `vg review findings-from-diff`, `vg review propose`,
+and `vg review doc` do when they review that change. `vg review doc --no-findings`
+does not load the policy. `vg review groups --base` only chooses the change set.
+
+At that commit, the first file `git show` can read wins, in this order:
+`.vibgrate/config.yml`, `.vibgrate/config.yaml`, `vibgrate.config.ts`,
+`vibgrate.config.js`, `vibgrate.config.json`. YAML and JSON are data. A `review`
+block in the file that won is the policy. A data file with no `review` key falls
+through to `.vibgrate/review.toml` at the same ref. A `.ts` or `.js` config is
+never executed, so a `review` block in it is ignored and a later JSON file is
+not read; `.vibgrate/review.toml` at the same ref is still the fallback.
+
+A base with no review policy uses the built-in defaults, never a policy the
+change added:
+
+| Setting | Default |
+| --- | --- |
+| `enforcement` | `advisory` — the process exits 0 unless you pass `--fail-on` |
+| `failOn` | `fail` — applied only when enforcement is `enforced`, or when `--fail-on` is set |
+| `protected.unguardedEntrypoint`, `protected.knownVulnerableDependency`, `protected.validatedTaint` | `true` |
+| `highConfidenceThreshold` | `0.8` |
+| `highSeverityDecision` | `fail` |
+| `targetPattern`, `approvedExceptions` | unset, empty |
+
+Without `--base`, `vg review` reads the copy committed at `HEAD` the same way
+(`git show HEAD:<file>`). Uncommitted edits on disk are not used while that
+commit already has a policy. The files on disk are used only when HEAD has
+nothing to show: no `review` block and no `.vibgrate/review.toml` in the
+commit. That includes a repository with no commits yet. A directory that is
+not a git repository never gets that far — `vg review` exits `5`:
+
+```text
+error: `vg review` needs a git repository — <root> is not one (or git is not on PATH)
+```
 
 The first `vg review` in a repository with no policy writes an advisory starter
 policy: a new `.vibgrate/config.yml` when there is no config, or a `review` block
 added to an existing `.vibgrate/config.yml` / `vibgrate.config.json`. A `.ts` or
 `.js` config is never rewritten, so those repositories get `.vibgrate/review.toml`.
+A `--base` run does not write that file.
 
 `.vibgrate/review.toml` keeps working wherever the config has no `review` block.
 Its keys are the snake_case forms of the ones above (`fail_on`, `target_pattern`,
 `[review.protected]`). `vg doctor` says when a `review` block makes it redundant.
+A `review.toml` that is not valid TOML is read as the defaults in the table and
+still counts as that file. Unknown keys are skipped. YAML and JSON do not do
+this — a bad data file stops the command (below).
 
-Team markdown packs live under `.vibgrate/review/` — the same tree the GitHub
-App reads. With `--base` they are read from the base branch, like the `review`
-policy, so a change cannot add an `ignore.md` glob over the files it breaks or
-delete a check to clear its own review; its edits apply after it merges.
-Without `--base`, the files on disk are used. `ignore.md` drops matching finding paths; `policy.md` is attached to
+Team markdown packs live under `.vibgrate/review/`. With `--base` they are read
+from that same ref (`git show <ref>:.vibgrate/review/…`, and `git ls-tree` for
+`checks/*.md`), not from the working tree. A file the ref does not have is
+absent, so a change cannot add an `ignore.md` glob over the files it breaks or
+delete a check to clear its own review. Those edits apply after it merges.
+Without `--base`, the pack files on disk are used, including uncommitted edits.
+That is separate from the review policy, which without `--base` still prefers
+the copy committed at HEAD. `ignore.md` drops matching finding paths; `policy.md` is attached to
 the human report; `merge.md` is evaluated locally (docs-only may approve; a
 change to `merge.md` itself is refused); `checks/*.md` each produce one CLI
 pass or a skipped-with-reason line. Custom checks have no extra correctness
@@ -1605,6 +1647,89 @@ Declaring `targetPattern` is what turns a layering observation into a
 *regression*. Without it, a dependency that skips a tier is reported as a medium
 finding about the repository's own majority — because a majority is not the same
 thing as a decision, and Review will not treat it as one.
+
+##### When `<ref>` is missing
+
+`vg review` keeps going when `<ref>` does not resolve. It discards git's
+stderr, so the `fatal:` lines stay inside those calls. Run the same lookups
+yourself and git prints:
+
+```text
+git merge-base HEAD does-not-exist
+fatal: Not a valid object name does-not-exist
+
+git rev-parse does-not-exist
+fatal: ambiguous argument 'does-not-exist': unknown revision or path not in the working tree.
+Use '--' to separate paths from revisions, like this:
+'git <command> [<revision>...] -- [<file>...]'
+
+git show does-not-exist:.vibgrate/config.yml
+fatal: invalid object name 'does-not-exist'.
+```
+
+`git rev-parse` without `--verify` still writes the name `does-not-exist` on
+stdout. The receipt records that string as `git.base_sha`. Policy loading
+sees no file at the ref and uses the built-in defaults above, the same
+fallback as a base that exists and has no review policy. The diff fails too,
+so the change set is empty. A repository with no code map still exits `6`:
+
+```text
+error: no code map found — run `vg` in this repository first, then `vg review`
+```
+
+Once a map exists, the text report is a pass over nothing. `<head>` below is
+the first eight characters of HEAD, and `does-not` is the first eight
+characters of the ref:
+
+```text
+vg review · pass · advisory
+  <head> vs does-not · none
+
+  no architecture or security-control findings
+  policy: no material architectural or security-control delta in this change set
+```
+
+There is no `(merge-base)` on that line. A real base prints `(merge-base)` and
+two commit prefixes. `--format json` has `git.merge_base` set to `null` and
+`git.base_sha` set to the ref text (`does-not-exist`), not a commit id. The
+decision is `pass` and the process exits `0`. That is an empty review, not a
+review of the branch.
+
+Check the ref before you trust the result:
+
+```bash
+git fetch origin
+git rev-parse --verify origin/main
+git merge-base HEAD origin/main
+vg review --base origin/main
+```
+
+Both git commands must exit 0. `git rev-parse --verify` prints the commit. On
+GitHub Actions, `actions/checkout` needs `fetch-depth: 0` so
+`origin/${{ github.base_ref }}` is in the clone.
+`examples/github-actions/vibgrate-review.yml` does this.
+
+##### When the policy file does not parse
+
+A key `vg` does not recognise, or a value of the wrong type, stops the command
+before it reviews. The exit code is `1`. The `error:` line names the file and,
+when the file makes it clear, the line and the key. The value is not printed.
+The line numbers are in the text `git show <ref>:<file>` returned — the copy
+on that ref, which may differ from the working tree. These two were captured
+with `--no-color` from `vg review --base main` when that commit's
+`.vibgrate/config.yml` was the broken file:
+
+```text
+error: .vibgrate/config.yml: `review.enforcement` must be "advisory" or "enforced" (line 2). Fix that key and run the command again.
+```
+
+```text
+error: .vibgrate/config.yml is not valid YAML at line 2, column 1: Flow sequence in block collection must be sufficiently indented and end with a ]. Fix the file and run the command again.
+```
+
+Fix that file on the ref you passed and run `vg review` again. The same
+messages are used when `--base` is omitted and the broken file is the one at
+HEAD, or the one on disk when HEAD has no policy.
 
 #### What it does not claim
 
