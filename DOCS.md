@@ -1679,7 +1679,7 @@ Purl rules, the fallback `bom-ref`, and how a scan artifact joins to these field
 
 `type` and `primaryPackagePurpose` are in [CycloneDX type and SPDX primaryPackagePurpose](#cyclonedx-type-and-spdx-primarypackagepurpose).
 
-Direct and transitive scope, and the production, development, and optional signals the export records or drops, are in [Dependency scope](./docs/sbom-dependency-scope.md).
+Direct and transitive scope, dependency kind (production, development, and optional), and the known omissions are in [Production, development, and optional dependencies in `vg sbom export`](./docs/sbom-dependency-scope.md#production-development-and-optional-dependencies-in-vg-sbom-export).
 
 How a declared license is copied into each format is in [Declared licenses](#declared-licenses).
 
@@ -1927,7 +1927,7 @@ every project whose lockfile listed that identity.
 That value is `direct` or `transitive`. Production, development, and optional
 are recorded or dropped before export, and the CycloneDX `scope` member is
 omitted. The mapping, a worked example, and the gaps are in
-[Dependency scope](./docs/sbom-dependency-scope.md).
+[Production, development, and optional dependencies in `vg sbom export`](./docs/sbom-dependency-scope.md#production-development-and-optional-dependencies-in-vg-sbom-export).
 
 ```bash
 vg sbom export --format cyclonedx --out sbom.cdx.json
