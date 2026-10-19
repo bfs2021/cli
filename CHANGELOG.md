@@ -23,15 +23,6 @@ backward compatible.
 
 ### Added
 
-- **`vg scan` warns when config files disagree on `driftBudget`.** The first
-  config file found wins (`.vibgrate/config.yml`, `.vibgrate/config.yaml`,
-  `vibgrate.config.ts`, `vibgrate.config.js`, `vibgrate.config.json`) and the
-  others are not merged. When another YAML or JSON file sets a different
-  `driftBudget`, the scan prints `warning [VG_WARN_CONFIG_DRIFT_BUDGET]` on
-  stderr. The line names the file in use, each ignored file, and the budget
-  each one sets. `vg doctor` records the same sentence. Matching budgets stay
-  quiet. The exit code does not change, and `--quiet` does not hide the line.
-
 - **`vg scan --summary-out` includes the drift budget verdict.** The JSON
   summary adds `driftBudget` (`source`, `mode`, `withinBudget`, `blocking`,
   `rules`), or `null` when no budget is set. A budget from `--drift-budget`

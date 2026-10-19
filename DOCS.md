@@ -5240,23 +5240,12 @@ Vibgrate reads the first it finds in the order `.vibgrate/config.yml`,
 `.vibgrate/config.yaml`, `vibgrate.config.ts`, `vibgrate.config.js`,
 `vibgrate.config.json`, and never merges two. YAML and JSON take exactly the
 same settings; `vg doctor` names any config file that is present but ignored.
-
-When another YAML or JSON file sets a different `driftBudget`, `vg scan`
-prints one warning on stderr and `vg doctor` records the same sentence. The
-first file in the order above wins. The sentence names that file, each
-ignored file whose budget differs, and the limits each one sets (`mode`,
-`maxScore`, `maxWorseningPercent`, `maxRiskScore`, `maxRiskWorseningPercent`,
-`agents.maxWorseningPercent`). An omitted `mode` is `warn`. A file that sets
-the same budget is not repeated in that sentence. A budget that exists only
-in an ignored file is included, with the winning file described as not
-setting `driftBudget`. A `.ts` or `.js` config that wins is named without a
-budget, because that file is not read as data. Other settings from the files
-are not printed. The warning does not change the exit code. `--quiet` does
-not hide it. Scan JSON stays on stdout.
-
-```text
-warning [VG_WARN_CONFIG_DRIFT_BUDGET]: driftBudget disagrees across config files. .vibgrate/config.yml wins (mode warn, maxScore 40). vibgrate.config.json is ignored (mode enforce, maxScore 80).
-```
+When more than one of those YAML or JSON files sets `driftBudget` and the
+values differ, `vg` prints one warning on stderr and `vg doctor` repeats it.
+The warning names each file, the `driftBudget` value in that file, and which
+file is the config in use (the first one in the lookup order). The other
+files are not read. The same settings in a different key order do not warn.
+Only the `driftBudget` value is printed, not the rest of the file.
 
 ### Drift budget
 
@@ -5295,8 +5284,6 @@ driftBudget:
 - A misspelt key, a wrong type, or a `driftBudget` that sets no limit stops the
   command. The error names the file and, when the file makes it clear, the line
   and the key. The value is not printed.
-- If a later config file sets a different `driftBudget`, `vg scan` warns and
-  keeps using the first file. See [Configuration](#vibgrateconfigts).
 
 The GitHub App reads `driftBudget` and `review` from the pull request's base
 branch, so a change cannot loosen the limits it is checked against. It reads

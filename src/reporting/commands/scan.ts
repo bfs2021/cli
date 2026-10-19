@@ -68,7 +68,6 @@ import { loadPackageVersionManifest, PackageManifestError } from '../package-ver
 import { runSecurityPacks, type SecurityRunResult } from '../../security/run-packs.js';
 import { evaluateSecurityGate, lowestThreshold, parseFailOn } from '../../security/gate.js';
 import { securityFindingRow, securityPacksLabel } from '../../core-open/formatters/text.js';
-import { driftBudgetConflictNote, formatDriftBudgetConflictWarning } from '../../commands/drift-budget-conflict.js';
 
 /** The security packs `--iac` requests from the Architecture module. */
 const IAC_PACKS = ['iac-cis-v1'] as const;
@@ -472,13 +471,6 @@ export const scanCommand = new Command('scan')
       console.error(chalk.red(`Path does not exist: ${rootDir}`));
       process.exit(1);
     }
-
-    // Before preflight or the walk. The first config file wins and the rest
-    // are not merged. Say so here when an ignored YAML or JSON file sets a
-    // different driftBudget, so the disagreement is not visible only in
-    // `vg doctor`.
-    const budgetConflict = driftBudgetConflictNote(rootDir);
-    if (budgetConflict) console.error(chalk.yellow(formatDriftBudgetConflictWarning(budgetConflict)));
 
     // Before preflight, fingerprinting, or the file walk. The walk budget is
     // enforced inside the walkers; this catches filesystem root and OS images.
