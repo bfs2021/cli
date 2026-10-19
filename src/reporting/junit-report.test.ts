@@ -3,12 +3,14 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { evaluateConfigDriftBudget } from './drift-budget-gate.js';
+import { evaluateEpssGate } from './epss-gate.js';
 import {
   FINDING_SKIP_NO_GATE,
   architectureGateSuite,
   configDriftBudgetCases,
   driftBudgetFlagCase,
   driftWorseningFlagCase,
+  epssGateCase,
   renderScanJUnit,
   securityGateSuite,
   type JUnitFinding,
@@ -114,6 +116,40 @@ describe('scan JUnit XML', () => {
 });
 
 describe('scan JUnit gates', () => {
+  it('maps --fail-on-epss the same way the CLI gate does', () => {
+    const absent = evaluateEpssGate({ source: null, from: 'flag', threshold: 0, advisories: [] });
+    expect(epssGateCase(absent)).toMatchObject({
+      status: 'skipped',
+      name: 'fail-on-epss',
+      message: 'EPSS is absent; --fail-on-epss 0 was not compared.',
+    });
+
+    const clean = evaluateEpssGate({ source: 'osv', from: 'flag', threshold: 0.5, advisories: [] });
+    expect(epssGateCase(clean)).toMatchObject({ status: 'pass', name: 'fail-on-epss' });
+
+    const below = evaluateEpssGate({
+      source: 'manifest',
+      from: 'flag',
+      threshold: 0.5,
+      advisories: [{ ecosystem: 'npm', package: 'left-pad', version: '1.3.0', id: 'GHSA-low', epss: 0 }],
+    });
+    expect(epssGateCase(below)).toMatchObject({ status: 'pass', name: 'fail-on-epss' });
+
+    const breach = evaluateEpssGate({
+      source: 'manifest',
+      from: 'flag',
+      threshold: 0.5,
+      advisories: [{ ecosystem: 'npm', package: 'left-pad', version: '1.3.0', id: 'GHSA-hot', epss: 0.9 }],
+    });
+    expect(epssGateCase(breach)).toMatchObject({
+      status: 'failure',
+      name: 'fail-on-epss',
+      type: 'gate',
+      message: 'Failing: 1 advisory at or above EPSS 0.5.',
+      body: 'npm left-pad@1.3.0  GHSA-hot  EPSS 0.9',
+    });
+  });
+
   it('maps --drift-budget the same way the CLI gate does', () => {
     expect(driftBudgetFlagCase(null, 0)).toMatchObject({
       status: 'skipped',

@@ -105,7 +105,7 @@ export function registerReview(program: Command): void {
   const cmd = program
     .command('review')
     .description('Vibgrate Review — architecture + security-control review of the current change, locally')
-    .option('--base <ref>', 'review HEAD against the merge-base with <ref> (e.g. origin/main)')
+    .option('--base <ref>', 'review HEAD against the merge-base with <ref> (e.g. origin/main); read the review policy and .vibgrate/review packs from <ref>, not from this change')
     .option(
       '--in-place',
       'review the working tree as-is (the default without --base; with --base, include uncommitted work against the merge-base)',
@@ -242,7 +242,7 @@ export function registerReview(program: Command): void {
     .command('explain')
     .description('show the evidence behind one finding from the current change')
     .argument('<finding-id>', 'a finding id from the current change (e.g. blast:<node_id>, arch:<rule>:<path>)')
-    .option('--base <ref>', 'review HEAD against the merge-base with <ref>')
+    .option('--base <ref>', 'review HEAD against the merge-base with <ref>; read the review policy and .vibgrate/review packs from <ref>, not from this change')
     .action(async function (this: Command, findingId: string, opts: { base?: string }) {
       const global = readGlobal(this);
       const explainRoot = rootOf(global);
@@ -293,7 +293,7 @@ export function registerReview(program: Command): void {
     .description(
       'emit deterministic vg.review.findings.v1 rows from the change set and the code graph (correctness blast-radius + architecture/security scanners; no hosted model; writes .vibgrate/review-propose-handoff.json for vg review propose)',
     )
-    .option('--base <ref>', 'review HEAD against the merge-base with <ref> (e.g. origin/main)')
+    .option('--base <ref>', 'review HEAD against the merge-base with <ref> (e.g. origin/main); read the review policy and .vibgrate/review packs from <ref>, not from this change')
     .option(
       '--in-place',
       'include the working tree when --base is also set (the default without --base already is in-place)',
@@ -485,7 +485,7 @@ export function registerReview(program: Command): void {
     .description(
       'write the review document for this change (vg.review.doc.v1): what changed, grouped, with every hunk and finding pinned to verified lines; --check validates one an agent or person edited; --save keeps it so an agent can patch it block by block',
     )
-    .option('--base <ref>', 'review HEAD against the merge-base with <ref> (e.g. origin/main)')
+    .option('--base <ref>', 'review HEAD against the merge-base with <ref> (e.g. origin/main); read the review policy and .vibgrate/review packs from <ref>, not from this change')
     .option('--in-place', 'include the working tree when --base is also set')
     .option('--format <fmt>', 'output format (md | json)', 'md')
     .option('-o, --out <file>', 'write the document to a file')
@@ -667,7 +667,7 @@ export function registerReview(program: Command): void {
       '<finding-id>',
       'a finding id from the current change, --findings JSON, or the last-run .vibgrate/review-propose-handoff.json (e.g. blast:<node_id>, arch:<rule>:<path>)',
     )
-    .option('--base <ref>', 'review HEAD against the merge-base with <ref> (same as findings-from-diff --base)')
+    .option('--base <ref>', 'review HEAD against the merge-base with <ref> (same as findings-from-diff --base); read the review policy and .vibgrate/review packs from <ref>, not from this change')
     .option(
       '--in-place',
       'include the working tree when --base is also set (same as findings-from-diff --in-place)',

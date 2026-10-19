@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { discover, mergeExcludes, type DiscoveredFile } from './discover.js';
+import { cacheDirectoryReads, readDirectory, type DirectoryReader } from './dir-reader.js';
 import { assertLockfilesValid } from './lockfile-guard.js';
 import { parseFiles } from './pool.js';
 import { resolve } from './resolve.js';
@@ -107,6 +108,12 @@ export interface BuildOptions {
   /** Resource-safeguard overrides (else VG_MAX_FILE_BYTES / VG_MAX_FILES /
    * VG_TSC_MAX_FILES / VG_MEMORY_BUDGET_MB env vars, else defaults). */
   limits?: Partial<ResourceLimits>;
+  /**
+   * Lists one project directory. The build calls this at most once per
+   * directory and reuses that listing. Node's `fs` exports cannot be spied
+   * on, so this is the hook a test uses to count directory reads.
+   */
+  readDir?: DirectoryReader;
 }
 
 /** Stat + content hash of one corpus file at build time. */
@@ -164,9 +171,12 @@ export async function buildGraph(options: BuildOptions): Promise<BuildResult> {
   const timer = new StageTimer();
   timer.start('total');
   const root = path.resolve(options.root);
+  // Lockfiles, source discovery, manifests, docs, and workspace globs each
+  // used to list the tree. One cached reader keeps a single read per directory.
+  const readDir = cacheDirectoryReads(options.readDir ?? readDirectory);
   // Before discovery and source parse workers. A bad lockfile must not start
   // a worker pool or leave a partial graph behind.
-  assertLockfilesValid(root);
+  assertLockfilesValid(root, readDir);
   const exclude = mergeExcludes(root, options.exclude);
   // Resolved before discovery so the walk itself stops at the corpus cap
   // instead of reading a filesystem root or an enormous unpack first.
@@ -180,6 +190,7 @@ export async function buildGraph(options: BuildOptions): Promise<BuildResult> {
     paths: options.paths,
     maxEntries: limits.maxFiles,
     warnings: buildWarnings,
+    readDir,
   });
   timer.end('discover');
 
@@ -357,7 +368,7 @@ export async function buildGraph(options: BuildOptions): Promise<BuildResult> {
   // tsconfig path aliases and workspace-package names (so monorepo cross-package
   // imports resolve, not just relative ones).
   timer.start('resolve');
-  const moduleResolver = buildModuleResolver(root, new Set(parses.map((p) => p.rel)));
+  const moduleResolver = buildModuleResolver(root, new Set(parses.map((p) => p.rel)), readDir);
   const resolved = resolve(parses, moduleResolver);
   timer.end('resolve');
   checkMemoryBudget('resolve', limits.memoryBudgetMb);
@@ -367,6 +378,7 @@ export async function buildGraph(options: BuildOptions): Promise<BuildResult> {
   const manifests = extractManifests(root, {
     exclude,
     paths: options.paths,
+    readDir,
   });
   for (const rel of manifests.skippedNonText) warnings.push(stampWarning(WARNING_CODES.NON_TEXT_FILE, rel));
   const rootIdentityWarning = rootPackageIdentityMessage(readRootPackageIdentity(root));
@@ -551,6 +563,7 @@ export async function buildGraph(options: BuildOptions): Promise<BuildResult> {
     exclude,
     paths: options.paths,
     maxEntries: limits.maxFiles,
+    readDir,
   });
   for (const d of docs) {
     try {

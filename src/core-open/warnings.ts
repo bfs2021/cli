@@ -75,6 +75,11 @@ export const WARNING_CODES = {
   SBOM_UNKNOWN_ECOSYSTEM: 'VG_WARN_SBOM_UNKNOWN_ECOSYSTEM',
   /** A lockfile format does not record dependency edges. */
   SBOM_UNTRACKED_EDGES: 'VG_WARN_SBOM_UNTRACKED_EDGES',
+  /**
+   * More than one YAML or JSON config file sets `driftBudget`, and the values
+   * differ. The first config file in lookup order is the one in use.
+   */
+  CONFIG_DRIFT_BUDGET_CONFLICT: 'VG_WARN_CONFIG_DRIFT_BUDGET_CONFLICT',
 } as const;
 
 export type WarningCode = (typeof WARNING_CODES)[keyof typeof WARNING_CODES];

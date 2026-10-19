@@ -29,7 +29,8 @@ import { requestFixPlan, parseFixPlanResponse } from '../utils/fix-plan.js';
 import { renderText, renderMarkdown } from '../planning/render.js';
 import { dedupePlans } from '../planning/dedupe.js';
 import { estimateDriftScore } from '../planning/expected-drift.js';
-import { applyPlan, type NpmPackageManager, type WorkspaceTarget } from '../planning/apply.js';
+import { applyPlan, type AppliedUpgrade, type NpmPackageManager, type WorkspaceTarget } from '../planning/apply.js';
+import { attemptsForApply, formatAdvisoryResolution } from '../planning/advisory-resolution.js';
 import { detectWorkspaceRoot } from './update.js';
 import type { FixCandidateInput, FixPlanRequest, FixPlanResponse, PlanTier, PlannedUpgrade, UpgradeConflict, UpgradeKind, UpgradePlan } from '../planning/types.js';
 
@@ -571,6 +572,17 @@ async function runApplyFlow(
     for (const c of gate.blocking) console.log(chalk.red(`  ✖ ${c.packages.join(', ')} — ${c.reason}`));
     if (gate.blocked) {
       console.log(chalk.dim('Nothing applied. Re-run with --force to apply anyway, or --plan <tier> for a plan without this conflict.'));
+      // The conflict blocked the install. Advisories those upgrades would have
+      // cleared stay open — a peer conflict is not a resolution.
+      const blocked: AppliedUpgrade[] = chosen.upgrades.map((u) => ({
+        package: u.package,
+        to: u.to,
+        status: 'skipped',
+        detail: 'peer conflict',
+      }));
+      for (const line of formatAdvisoryResolution(attemptsForApply(chosen.upgrades, blocked))) {
+        console.log(chalk.yellow(`  ${line}`));
+      }
       process.exitCode = 2;
       return;
     }
@@ -605,6 +617,10 @@ async function runApplyFlow(
   );
   for (const r of failed) console.log(chalk.red(`    ✖ ${r.package} → ${r.to}: ${r.detail ?? 'failed'}`));
   for (const r of manual) console.log(chalk.yellow(`    ⚠ ${r.package} → ${r.to}: ${r.detail}`));
+  for (const line of formatAdvisoryResolution(attemptsForApply(chosen.upgrades, results))) {
+    const open = line.startsWith('Advisory ');
+    console.log(open ? chalk.yellow(`  ${line}`) : chalk.green(`  ${line}`));
+  }
   if (typeof chosen.expectedDriftScore === 'number' && typeof response.currentDriftScore === 'number') {
     const delta = chosen.expectedDriftScore - response.currentDriftScore;
     console.log(
