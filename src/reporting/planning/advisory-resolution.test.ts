@@ -1,105 +1,117 @@
-import { describe, it, expect } from 'vitest';
-import * as fs from 'node:fs';
-import * as os from 'node:os';
-import * as path from 'node:path';
-import { isVersionAffected } from '../../core-open/scanners/vulnerability-scanner.js';
-import { resolveAdvisoryPlan, type AdvisoryResolutionReport } from './advisory-resolution.js';
+import { describe, expect, it } from 'vitest';
+import {
+  attemptsForApply,
+  blockFor,
+  formatAdvisoryResolution,
+  resolvedAdvisoryIds,
+  type AdvisoryUpgradeAttempt,
+} from './advisory-resolution.js';
+import type { AppliedUpgrade } from './apply.js';
+import type { PlannedUpgrade, VulnDelta } from './types.js';
 
-function fixture(manifest: Record<string, unknown>, packages: Record<string, Record<string, unknown>>, dependencies: Record<string, string>): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vg-adv-'));
-  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'unit', version: '1.0.0', dependencies }));
-  const lockPackages: Record<string, unknown> = { '': { dependencies } };
-  for (const [name, entry] of Object.entries(packages)) lockPackages[`node_modules/${name}`] = entry;
-  fs.writeFileSync(path.join(root, 'package-lock.json'), JSON.stringify({ lockfileVersion: 3, packages: lockPackages }));
-  fs.writeFileSync(path.join(root, 'manifest.json'), JSON.stringify({ npm: manifest }));
-  return root;
+function emptyDelta(): VulnDelta {
+  return { total: 0, bySeverity: { critical: 0, high: 0, moderate: 0, low: 0, unknown: 0 } };
 }
 
-function row(report: AdvisoryResolutionReport, id: string) {
-  const found = report.plans[0]?.advisories.find((item) => item.id === id);
-  if (!found) throw new Error(`missing ${id}`);
-  return found;
+function upgrade(over: Partial<PlannedUpgrade> = {}): PlannedUpgrade {
+  return {
+    package: 'lodash',
+    ecosystem: 'npm',
+    from: '4.17.20',
+    to: '4.17.21',
+    kind: 'patch',
+    blastRadius: 'low',
+    fixes: { ...emptyDelta(), total: 1, bySeverity: { ...emptyDelta().bySeverity, high: 1 } },
+    reason: 'remediates GHSA-lodash',
+    advisories: [{ id: 'GHSA-lodash', fixedVersion: '4.17.21' }],
+    ...over,
+  };
 }
 
-describe('resolveAdvisoryPlan', () => {
-  it('blocks a peer range and names the peer package and range', () => {
-    const root = fixture(
-      {
-        react: {
-          versions: ['18.2.0', '18.3.0'],
-          vulns: [{ id: 'GHSA-react-peer', severity: 'moderate', ranges: [{ introduced: '0', fixed: '18.3.0' }] }],
-        },
-        'react-dom': {
-          versions: ['18.2.0'],
-          peers: { '18.2.0': { react: '>=18.2.0 <18.3.0' } },
-        },
-      },
-      {
-        react: { version: '18.2.0' },
-        'react-dom': { version: '18.2.0', peerDependencies: { react: '>=18.2.0 <18.3.0' } },
-      },
-      { react: '18.2.0', 'react-dom': '18.2.0' },
-    );
-    try {
-      const report = resolveAdvisoryPlan({ rootDir: root, manifest: JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8')) });
-      const peer = row(report, 'GHSA-react-peer');
-      expect(peer.status).toBe('blocked');
-      expect(peer.plannedVersion).toBeNull();
-      expect(peer.reason).toContain('react-dom@18.2.0');
-      expect(peer.reason).toContain('react@>=18.2.0 <18.3.0');
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
+function applied(over: Partial<AppliedUpgrade> = {}): AppliedUpgrade {
+  return { package: 'lodash', to: '4.17.21', status: 'applied', ...over };
+}
+
+describe('resolvedAdvisoryIds', () => {
+  const blocked: Array<[AdvisoryUpgradeAttempt['block'], string]> = [
+    ['policy', 'blocked by policy'],
+    ['peer', 'peer conflict'],
+    ['no-fixed-version', 'no fixed version'],
+    ['install-failed', 'failed install'],
+  ];
+
+  it.each(blocked)('never marks an advisory resolved when the upgrade is %s (%s)', (block) => {
+    const attempts: AdvisoryUpgradeAttempt[] = [
+      { advisoryId: 'GHSA-lodash', fixedVersion: '4.17.21', block },
+    ];
+    expect(resolvedAdvisoryIds(attempts)).toEqual([]);
+    const lines = formatAdvisoryResolution(attempts);
+    expect(lines.join('\n')).not.toMatch(/Advisories resolved:/);
+    expect(lines.join('\n')).toContain('GHSA-lodash stayed open');
   });
 
-  it('does not mark an advisory resolved when the merged target is still affected', () => {
-    const root = fixture(
-      {
-        shared: {
-          versions: ['1.0.0', '1.0.1', '1.0.2'],
-          vulns: [
-            { id: 'GHSA-exact', severity: 'low', versions: ['1.0.0', '1.0.2'] },
-            { id: 'GHSA-floor', severity: 'high', ranges: [{ introduced: '0', fixed: '1.0.2' }] },
-          ],
-        },
-      },
-      { shared: { version: '1.0.0' } },
-      { shared: '1.0.0' },
-    );
-    try {
-      const report = resolveAdvisoryPlan({ rootDir: root, manifest: JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8')) });
-      const exact = row(report, 'GHSA-exact');
-      const floor = row(report, 'GHSA-floor');
-      expect(floor.status).toBe('resolved');
-      expect(floor.plannedVersion).toBe('1.0.2');
-      expect(exact.status).not.toBe('resolved');
-      expect(isVersionAffected('1.0.2', undefined, ['1.0.0', '1.0.2'])).toBe(true);
-      expect(exact.reason).toContain('shared');
-      expect(exact.reason).toContain('1.0.0, 1.0.2');
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
+  it('marks an advisory resolved only when the install landed on a published fix', () => {
+    expect(
+      resolvedAdvisoryIds([{ advisoryId: 'GHSA-lodash', fixedVersion: '4.17.21', block: null }]),
+    ).toEqual(['GHSA-lodash']);
   });
 
-  it('blocks a two-major jump on the balanced policy and allows it on aggressive', () => {
-    const manifest = {
-      npm: {
-        leap: {
-          versions: ['1.0.0', '3.0.0'],
-          vulns: [{ id: 'GHSA-leap', severity: 'high', ranges: [{ introduced: '0', fixed: '3.0.0' }] }],
-        },
-      },
-    };
-    const root = fixture(manifest.npm, { leap: { version: '1.0.0' } }, { leap: '1.0.0' });
-    try {
-      const balanced = resolveAdvisoryPlan({ rootDir: root, manifest, policy: 'balanced' });
-      const aggressive = resolveAdvisoryPlan({ rootDir: root, manifest, policy: 'aggressive' });
-      expect(row(balanced, 'GHSA-leap').status).toBe('blocked');
-      expect(row(balanced, 'GHSA-leap').reason).toContain('>=1.0.0 <3.0.0');
-      expect(row(aggressive, 'GHSA-leap').status).toBe('resolved');
-      expect(row(aggressive, 'GHSA-leap').plannedVersion).toBe('3.0.0');
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
+  it('keeps the advisory open when one attempt landed and another was blocked', () => {
+    expect(
+      resolvedAdvisoryIds([
+        { advisoryId: 'GHSA-lodash', fixedVersion: '4.17.21', block: null },
+        { advisoryId: 'GHSA-lodash', fixedVersion: '4.17.21', block: 'peer' },
+      ]),
+    ).toEqual([]);
+  });
+
+  it('does not treat a landed install as a resolution when no fixed version exists', () => {
+    expect(
+      resolvedAdvisoryIds([{ advisoryId: 'GHSA-open', fixedVersion: null, block: null }]),
+    ).toEqual([]);
+  });
+});
+
+describe('blockFor', () => {
+  it('reads a planner block before the apply result', () => {
+    expect(blockFor(upgrade({ block: 'policy' }), applied())).toBe('policy');
+    expect(blockFor(upgrade({ block: 'peer' }), applied())).toBe('peer');
+    expect(blockFor(upgrade({ block: 'no-fixed-version' }), applied())).toBe('no-fixed-version');
+  });
+
+  it('classifies a failed install, including policy and peer wording from the package manager', () => {
+    expect(blockFor(upgrade(), { package: 'lodash', to: '4.17.21', status: 'failed', detail: 'exit 1' })).toBe('install-failed');
+    expect(blockFor(upgrade(), { package: 'lodash', to: '4.17.21', status: 'failed', detail: 'blocked by policy' })).toBe('policy');
+    expect(blockFor(upgrade(), { package: 'lodash', to: '4.17.21', status: 'failed', detail: 'peer conflict: ERESOLVE' })).toBe('peer');
+  });
+
+  it('treats a missing target version as no fixed version', () => {
+    expect(blockFor(upgrade({ to: null }), undefined)).toBe('no-fixed-version');
+  });
+
+  it('returns null only for an applied upgrade', () => {
+    expect(blockFor(upgrade(), applied())).toBeNull();
+  });
+});
+
+describe('attemptsForApply', () => {
+  it('keeps a blocked upgrade out of the resolved set', () => {
+    const lines = formatAdvisoryResolution(
+      attemptsForApply(
+        [upgrade()],
+        [{ package: 'lodash', to: '4.17.21', status: 'failed', detail: 'blocked by policy' }],
+      ),
+    );
+    expect(lines).toEqual(['Advisory GHSA-lodash stayed open — upgrade blocked by policy']);
+  });
+
+  it('names a resolved advisory only after a landed install that has a fix', () => {
+    expect(formatAdvisoryResolution(attemptsForApply([upgrade()], [applied()]))).toEqual([
+      'Advisories resolved: GHSA-lodash',
+    ]);
+  });
+
+  it('stays silent when the planner did not name advisories', () => {
+    expect(formatAdvisoryResolution(attemptsForApply([upgrade({ advisories: undefined })], [applied()]))).toEqual([]);
   });
 });
