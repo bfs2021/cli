@@ -167,6 +167,19 @@ const LICENSE_WARNING_PROPERTY = 'vibgrate:licenseWarning';
 const LICENSE_STATUS_UNREPRESENTABLE = 'unrepresentable';
 /** CycloneDX property that carries the stable warning code beside a prose warning. */
 const WARNING_CODE_PROPERTY = 'vibgrate:warningCode';
+/** CycloneDX property for a Maven coordinate that has no group. The purl is still written. */
+const MAVEN_WARNING_PROPERTY = 'vibgrate:mavenWarning';
+
+/**
+ * Maven `group:artifact`. A missing colon, or an empty group segment, leaves
+ * `group` unset. Extra `:` segments after the artifact are ignored, matching
+ * the purl that has always been emitted for that name.
+ */
+function mavenCoordinate(name: string): { group: string | undefined; artifact: string } {
+  if (!name.includes(':')) return { group: undefined, artifact: name };
+  const [group, artifact] = name.split(':');
+  return { group: group ? group : undefined, artifact: artifact ?? '' };
+}
 
 /** The purl type/namespace/name portion, without a version — shared by every ecosystem branch of `purlFor`. */
 function purlPath(ecosystem: Ecosystem, name: string): string | null {
@@ -185,7 +198,7 @@ function purlPath(ecosystem: Ecosystem, name: string): string | null {
     case 'go':
       return `pkg:golang/${name.split('/').map(encodeURIComponent).join('/')}`;
     case 'java': {
-      const [group, artifact] = name.includes(':') ? name.split(':') : [undefined, name];
+      const { group, artifact } = mavenCoordinate(name);
       return group ? `pkg:maven/${encodeURIComponent(group)}/${encodeURIComponent(artifact)}` : `pkg:maven/${encodeURIComponent(artifact)}`;
     }
     case 'ruby':
@@ -306,6 +319,27 @@ export function resolvePurl(ecosystem: Ecosystem, name: string, version: string)
   const purl = purlFor(ecosystem, name, version);
   if (purl) return { purl, warning: null };
   return { purl: null, warning: describeUnavailablePurl(ecosystem, name, version) };
+}
+
+/**
+ * A Maven name with no group still gets a purl, but the purl has no namespace.
+ * The sentence is the stable warning text for `VG_WARN_MAVEN_GROUP_MISSING`.
+ */
+export function describeMissingMavenGroup(name: string, purl: string): string {
+  return `Maven group missing for java package "${name}": the package URL ${purl} has no namespace. The component is included. Record the name as group:artifact.`;
+}
+
+/**
+ * Warning when a Java coordinate has no Maven group and a purl was still
+ * emitted. Null when the ecosystem is not Java, the group is present, or the
+ * purl was omitted (`VG_WARN_PURL_UNAVAILABLE` covers that row instead).
+ */
+export function mavenGroupWarning(ecosystem: Ecosystem, name: string, version: string): string | null {
+  if (ecosystem !== 'java') return null;
+  if (mavenCoordinate(name).group) return null;
+  const purl = purlFor(ecosystem, name, version);
+  if (!purl) return null;
+  return describeMissingMavenGroup(name, purl);
 }
 
 /** Stable CycloneDX bom-ref. A valid purl when we have one; never a rejected purl string. */
@@ -430,6 +464,7 @@ function describeUntrackedEdges(ecosystem: string, packageName: string, version:
 /** Map a known SBOM warning sentence to its code. Unknown prose stays uncoded. */
 function sbomWarningCode(message: string): WarningCode | undefined {
   if (message.startsWith('Package URL unavailable')) return WARNING_CODES.PURL_UNAVAILABLE;
+  if (message.startsWith('Maven group missing')) return WARNING_CODES.MAVEN_GROUP_MISSING;
   if (message.startsWith('Declared license')) return WARNING_CODES.LICENSE_UNREPRESENTABLE;
   if (message.startsWith('Dropped a different dependency list')) return WARNING_CODES.SBOM_LOSSY_EDGES;
   if (message.startsWith('Dropped differing manifest metadata')) return WARNING_CODES.SBOM_LOSSY_MANIFEST;
@@ -965,6 +1000,11 @@ export function toCycloneDx(artifact: ScanArtifact, graph?: LockfileGraph): Reco
         );
         pushWarningCode(properties, warning);
       }
+      const mavenWarning = mavenGroupWarning(dep.ecosystem, dep.package, dep.version);
+      if (mavenWarning) {
+        properties.push({ name: MAVEN_WARNING_PROPERTY, value: mavenWarning });
+        pushWarningCode(properties, mavenWarning);
+      }
       if (license.warning) {
         properties.push(
           { name: LICENSE_STATUS_PROPERTY, value: LICENSE_STATUS_UNREPRESENTABLE },
@@ -1040,6 +1080,8 @@ export function toSpdx(artifact: ScanArtifact, graph?: LockfileGraph): Record<st
         }
       };
       if (warning) pushSpdxWarning(warning);
+      const mavenWarning = mavenGroupWarning(dep.ecosystem, dep.package, dep.version);
+      if (mavenWarning) pushSpdxWarning(mavenWarning);
       if (license.warning) pushSpdxWarning(license.warning);
       for (const mergeWarning of dep.mergeWarnings) pushSpdxWarning(mergeWarning);
       return {
@@ -1092,6 +1134,14 @@ export function toSpdx(artifact: ScanArtifact, graph?: LockfileGraph): Record<st
 export function collectPurlWarnings(artifact: ScanArtifact, graph?: LockfileGraph): string[] {
   return flattenDependencies(artifact, graph?.components ?? [], graph?.ecosystem).flatMap((dep) => {
     const warning = resolvePurl(dep.ecosystem, dep.package, dep.version).warning;
+    return warning ? [warning] : [];
+  });
+}
+
+/** Warnings for Maven components emitted with a purl and no group. Same order as the SBOM rows. */
+export function collectMavenGroupWarnings(artifact: ScanArtifact, graph?: LockfileGraph): string[] {
+  return flattenDependencies(artifact, graph?.components ?? [], graph?.ecosystem).flatMap((dep) => {
+    const warning = mavenGroupWarning(dep.ecosystem, dep.package, dep.version);
     return warning ? [warning] : [];
   });
 }
@@ -1216,6 +1266,7 @@ const exportCommand = new Command('export')
     }
     for (const warning of [
       ...collectPurlWarnings(artifact, lockfileGraph),
+      ...collectMavenGroupWarnings(artifact, lockfileGraph),
       ...collectLicenseWarnings(artifact, lockfileGraph),
       ...collectMergeWarnings(artifact, lockfileGraph),
     ]) {

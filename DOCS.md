@@ -1772,6 +1772,8 @@ For `com.google.code.gson:gson` at `2.11.0` in a Java project, read these fields
 
 Key the join on `pkg:maven/com.google.code.gson/gson@2.11.0`, or on `maven` + `com.google.code.gson:gson` + `2.11.0`. The group `com.google.code.gson` is the purl namespace. SPDX stores the same purl on `externalRefs[].referenceLocator`.
 
+A name with no group still produces a component. `gson` at `2.11.0` (no `:`) is `pkg:maven/gson@2.11.0`, a purl with no namespace. An empty group segment (`:gson`) is the same purl. `vg sbom export` warns with `VG_WARN_MAVEN_GROUP_MISSING` and keeps the purl. CycloneDX records the reason on `vibgrate:mavenWarning` and the code on `vibgrate:warningCode`. SPDX keeps the purl on `externalRefs[].referenceLocator` and repeats the reason and `warningCode=VG_WARN_MAVEN_GROUP_MISSING` as annotations. Record the coordinate as `group:artifact`.
+
 #### Reading an SBOM that has no package URL and no CPE
 
 `vg evidence release` reads a CycloneDX or SPDX document with `--from`, and it reads an SBOM attestation attached to `--image`. Vendored code, a file, firmware, and a machine-learning model often have a name and a version and neither a package URL nor a CPE. Those rows are part of what shipped.
@@ -6071,6 +6073,7 @@ A truncated or invalid lockfile stops the command. Warning codes cover condition
 | `VG_WARN_LICENSE_UNREPRESENTABLE` | `vg sbom` | A declared license cannot be represented in an SBOM. |
 | `VG_WARN_CVSS_UNPARSEABLE` | `vg scan` | A CVSS vector was present and could not be parsed. |
 | `VG_WARN_PURL_UNAVAILABLE` | `vg sbom` | A package URL could not be formed. The component is included without a purl. |
+| `VG_WARN_MAVEN_GROUP_MISSING` | `vg sbom` | A Maven component has no groupId. The component stays, and the purl has no namespace (`pkg:maven/<artifact>@<version>`). |
 | `VG_WARN_ROOT_PACKAGE_IDENTITY` | `vg build`, `vg scan`, `vg sbom` | The root `package.json` omitted `name`, `version`, or both. The root component uses the directory name when `name` is missing, and omits `version` when that field is missing. Dependencies are still resolved. |
 | `VG_WARN_SBOM_LOSSY_EDGES` | `vg sbom` | Merge dropped a different dependency list for one package. |
 | `VG_WARN_SBOM_LOSSY_MANIFEST` | `vg sbom` | Merge dropped differing manifest metadata for one package. |
