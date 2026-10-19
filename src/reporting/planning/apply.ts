@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
+import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { PlannedUpgrade } from './types.js';
+import type { PlannedUpgrade, PlannedUpgradeBlock } from './types.js';
 
 /**
  * Applies a chosen plan by running each ecosystem's native package manager to
@@ -139,12 +140,67 @@ function defaultRun(cmd: UpgradeCommand, cwd: string): RunResult {
 
 const ROOT_TARGET: WorkspaceTarget[] = [{ dir: '.', isWorkspaceRoot: false }];
 
+/**
+ * Manifests and lockfiles a pin command can rewrite. Snapshotted before the
+ * package manager runs and restored when it fails, so a blocked install cannot
+ * leave the project looking upgraded.
+ */
+const MANIFEST_FILES = [
+  'package.json',
+  'package-lock.json',
+  'npm-shrinkwrap.json',
+  'pnpm-lock.yaml',
+  'yarn.lock',
+  'bun.lock',
+  'bun.lockb',
+  'requirements.txt',
+  'pyproject.toml',
+  'Pipfile',
+  'Pipfile.lock',
+  'go.mod',
+  'go.sum',
+  'Cargo.toml',
+  'Cargo.lock',
+  'composer.json',
+  'composer.lock',
+  'Gemfile',
+  'Gemfile.lock',
+  'pubspec.yaml',
+  'pubspec.lock',
+];
+
+function snapshotManifests(dir: string): Map<string, Buffer | null> {
+  const snap = new Map<string, Buffer | null>();
+  for (const name of MANIFEST_FILES) {
+    const file = path.join(dir, name);
+    snap.set(file, fs.existsSync(file) ? fs.readFileSync(file) : null);
+  }
+  return snap;
+}
+
+function restoreManifests(snap: Map<string, Buffer | null>): void {
+  for (const [file, bytes] of snap) {
+    if (bytes === null) fs.rmSync(file, { force: true });
+    else fs.writeFileSync(file, bytes);
+  }
+}
+
+function blockedDetail(block: PlannedUpgradeBlock): string {
+  if (block === 'policy') return 'blocked by policy';
+  if (block === 'peer') return 'peer conflict';
+  return 'no fixed version';
+}
+
 /** Apply a plan's upgrades. Returns per-package outcomes (nothing is silently dropped). */
 export function applyPlan(rootDir: string, upgrades: PlannedUpgrade[], opts: ApplyOptions = {}): AppliedUpgrade[] {
   const run = opts.run ?? defaultRun;
   const resolveTargets = opts.resolveTargets ?? (() => ROOT_TARGET);
   const results: AppliedUpgrade[] = [];
   for (const u of upgrades) {
+    if (u.block) {
+      results.push({ package: u.package, to: u.to, status: 'skipped', detail: blockedDetail(u.block) });
+      continue;
+    }
     if (!u.to) {
       results.push({ package: u.package, to: u.to, status: 'skipped', detail: 'no target version' });
       continue;
@@ -172,8 +228,14 @@ export function applyPlan(rootDir: string, upgrades: PlannedUpgrade[], opts: App
       continue;
     }
     const outcomes = effective.map((t) => {
+      const cwd = path.join(rootDir, t.dir);
+      const snap = snapshotManifests(cwd);
       const c = pmCommandFor(u.ecosystem, u.package, u.to as string, opts.packageManager, { workspaceRoot: t.isWorkspaceRoot });
-      return { t, res: run(c!, path.join(rootDir, t.dir)) };
+      const res = run(c!, cwd);
+      // A failed install must not leave the manifest or lockfile on the target
+      // version. The next scan would then treat the advisory as resolved.
+      if (!res.ok) restoreManifests(snap);
+      return { t, res };
     });
     const failures = outcomes.filter((o) => !o.res.ok);
     if (failures.length === 0) {

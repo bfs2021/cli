@@ -274,6 +274,11 @@ function isNonNegativeNumber(value: unknown): boolean {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
 
+/** EPSS probability. 0 and 1 are real scores, not sentinels. */
+function isUnitInterval(value: unknown): boolean {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
+}
+
 const SHAPE_CHECKS: readonly ShapeCheck[] = [
   { key: 'include', ok: isStringList, expect: 'a list of strings, for example include: ["src/**"]' },
   { key: 'exclude', ok: isStringList, expect: 'a list of strings, for example exclude: ["legacy/**"]' },
@@ -283,6 +288,7 @@ const SHAPE_CHECKS: readonly ShapeCheck[] = [
   { key: 'scanners', ok: (value) => value === false || isRecord(value), expect: 'a mapping of scanner settings, or false' },
   { key: 'thresholds', ok: isRecord, expect: 'a mapping of threshold settings' },
   { key: 'driftBudget', ok: isRecord, expect: 'a mapping of budget settings' },
+  { key: 'failOnEpss', ok: isUnitInterval, expect: 'a number from 0 to 1, for example failOnEpss: 0.1' },
   { key: 'review', ok: isRecord, expect: 'a mapping of review settings' },
 ];
 

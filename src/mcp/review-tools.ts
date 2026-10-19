@@ -73,7 +73,7 @@ const SCHEMA = {
   properties: {
     op: { type: 'string', enum: ['open', 'get', 'patch', 'check', 'history', 'restore', 'comments', 'reply', 'explain', 'clear'] },
     doc_id: { type: 'string', description: 'from open (rd_…), or "scratchpad"; required for every op but open and explain' },
-    base: { type: 'string', description: 'open: review HEAD against the merge-base with this ref (default: working tree vs HEAD)' },
+    base: { type: 'string', description: 'open: review HEAD against the merge-base with this ref. The review policy and .vibgrate/review packs are read from this ref, not from the change (default: working tree vs HEAD)' },
     in_place: { type: 'boolean', description: 'open: with base, include the working tree' },
     session: { type: 'string', description: 'open: a VG Code chat id, or "latest" — only the files it touched, its requests as requirements' },
     fresh: { type: 'boolean', description: 'open: rebuild from the change as a new version instead of reusing the saved one' },
