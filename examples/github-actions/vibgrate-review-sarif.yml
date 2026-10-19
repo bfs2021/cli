@@ -22,9 +22,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # Full history so --base origin/<base> resolves. Policy and
-          # .vibgrate/review/ are read from that ref. A missing ref is not a
-          # vg error — see vibgrate-review.yml.
           fetch-depth: 0
           persist-credentials: false
 

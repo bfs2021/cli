@@ -684,13 +684,6 @@ vg review propose blast:<node_id> --model forge --json
 vg review propose arch:<rule>:<path> --model forge --json --findings findings.json
 ```
 
-`vg review --base origin/main` reads the review policy and `.vibgrate/review/`
-from that ref, not from the pull request. A base with no policy uses the
-built-in defaults. A local `vg review` with no `--base` reads the policy
-committed at HEAD, and the files on disk only when that commit has none.
-Where a missing ref shows up, and the error when the policy file does not
-parse, are in [DOCS.md](./DOCS.md#where-base-reads-policy).
-
 `vg review findings-from-diff` prints the deterministic `vg.review.findings.v1`
 document (blast-radius and architecture-policy `correctness` rows plus security
 scanners) and writes `.vibgrate/review-propose-handoff.json`.
