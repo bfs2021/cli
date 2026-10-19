@@ -167,6 +167,7 @@ Other scan-time gates on the same command:
 - `--fail-on error` fails on error-level findings. Warnings do not fail this gate.
 - `--fail-on architecture-finding` fails on a hard boundary finding from the architecture module (an HTTP handler that writes the store, domain code that does I/O); `architecture-warning` also fails on warnings. Needs the code map the scan builds and the Architecture module (`vg module install arch`); the rules come from `.vibgrate/architecture.toml` (`policy = "hexagonal-v1"`, `"layered-v1"` or `"vertical-v1"`, plus any `[[overlay]]` rules of your own; a `deny` overlay with `severity = "hard"` fails the gate like a baked violation). Each failing line is `file:line  symbol  violation: … (rule)`. A gate that cannot be evaluated exits 2.
 - `--drift-budget <score>` fails when DriftScore is above the budget.
+- `--fail-on-epss <threshold>` fails when any advisory EPSS score is at or above the threshold (0–1). A score equal to the threshold fails. A missing score is not compared and is not treated as 0. The flag replaces `failOnEpss` in the project config. It reads advisories from `--vulns` or `--full` and does not contact an EPSS service. When there is no score to compare, the job exits 0.
 
 ## SARIF upload behavior
 
