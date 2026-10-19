@@ -871,8 +871,8 @@ All HCS computation runs in an optional, separately-licensed engine module that 
 | `vg scan --vulns` | Also detect known vulnerabilities (OSV; offline via `--package-manifest`) |
 | `vg update` | Check for and install updates |
 | `vg why <package>` | Who introduced a dependency, its version history, and any open vulnerabilities |
-| `vg why <file:line>` | The commit that last changed a line, and the VG Code session that wrote it (opt in with `vg review trailer on`) |
-| `vg review trailer push` | Share the VG Code sessions behind your commits with Vibgrate Cloud, so `vg why <file:line> --cloud` works for teammates |
+| `vg why <file:line>` | The commit that last changed a line, and the VG Code session that wrote it (opt in with `vg review trailer on`). `--cloud` reads a shared session from Vibgrate Cloud; without `--cloud` the lookup stays on this machine |
+| `vg review trailer push` | Upload VG Code sessions named by `Vibgrate-Session` trailers on commits no remote branch has yet, so `vg why <file:line> --cloud` works for teammates. `--dry-run` lists them and sends nothing |
 
 ### Workspace auth & cloud upload
 

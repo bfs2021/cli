@@ -2704,15 +2704,27 @@ vg review trailer on     # opt in for this repository
 vg why src/orders.ts:42
 ```
 
-`vg review trailer on` installs a git `prepare-commit-msg` hook. When a commit includes files that a VG Code session changed in the last 14 days, the hook adds a `Vibgrate-Session: <id>` trailer to the message.
+`vg review trailer on` installs a git `prepare-commit-msg` hook. When a commit includes files that a VG Code session changed in the last 14 days, the hook adds a `Vibgrate-Session: <id>` trailer to the message, one line per session, after a blank line at the end of the commit message. `git log` and `git show` print that message, so the trailer is the last paragraph of the commit. In the default `git log` format the message is indented four spaces:
+
+```text
+    Add two
+
+    Vibgrate-Session: sess_touch1
+```
 
 - **Only the session's random id is committed.** The session itself (what was asked and what the agent answered) stays in `.vibgrate/code-sessions/` on the machine where it ran.
 - **The hook never blocks a commit.** If anything fails, the commit goes ahead without a trailer. Merge and squash messages are left alone.
 - **An existing hook is never replaced.** If another tool already owns `prepare-commit-msg`, `vg review trailer on` changes nothing and prints the one line to add to that hook.
 
-`vg why <file:line>` blames the line, reads the commit's trailers and shows each session's title and model. It then lists the requests in that session that touched the file. The agent's own answer is shown as its account, unverified. A session that ran on another machine is named, but its contents are not shown. `vg review trailer off` removes the hook, and `vg review trailer status` shows whether it is on. Both take `--json`.
+`vg why <file:line>` blames the line, reads the commit's trailers and shows each session's title and model. It then lists the requests in that session that touched the file. The agent's own answer is shown as its account, unverified. `vg review trailer off` removes the hook, and `vg review trailer status` shows whether it is on. Both take `--json`.
 
-**Sessions that ran on another machine.** A session stays where it ran, so a teammate's `vg why` shows only its id. To share the sessions behind your commits with your Vibgrate Cloud workspace:
+When the trailer names a session that is not stored on this machine, plain `vg why <file:line>` prints the id and stops there:
+
+```text
+  VG Code session <id> is not on this machine — add --cloud to read it from Vibgrate Cloud if it was shared
+```
+
+**Sessions that ran on another machine.** A session stays where it ran. To share the sessions behind your commits with your Vibgrate Cloud workspace:
 
 ```bash
 vg review trailer push --dry-run     # list what would be sent
@@ -2721,12 +2733,68 @@ vg review trailer push --base origin/main
 vg why src/orders.ts:42 --cloud      # a teammate reads them back
 ```
 
-- **Opt-in on both sides.** Sessions are sent only when you run `push`. Vibgrate Cloud stores them only when a workspace admin has turned on Agent provenance under Source control. It is off by default.
-- **What is sent:** per turn, the request, the agent's summary, the repo-relative files it changed and a timestamp. File contents, diffs and attachments are never sent.
-- **Credentials:** they are masked before sending. A session that still carries one is not sent, and `push` says which.
+`vg review trailer push` looks at commits on `HEAD` that no remote branch has yet. `--base <ref>` looks at `<ref>..HEAD` instead. When those commits have no `Vibgrate-Session` trailer, it prints this and makes no network call:
+
+```text
+  no Vibgrate-Session trailer on the commits no remote branch has yet
+```
+
+With `--base origin/main` that line is:
+
+```text
+  no Vibgrate-Session trailer on origin/main..HEAD
+```
+
+A trailer whose session is not on this machine is listed and skipped:
+
+```text
+  <id> is not on this machine, so it was not sent
+```
+
+A session that still carries a credential shape after masking is skipped. `push` prints the id and the reason:
+
+```text
+  <id> was not sent: refusing to send session <id> — detected credential-shaped content (<kinds>). Remove secrets before any network call; path-level secrets files are also blocked.
+```
+
+`--dry-run` prints one line per session it would upload, and sends nothing:
+
+```text
+  would send <id>: <title> (<n> turns)
+```
+
+**What leaves the machine.** The commit and the upload carry different things. Two `vg` commands contact Vibgrate Cloud, and each does so only when you run it:
+
+- **Metadata in git.** The commit carries the session id (`Vibgrate-Session: <id>`). Ordinary `git push` sends that line with the commit. `vg review trailer on`, `off`, `status`, and the `prepare-commit-msg` hook stay on this machine.
+- **Session content, uploaded by `vg review trailer push`.** The upload runs when you omit `--dry-run` and at least one session can be sent. Each session includes the title, the provider, the model, and, per turn, the request, the agent's summary, the repo-relative paths it changed, and a timestamp. File contents, diffs, and attachments stay on the machine. `--dry-run`, and a push whose every named session is missing or refused, print the lines above and make no request.
+- **A lookup, from `vg why <file:line> --cloud`.** This command asks Vibgrate Cloud for sessions that are not on this machine. The request carries the repository key and those session ids, and the reply is the stored session content. `vg why <file:line>` with no `--cloud` stays local, and so does `--cloud` when every named session is already on this machine.
+
+- **Opt-in on both sides.** Sessions are uploaded only when you run `push`. Vibgrate Cloud stores them only when a workspace admin has turned on Agent provenance under Source control. It is off by default. Until then, `push` and `vg why <file:line> --cloud` both exit `1` with:
+
+  ```text
+  error: this workspace does not accept agent provenance — a workspace admin can turn on Agent provenance in Vibgrate Cloud settings; nothing was uploaded
+  ```
+
+- **Credentials:** values are masked before sending. A session that still carries a credential shape is not uploaded; `push` prints the `<id> was not sent:` line quoted above.
 - **Retention:** 365 days from the first upload. Turning the setting off deletes every stored session at once.
 
-Both commands use your DSN (`vg login`, `VIBGRATE_DSN` or `--dsn`).
+Both commands use your DSN (`vg login`, `VIBGRATE_DSN` or `--dsn`). With no DSN, the command that would have used the network exits `5` before any request:
+
+```text
+error: no DSN — run `vg login`, set VIBGRATE_DSN, or pass --dsn
+```
+
+**`vg why <file:line> --cloud` when the session is missing or the network is down.** A successful lookup that does not include the id exits `0` and prints:
+
+```text
+  VG Code session <id> is not on this machine and was not shared to Vibgrate Cloud (`vg review trailer push` where it ran)
+```
+
+When the lookup cannot reach the host in your DSN, the command exits `1` and prints this instead of a provenance report. `<host>` is that DSN host. `<reason>` is the redacted error from the failed request; a failed name lookup includes `ENOTFOUND`:
+
+```text
+error: could not reach <host>: <reason>
+```
 
 ---
 
