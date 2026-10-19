@@ -1644,6 +1644,8 @@ vg sbom vex [--from <file>] [--statement <json>...] [--product <ref>] [--out <fi
 
 Use this to treat SBOMs as operational intelligence instead of static compliance output.
 
+How `direct` and `transitive` differ from production, development, optional, and peer, and which of those signals CycloneDX and SPDX record or leave out, is in [Dependency scope](./docs/sbom-dependency-scope.md).
+
 #### Choosing CycloneDX or SPDX
 
 `vg sbom export` writes one JSON document. `--format` accepts `cyclonedx` or `spdx`, compared without regard to case. The default is `cyclonedx`. Any other value prints `Invalid SBOM format. Use cyclonedx or spdx.` and the process exits 1.
@@ -1679,7 +1681,7 @@ Purl rules, the fallback `bom-ref`, and how a scan artifact joins to these field
 
 `type` and `primaryPackagePurpose` are in [CycloneDX type and SPDX primaryPackagePurpose](#cyclonedx-type-and-spdx-primarypackagepurpose).
 
-Direct and transitive scope, dependency kind (production, development, and optional), and the known omissions are in [Production, development, and optional dependencies in `vg sbom export`](./docs/sbom-dependency-scope.md#production-development-and-optional-dependencies-in-vg-sbom-export).
+Direct and transitive scope, and the production, development, and optional signals the export records or drops, are in [Dependency scope](./docs/sbom-dependency-scope.md).
 
 How a declared license is copied into each format is in [Declared licenses](#declared-licenses).
 
@@ -1927,7 +1929,7 @@ every project whose lockfile listed that identity.
 That value is `direct` or `transitive`. Production, development, and optional
 are recorded or dropped before export, and the CycloneDX `scope` member is
 omitted. The mapping, a worked example, and the gaps are in
-[Production, development, and optional dependencies in `vg sbom export`](./docs/sbom-dependency-scope.md#production-development-and-optional-dependencies-in-vg-sbom-export).
+[Dependency scope](./docs/sbom-dependency-scope.md).
 
 ```bash
 vg sbom export --format cyclonedx --out sbom.cdx.json
