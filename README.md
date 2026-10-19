@@ -612,10 +612,12 @@ Gate on drift budgets and regression relative to a baseline:
 ```bash
 vg baseline
 vg scan --baseline .vibgrate/baseline.json --drift-budget 40 --drift-worsening 5
+vg scan --vulns --fail-on-epss 0.1
 ```
 
 - `--drift-budget <score>` fails the build if drift exceeds your budget.
 - `--drift-worsening <percent>` fails the build if drift worsens by more than X% vs baseline.
+- `--fail-on-epss <threshold>` fails the build when any advisory EPSS score is at or above the threshold, a probability from 0 to 1. A score equal to the threshold fails. A missing score is not compared and is not treated as 0. The flag replaces `failOnEpss` in `.vibgrate/config.yml` or `vibgrate.config.json`. It reads advisories from `vg scan --vulns` or `vg scan --full`. See [DOCS.md](./DOCS.md#epss-gate).
 - `--summary-out <file>` writes a small JSON summary (`driftScore`, `riskLevel`, change since `--baseline`, and the `driftBudget` verdict) that a CI step can read, even when a gate fails the run. `driftBudget` is `null` when no budget is set. `--drift-budget` and `--drift-worsening` are recorded with `source` `flags`. An unmeasured score is `null`, never `0`. The full artifact carries the same `drift.*` fields plus the per-component scores: [DOCS.md](./DOCS.md#score-fields-in-the-json-artifact).
 - `--junit <file>` writes a deterministic JUnit XML summary of findings and those gates, next to `--format` (JSON or SARIF). The exit code is unchanged; see [DOCS.md](./DOCS.md#junit).
 
@@ -885,8 +887,8 @@ Local scoring does not require this — nothing leaves your machine until you pu
 | `vg push` | Upload scan results to Vibgrate Cloud |
 
 ```bash
-vg scan [path] [--vulns] [--full] [--format text|json|sarif|md] [--out <file>] [--fail-on warn|error|architecture-finding|architecture-warning] \
-  [--fail-on-epss <probability>] [--offline] [--package-manifest <file>] [--no-local-artifacts] [--max-privacy] \
+vg scan [path] [--vulns] [--full] [--format text|json|sarif|md] [--out <file>] [--fail-on warn|error|architecture-finding|architecture-warning] [--fail-on-epss <threshold>] \
+  [--offline] [--package-manifest <file>] [--no-local-artifacts] [--max-privacy] \
   [--drift-budget <score>] [--drift-worsening <percent>] [--baseline <file>] [--summary-out <file>]
 ```
 

@@ -1122,9 +1122,8 @@ export interface VibgrateConfig {
    */
   driftBudget?: DriftBudgetConfig;
   /**
-   * Fail `vg scan` when any advisory carries a present EPSS probability at or
-   * above this value (0–1, inclusive). An omitted score is not compared and
-   * is not treated as 0. `--fail-on-epss` replaces this setting.
+   * Exit 2 when any advisory EPSS score is at or above this probability
+   * (0–1). `--fail-on-epss` replaces it. A missing score is not 0.
    */
   failOnEpss?: number;
   /** Review settings for `vg review` and the GitHub App's Vibgrate Review check. */

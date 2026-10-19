@@ -90,16 +90,20 @@ Two different knobs both use the word "warn". They do not mean the same thing.
 
 `--drift-budget` and `--drift-worsening` are flags. They have no warn mode. On a breach they exit 2. If either flag is present, `driftBudget` in the project config is ignored.
 
+`--fail-on-epss` replaces `failOnEpss` in `.vibgrate/config.yml` or `vibgrate.config.json`. The threshold is a probability from 0 to 1. A score equal to the threshold exits 2. A missing score is not compared and is not treated as 0. The flag reads advisories from `--vulns` or `--full`. When there is no score to compare, the job exits 0.
+
 | Situation | Exit | Job |
 | --- | --- | --- |
 | No `--fail-on`, no budget flag, and no enforced config budget | 0 | Pass. Findings are still in the report. |
 | `--fail-on error`, and no error-level finding | 0 | Pass. Warnings do not fail this gate. |
 | `--fail-on error`, and at least one error-level finding | 2 | Fail. |
 | `--fail-on warn`, and any warning or error finding | 2 | Fail. |
+| `--fail-on-epss 0.1`, an advisory EPSS score at or above 0.1 | 2 | Fail. A score equal to the threshold fails. |
+| `--fail-on-epss 0.1`, every compared score below 0.1 | 0 | Pass. |
+| `--fail-on-epss`, no EPSS score to compare | 0 | Pass. A missing score is absent, not 0. |
+| `--fail-on-epss` value outside 0 to 1 | 1 | Fail before the scan. This is a runtime error, not a usage error. |
 | `--drift-budget 40`, DriftScore **above** 40 | 2 | Fail. A score equal to 40 passes. |
 | `--drift-budget 40`, DriftScore not measured | 0 | Pass. The score is absent, not 0, and the budget is not compared. |
-| `--fail-on-epss 0.8`, and an advisory EPSS at or above 0.8 | 2 | Fail. A score equal to the threshold fails. An omitted EPSS does not count, and it is not 0. |
-| `--fail-on-epss 0.8`, vulnerability scan did not run | 0 | Pass. The gate is not compared. |
 | `--drift-worsening 5`, score measured, no `--baseline` | 2 | Fail. The flag cannot compare. |
 | `--drift-worsening 5`, DriftScore not measured | 0 | Pass. The flag is not compared. |
 | `--drift-worsening 5`, worsening **above** 5% versus the baseline | 2 | Fail. |
@@ -162,12 +166,6 @@ A test that asserts on the report needs a frozen input. Pass `--offline` and a c
 
 ```bash
 vg scan --offline --package-manifest ./package-versions.json --format json --out vibgrate-report.json --fail-on error --drift-budget 40
-```
-
-An EPSS gate uses the same offline manifest. `--vulns` matches advisories in that file. A present `epss` at or above the threshold exits 2. An advisory that omits `epss` does not fail the gate, and a missing score is not treated as 0.
-
-```bash
-vg scan --vulns --offline --package-manifest ./package-versions.json --fail-on-epss 0.8
 ```
 
 ## DriftScore badge

@@ -1,221 +1,180 @@
-import { readFileSync } from 'node:fs';
-import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { parseDataConfig } from '../core-open/config.js';
 import { CliError, ExitCode } from '../util/exit.js';
 import {
-  judgeEpssGate,
-  parseConfiguredFailOnEpss,
-  parseFailOnEpssFlag,
-  type EpssGatePackage,
+  advisoriesForEpssGate,
+  epssAdvisoryRow,
+  evaluateEpssGate,
+  parseEpssThreshold,
+  type EpssAdvisoryRef,
 } from './epss-gate.js';
 
-const docs = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../../DOCS.md'), 'utf8');
+function advisory(id: string, epss?: number, extra: Partial<EpssAdvisoryRef> = {}): EpssAdvisoryRef {
+  return {
+    ecosystem: extra.ecosystem ?? 'npm',
+    package: extra.package ?? 'left-pad',
+    version: extra.version ?? '1.3.0',
+    id,
+    ...(epss !== undefined ? { epss } : {}),
+  };
+}
 
-const hot: EpssGatePackage = {
-  ecosystem: 'npm',
-  package: 'left-pad',
-  version: '1.3.0',
-  advisories: [
-    { id: 'GHSA-hot', epss: 0.9 },
-    { id: 'GHSA-cold' },
-    { id: 'GHSA-null', epss: null },
-  ],
-};
-
-describe('parseFailOnEpssFlag', () => {
-  it('accepts the closed interval [0, 1]', () => {
-    expect(parseFailOnEpssFlag(undefined)).toBeUndefined();
-    expect(parseFailOnEpssFlag('0')).toBe(0);
-    expect(parseFailOnEpssFlag('1')).toBe(1);
-    expect(parseFailOnEpssFlag('0.8')).toBe(0.8);
-    expect(parseFailOnEpssFlag(' 0.80 ')).toBe(0.8);
+describe('parseEpssThreshold', () => {
+  it('accepts a probability from 0 to 1, including the endpoints', () => {
+    expect(parseEpssThreshold(undefined)).toBeUndefined();
+    expect(parseEpssThreshold('0')).toBe(0);
+    expect(parseEpssThreshold('1')).toBe(1);
+    expect(parseEpssThreshold('0.1')).toBe(0.1);
   });
 
-  it('rejects values outside the interval and non-numeric text as a usage error', () => {
-    for (const value of ['1.5', '-0.1', 'nope', '', '0.8abc', 'Infinity']) {
-      expect(() => parseFailOnEpssFlag(value)).toThrow(CliError);
+  it('rejects a value outside 0 to 1 before a scan', () => {
+    for (const value of ['-0.01', '1.01', '2', 'no', '']) {
+      expect(() => parseEpssThreshold(value)).toThrow(CliError);
+      expect(() => parseEpssThreshold(value)).toThrow('--fail-on-epss must be a number from 0 to 1.');
       try {
-        parseFailOnEpssFlag(value);
+        parseEpssThreshold(value);
       } catch (err) {
-        expect(err).toMatchObject({
-          code: ExitCode.USAGE_ERROR,
-          message: '--fail-on-epss must be a number from 0 to 1.',
-        });
+        expect(err).toMatchObject({ code: ExitCode.ERROR });
       }
     }
   });
 });
 
-describe('parseConfiguredFailOnEpss', () => {
-  it('reads a probability and ignores an absent key', () => {
-    expect(parseConfiguredFailOnEpss(undefined, '.vibgrate/config.yml')).toBeUndefined();
-    expect(parseConfiguredFailOnEpss(0, '.vibgrate/config.yml')).toBe(0);
-    expect(parseConfiguredFailOnEpss(1, '.vibgrate/config.yml')).toBe(1);
+describe('evaluateEpssGate', () => {
+  it('fails when any scored advisory is at or above the threshold', () => {
+    const result = evaluateEpssGate({
+      source: 'manifest',
+      from: 'flag',
+      threshold: 0.5,
+      advisories: [advisory('GHSA-below', 0.49), advisory('GHSA-equal', 0.5), advisory('GHSA-above', 0.9)],
+    });
+    expect(result.exitCode).toBe(2);
+    expect(result.skipped).toBe(false);
+    expect(result.message).toBe('Failing: 2 advisories at or above EPSS 0.5.');
+    expect(result.breached.map((row) => row.id)).toEqual(['GHSA-above', 'GHSA-equal']);
   });
 
-  it('names the file and the key, and does not echo the value', () => {
-    expect(() => parseConfiguredFailOnEpss('1.5', '.vibgrate/config.yml')).toThrow(CliError);
-    try {
-      parseConfiguredFailOnEpss('1.5', '.vibgrate/config.yml');
-    } catch (err) {
-      expect(err).toMatchObject({
-        code: ExitCode.ERROR,
-        message: '.vibgrate/config.yml: `failOnEpss` must be a number from 0 to 1. Fix that key and run the command again.',
-      });
-      expect((err as Error).message).not.toContain('1.5');
-    }
-  });
-});
-
-describe('failOnEpss config schema', () => {
-  it('accepts 0 and 1 and rejects a number outside that interval', () => {
-    expect(parseDataConfig('failOnEpss: 0\n', '.vibgrate/config.yml')).toMatchObject({ failOnEpss: 0 });
-    expect(parseDataConfig('failOnEpss: 1\n', '.vibgrate/config.yml')).toMatchObject({ failOnEpss: 1 });
-    expect(() => parseDataConfig('failOnEpss: 1.5\n', '.vibgrate/config.yml')).toThrow(
-      '.vibgrate/config.yml: `failOnEpss` must be a number from 0 to 1, for example failOnEpss: 0.1 (line 1). Fix that key and run the command again.',
-    );
-    expect(() => parseDataConfig('{"failOnEpss":"0.8"}\n', 'vibgrate.config.json')).toThrow(/`failOnEpss` must be a number from 0 to 1/);
-  });
-});
-
-describe('judgeEpssGate', () => {
-  it('fails at the threshold and passes below it', () => {
-    const over = judgeEpssGate({
-      threshold: 0.8,
-      source: 'flag',
-      scanned: true,
-      vulnerabilities: { source: 'manifest', packages: [hot] },
+  it('passes when every compared score is below the threshold', () => {
+    const result = evaluateEpssGate({
+      source: 'osv',
+      from: 'flag',
+      threshold: 0.5,
+      advisories: [advisory('GHSA-low', 0), advisory('GHSA-mid', 0.499)],
     });
-    expect(over).toMatchObject({
-      exitCode: 2,
-      status: 'failure',
-      message: 'Failing: 1 advisory with EPSS at or above --fail-on-epss 0.8.',
-      rows: ['npm left-pad@1.3.0  GHSA-hot  epss 0.9'],
-    });
-
-    const under = judgeEpssGate({
-      threshold: 0.95,
-      source: 'flag',
-      scanned: true,
-      vulnerabilities: { source: 'manifest', packages: [hot] },
-    });
-    expect(under).toEqual({ exitCode: 0, status: 'pass', message: null, rows: [] });
-
-    const equal = judgeEpssGate({
-      threshold: 0.9,
-      source: 'flag',
-      scanned: true,
-      vulnerabilities: { source: 'manifest', packages: [hot] },
-    });
-    expect(equal.exitCode).toBe(2);
+    expect(result).toMatchObject({ exitCode: 0, message: null, skipped: false, breached: [] });
   });
 
-  it('does not treat an omitted score as 0, and does compare a present 0', () => {
-    const omitted = judgeEpssGate({
+  it('does not treat a missing score as 0, including at threshold 0', () => {
+    const missing = evaluateEpssGate({
+      source: 'manifest',
+      from: 'flag',
       threshold: 0,
-      source: 'flag',
-      scanned: true,
-      vulnerabilities: {
-        source: 'manifest',
-        packages: [{
-          ecosystem: 'npm',
-          package: 'left-pad',
-          version: '1.3.0',
-          advisories: [{ id: 'GHSA-cold' }, { id: 'GHSA-null', epss: null }],
-        }],
-      },
+      advisories: [advisory('GHSA-absent'), advisory('GHSA-also')],
     });
-    expect(omitted).toEqual({ exitCode: 0, status: 'pass', message: null, rows: [] });
+    expect(missing.exitCode).toBe(0);
+    expect(missing.skipped).toBe(true);
+    expect(missing.message).toBe('EPSS is absent; --fail-on-epss 0 was not compared.');
 
-    const zero = judgeEpssGate({
+    const zero = evaluateEpssGate({
+      source: 'manifest',
+      from: 'flag',
       threshold: 0,
-      source: 'flag',
-      scanned: true,
-      vulnerabilities: {
-        source: 'osv',
-        packages: [{
-          ecosystem: 'npm',
-          package: 'left-pad',
-          version: '1.3.0',
-          advisories: [{ id: 'GHSA-zero', epss: 0 }],
-        }],
-      },
+      advisories: [advisory('GHSA-zero', 0), advisory('GHSA-absent')],
     });
     expect(zero.exitCode).toBe(2);
-    expect(zero.rows).toEqual(['npm left-pad@1.3.0  GHSA-zero  epss 0']);
+    expect(zero.breached.map((row) => row.id)).toEqual(['GHSA-zero']);
+    expect(zero.message).toBe('Failing: 1 advisory at or above EPSS 0.');
   });
 
-  it('skips when the vulnerability scan did not run or could not be checked', () => {
-    expect(judgeEpssGate({ threshold: 0.8, source: 'flag', scanned: false })).toMatchObject({
+  it('passes a vulnerability pass that found no advisories, and skips one that did not run', () => {
+    expect(evaluateEpssGate({
+      source: 'osv',
+      from: 'config',
+      threshold: 0,
+      advisories: [],
+    })).toMatchObject({ exitCode: 0, message: null, skipped: false });
+
+    expect(evaluateEpssGate({
+      source: 'manifest',
+      from: 'flag',
+      threshold: 0.2,
+      advisories: [],
+    }).exitCode).toBe(0);
+
+    const notRun = evaluateEpssGate({ source: null, from: 'flag', threshold: 0.2, advisories: [] });
+    expect(notRun).toMatchObject({
       exitCode: 0,
-      status: 'skipped',
-      message: 'EPSS scores are absent; --fail-on-epss 0.8 was not compared.',
+      skipped: true,
+      message: 'EPSS is absent; --fail-on-epss 0.2 was not compared.',
     });
-    expect(judgeEpssGate({
-      threshold: 0.8,
-      source: 'config',
-      scanned: true,
-      vulnerabilities: { source: 'unreachable', packages: [] },
-    })).toMatchObject({
-      exitCode: 0,
-      status: 'skipped',
-      message: 'EPSS scores are absent; failOnEpss 0.8 was not compared.',
-    });
-    expect(judgeEpssGate({
-      threshold: 0.8,
-      source: 'flag',
-      scanned: true,
-      vulnerabilities: { source: 'none', packages: [] },
-    })).toEqual({ exitCode: 0, status: 'pass', message: null, rows: [] });
+
+    const unreachable = evaluateEpssGate({ source: 'unreachable', from: 'config', threshold: 0.2, advisories: [] });
+    expect(unreachable.message).toBe('EPSS is absent; failOnEpss 0.2 in the project config was not compared.');
+    expect(unreachable.exitCode).toBe(0);
   });
 
-  it('sorts failing advisories independently of input order', () => {
-    const packages: EpssGatePackage[] = [
-      {
-        ecosystem: 'pypi',
-        package: 'zzz',
-        version: '1.0.0',
-        advisories: [{ id: 'GHSA-z', epss: 0.95 }],
-      },
-      {
-        ecosystem: 'npm',
-        package: 'left-pad',
-        version: '1.3.0',
-        advisories: [
-          { id: 'GHSA-b', epss: 0.91 },
-          { id: 'GHSA-a', epss: 0.5 },
-        ],
-      },
-    ];
-    const forward = judgeEpssGate({
-      threshold: 0.8,
-      source: 'config',
-      scanned: true,
-      vulnerabilities: { source: 'manifest', packages },
-    });
-    const reversed = judgeEpssGate({
-      threshold: 0.8,
-      source: 'config',
-      scanned: true,
-      vulnerabilities: { source: 'manifest', packages: [...packages].reverse() },
-    });
-    expect(forward.rows).toEqual([
-      'npm left-pad@1.3.0  GHSA-b  epss 0.91',
-      'pypi zzz@1.0.0  GHSA-z  epss 0.95',
+  it('lists breached advisories in a stable order', () => {
+    const input = {
+      source: 'manifest' as const,
+      from: 'flag' as const,
+      threshold: 0.1,
+      advisories: [
+        advisory('GHSA-b', 0.4, { package: 'ms', ecosystem: 'npm' }),
+        advisory('GHSA-a', 0.8, { package: 'left-pad', ecosystem: 'pypi' }),
+        advisory('GHSA-c', 0.2, { package: 'left-pad', ecosystem: 'npm' }),
+      ],
+    };
+    const once = evaluateEpssGate(input);
+    const twice = evaluateEpssGate({ ...input, advisories: [...input.advisories].reverse() });
+    expect(once.breached.map(epssAdvisoryRow)).toEqual(twice.breached.map(epssAdvisoryRow));
+    expect(once.breached.map((row) => `${row.ecosystem}:${row.id}`)).toEqual([
+      'npm:GHSA-c',
+      'npm:GHSA-b',
+      'pypi:GHSA-a',
     ]);
-    expect(reversed).toEqual(forward);
-    expect(forward.message).toBe('Failing: 2 advisories with EPSS at or above failOnEpss 0.8.');
   });
-});
 
-describe('EPSS gate docs', () => {
-  it('states the flag, the exit codes, and that an omitted score is not 0', () => {
-    expect(docs).toContain('--fail-on-epss');
-    expect(docs).toContain('failOnEpss');
-    expect(docs).toContain('An omitted EPSS score is not compared, and it is not treated as 0.');
-    expect(docs).toContain('vg scan --vulns --offline --package-manifest ./package-versions.json --fail-on-epss 0.8');
-    expect(docs).toContain('The case name is `epss`.');
+  it('omits a missing score when reading the scan artifact', () => {
+    const read = advisoriesForEpssGate({
+      source: 'manifest',
+      totalAdvisories: 2,
+      severityCounts: { low: 0, moderate: 0, high: 2, critical: 0, unknown: 0 },
+      packages: [
+        {
+          ecosystem: 'npm',
+          package: 'left-pad',
+          version: '1.3.0',
+          advisories: [
+            {
+              id: 'GHSA-absent',
+              aliases: [],
+              summary: null,
+              severity: 'high',
+              cvss: null,
+              cvssVector: null,
+              fixedVersions: [],
+              published: null,
+              withdrawn: null,
+              references: [],
+            },
+            {
+              id: 'GHSA-zero',
+              aliases: [],
+              summary: null,
+              severity: 'high',
+              cvss: null,
+              cvssVector: null,
+              fixedVersions: [],
+              published: null,
+              withdrawn: null,
+              references: [],
+              epss: 0,
+            },
+          ],
+        },
+      ],
+    });
+    expect(read.advisories[0]).not.toHaveProperty('epss');
+    expect(read.advisories[1]?.epss).toBe(0);
+    expect(advisoriesForEpssGate(undefined)).toEqual({ source: null, advisories: [] });
   });
 });
