@@ -92,17 +92,7 @@ function validId(id: string): boolean {
   return /^rd_[0-9a-f]{12}$/.test(id);
 }
 
-/** A `..` segment or an absolute id is not a document, and must not be joined onto the store. */
-function refuseEscapingDocId(id: string): void {
-  if (validId(id)) return;
-  const absolute = path.isAbsolute(id) || /^[a-z]:[\\/]/i.test(id) || id.startsWith('\\\\');
-  if (absolute || id.split(/[\\/]/).includes('..')) {
-    throw new Error(`refusing to write outside .vibgrate/review-docs/: "${id}" is not inside that directory`);
-  }
-}
-
 function docDir(mainRoot: string, id: string): string {
-  refuseEscapingDocId(id);
   if (!validId(id)) throw new Error(`not a review document id: ${id}`);
   return path.join(storeDir(mainRoot), id);
 }
@@ -510,7 +500,8 @@ export async function openDocument(
 }
 
 function current(mainRoot: string, id: string): { meta: StoreMeta; doc: ReviewDoc } {
-  refuseEscapingDocId(id);
+  // Reject before any path join. `../` and other non-ids never become a directory.
+  if (!validId(id)) throw new Error(`not a review document id: ${id}`);
   const meta = readMeta(mainRoot, id);
   const doc = meta ? readVersion(mainRoot, id, meta.current) : null;
   if (!meta || !doc) throw new Error(`no saved review document ${id} — open one first`);
