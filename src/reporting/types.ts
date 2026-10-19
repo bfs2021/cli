@@ -1101,9 +1101,7 @@ export interface ExtendedScanResults {
   vulnerabilities?: VulnerabilityScanResult;
   /**
    * Security-pack findings (`vg scan --iac`). Absent means no pack ran.
-   * An empty `findings` array is a real result when a requested pack records
-   * a version. Every pack `unavailable` means the module did not evaluate
-   * the tree, so formatters must not present that empty list as a clean scan.
+   * An empty `findings` array is a real result from the pack.
    */
   security?: SecuritySection;
 }
