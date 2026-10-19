@@ -15,6 +15,18 @@ function componentsOnlyGraph(components: LockfileGraph['components']): LockfileG
   return { components, edges: undefined, rootDependsOn: [] };
 }
 
+function row(name: string, version: string, section: DependencyRow['section']): DependencyRow {
+  return {
+    package: name,
+    section,
+    currentSpec: version,
+    resolvedVersion: version,
+    latestStable: version,
+    majorsBehind: 0,
+    drift: 'current',
+  };
+}
+
 function makeArtifact(version: string, driftScore: number): ScanArtifact {
   return {
     schemaVersion: '1.0',
@@ -193,6 +205,128 @@ describe('sbom helpers', () => {
       unknown
     >;
     expect(spdx.relationships).toBeUndefined();
+  });
+
+  it('marks dev and optional dependencies in CycloneDX scope and SPDX relationships, and keeps vibgrate:scope direct or transitive', () => {
+    const artifact = makeArtifact('1.3.0', 90);
+    artifact.projects[0]!.dependencies = [
+      row('left-pad', '1.3.0', 'dependencies'),
+      row('typescript', '5.4.5', 'devDependencies'),
+      row('fsevents', '2.3.3', 'optionalDependencies'),
+      row('react', '18.2.0', 'peerDependencies'),
+    ];
+    const graph: LockfileGraph = {
+      components: [
+        { package: 'left-pad', version: '1.3.0' },
+        { package: 'typescript', version: '5.4.5' },
+        { package: 'fsevents', version: '2.3.3' },
+        { package: 'react', version: '18.2.0' },
+        { package: 'nested-prod', version: '1.0.0' },
+        { package: 'nested-dev', version: '1.0.0' },
+      ],
+      edges: new Map([
+        ['left-pad@1.3.0', ['nested-prod@1.0.0']],
+        ['typescript@5.4.5', ['nested-dev@1.0.0']],
+      ]),
+      rootDependsOn: ['fsevents@2.3.3', 'left-pad@1.3.0', 'react@18.2.0'],
+    };
+
+    const cdx = toCycloneDx(artifact, graph) as {
+      components: Array<{ name: string; scope?: string; properties: Array<{ name: string; value: string }> }>;
+      dependencies: Array<{ ref: string; dependsOn: string[] }>;
+    };
+    const byName = new Map(cdx.components.map((component) => [component.name, component]));
+    const vibScope = (name: string): string | undefined =>
+      byName.get(name)?.properties.find((property) => property.name === 'vibgrate:scope')?.value;
+
+    expect(byName.get('left-pad')?.scope).toBeUndefined();
+    expect(byName.get('react')?.scope).toBeUndefined();
+    expect(byName.get('nested-prod')?.scope).toBeUndefined();
+    expect(byName.get('nested-dev')?.scope).toBeUndefined();
+    expect(byName.get('typescript')?.scope).toBe('excluded');
+    expect(byName.get('fsevents')?.scope).toBe('optional');
+    expect(vibScope('left-pad')).toBe('direct');
+    expect(vibScope('typescript')).toBe('direct');
+    expect(vibScope('fsevents')).toBe('direct');
+    expect(vibScope('react')).toBe('direct');
+    expect(vibScope('nested-prod')).toBe('transitive');
+    expect(vibScope('nested-dev')).toBe('transitive');
+    expect(cdx.dependencies[0]).toEqual({
+      ref: 'vibgrate-root',
+      dependsOn: ['pkg:npm/fsevents@2.3.3', 'pkg:npm/left-pad@1.3.0', 'pkg:npm/react@18.2.0'],
+    });
+
+    const spdx = toSpdx(artifact, graph) as {
+      packages: Array<{ name: string; annotations: Array<{ comment: string }> }>;
+      relationships: Array<{ spdxElementId: string; relatedSpdxElementId: string; relationshipType: string }>;
+    };
+    const annotation = (name: string): string => spdx.packages.find((pkg) => pkg.name === name)!.annotations[0]!.comment;
+    expect(annotation('typescript')).toContain('scope=direct');
+    expect(annotation('fsevents')).toContain('scope=direct');
+    expect(annotation('nested-dev')).toContain('scope=transitive');
+    expect(annotation('typescript')).not.toContain('devDependencies');
+    expect(spdx.packages.map((pkg) => pkg.name)).toEqual(['fsevents', 'left-pad', 'nested-dev', 'nested-prod', 'react', 'typescript']);
+    expect(spdx.relationships).toEqual([
+      { spdxElementId: 'SPDXRef-Package-1', relatedSpdxElementId: 'SPDXRef-DOCUMENT', relationshipType: 'OPTIONAL_DEPENDENCY_OF' },
+      { spdxElementId: 'SPDXRef-DOCUMENT', relatedSpdxElementId: 'SPDXRef-Package-2', relationshipType: 'DEPENDS_ON' },
+      { spdxElementId: 'SPDXRef-DOCUMENT', relatedSpdxElementId: 'SPDXRef-Package-5', relationshipType: 'DEPENDS_ON' },
+      { spdxElementId: 'SPDXRef-Package-6', relatedSpdxElementId: 'SPDXRef-DOCUMENT', relationshipType: 'DEV_DEPENDENCY_OF' },
+      { spdxElementId: 'SPDXRef-Package-2', relatedSpdxElementId: 'SPDXRef-Package-4', relationshipType: 'DEPENDS_ON' },
+      { spdxElementId: 'SPDXRef-Package-6', relatedSpdxElementId: 'SPDXRef-Package-3', relationshipType: 'DEPENDS_ON' },
+    ]);
+  });
+
+  it('writes dev and optional SPDX relationships when the lockfile records no edges', () => {
+    const artifact = makeArtifact('1.3.0', 90);
+    artifact.projects[0]!.dependencies = [
+      row('left-pad', '1.3.0', 'dependencies'),
+      row('typescript', '5.4.5', 'devDependencies'),
+      row('fsevents', '2.3.3', 'optionalDependencies'),
+    ];
+    const cdx = toCycloneDx(artifact) as { dependencies?: unknown; components: Array<{ name: string; scope?: string }> };
+    expect(cdx.dependencies).toBeUndefined();
+    expect(cdx.components.find((component) => component.name === 'typescript')?.scope).toBe('excluded');
+    expect(cdx.components.find((component) => component.name === 'fsevents')?.scope).toBe('optional');
+    expect(cdx.components.find((component) => component.name === 'left-pad')?.scope).toBeUndefined();
+
+    const spdx = toSpdx(artifact) as {
+      relationships: Array<{ spdxElementId: string; relatedSpdxElementId: string; relationshipType: string }>;
+    };
+    expect(spdx.relationships).toEqual([
+      { spdxElementId: 'SPDXRef-Package-1', relatedSpdxElementId: 'SPDXRef-DOCUMENT', relationshipType: 'OPTIONAL_DEPENDENCY_OF' },
+      { spdxElementId: 'SPDXRef-Package-3', relatedSpdxElementId: 'SPDXRef-DOCUMENT', relationshipType: 'DEV_DEPENDENCY_OF' },
+    ]);
+  });
+
+  it('keeps one mark when the same version is declared in more than one section, independent of row order', () => {
+    const devThenProd = makeArtifact('1.0.0', 90);
+    devThenProd.projects[0]!.dependencies = [row('left-pad', '1.0.0', 'devDependencies'), row('left-pad', '1.0.0', 'dependencies')];
+    const prodThenDev = makeArtifact('1.0.0', 90);
+    prodThenDev.projects[0]!.dependencies = [row('left-pad', '1.0.0', 'dependencies'), row('left-pad', '1.0.0', 'devDependencies')];
+    const optionalAndProd = makeArtifact('1.0.0', 90);
+    optionalAndProd.projects[0]!.dependencies = [row('fsevents', '2.3.3', 'dependencies'), row('fsevents', '2.3.3', 'optionalDependencies')];
+    const devAndOptional = makeArtifact('1.0.0', 90);
+    devAndOptional.projects[0]!.dependencies = [row('typescript', '5.4.5', 'optionalDependencies'), row('typescript', '5.4.5', 'devDependencies')];
+
+    const scopeOf = (artifact: ReturnType<typeof makeArtifact>, name: string): string | undefined => {
+      const cdx = toCycloneDx(artifact) as { components: Array<{ name: string; scope?: string }> };
+      return cdx.components.find((component) => component.name === name)?.scope;
+    };
+    expect(scopeOf(devThenProd, 'left-pad')).toBeUndefined();
+    expect(scopeOf(prodThenDev, 'left-pad')).toBeUndefined();
+    expect(scopeOf(optionalAndProd, 'fsevents')).toBe('optional');
+    expect(scopeOf(devAndOptional, 'typescript')).toBe('excluded');
+
+    const prodOnly = makeArtifact('1.0.0', 90);
+    prodOnly.projects[0]!.dependencies = [row('left-pad', '1.0.0', 'dependencies')];
+    const devOnly = makeArtifact('1.0.0', 90);
+    devOnly.projects[0]!.dependencies = [row('left-pad', '1.0.0', 'devDependencies')];
+    expect((toCycloneDx(prodThenDev) as { serialNumber: string }).serialNumber).toBe(
+      (toCycloneDx(prodOnly) as { serialNumber: string }).serialNumber,
+    );
+    expect((toCycloneDx(devOnly) as { serialNumber: string }).serialNumber).not.toBe(
+      (toCycloneDx(prodOnly) as { serialNumber: string }).serialNumber,
+    );
   });
 
   it('produces a deterministic serialNumber for identical content', () => {

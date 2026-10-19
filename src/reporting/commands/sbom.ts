@@ -37,10 +37,10 @@ interface FlattenedDependency {
   /** 'direct' comes from a scanned manifest; 'transitive' is lockfile-only. */
   scope: 'direct' | 'transitive';
   /**
-   * Manifest section of the winning direct row. Absent on a lockfile-only row.
-   * This is not `scope`: `scope` stays direct or transitive.
+   * Manifest sections that declared this direct identity, sorted.
+   * Empty on a lockfile-only row. Not written as `vibgrate:scope`.
    */
-  section?: DepSection;
+  manifestSections: DepSection[];
   /** Which package registry this dependency resolves against — picks the purl scheme. */
   ecosystem: Ecosystem;
   /** Declared license from the kept scan row. Lockfile-only rows have none. */
@@ -458,9 +458,44 @@ function addMergeWarnings(row: FlattenedDependency, warnings: Iterable<string>):
 }
 
 function manifestMetadataDiffers(row: FlattenedDependency, dep: DependencyRow): boolean {
-  if (row.section !== dep.section) return true;
   if (row.currentSpec !== dep.currentSpec || row.drift !== dep.drift || row.majorsBehind !== dep.majorsBehind) return true;
   return `${row.license?.raw ?? ''}|${row.license?.spdxId ?? ''}` !== `${dep.license?.raw ?? ''}|${dep.license?.spdxId ?? ''}`;
+}
+
+function addManifestSection(row: FlattenedDependency, section: DepSection): void {
+  if (row.manifestSections.includes(section)) return;
+  row.manifestSections.push(section);
+  row.manifestSections.sort(compareCodeUnits);
+}
+
+/**
+ * One CycloneDX / SPDX mark per component, from the scanned sections.
+ * Development wins when the package is not also in `dependencies`, including
+ * a dev-only optional package. Optional wins over a production listing,
+ * because an optional package is often recorded in both sections. Production
+ * outranks development. Peer alone is unmarked. A lockfile-only row has no
+ * section and stays unmarked.
+ */
+function dependencyMark(sections: readonly DepSection[]): 'dev' | 'optional' | undefined {
+  const has = (section: DepSection): boolean => sections.includes(section);
+  if (has('devDependencies') && !has('dependencies')) return 'dev';
+  if (has('optionalDependencies')) return 'optional';
+  return undefined;
+}
+
+/** CycloneDX has no development value. `excluded` is the spec's non-runtime scope. */
+function cycloneComponentScope(sections: readonly DepSection[]): 'excluded' | 'optional' | undefined {
+  const mark = dependencyMark(sections);
+  if (mark === 'dev') return 'excluded';
+  if (mark === 'optional') return 'optional';
+  return undefined;
+}
+
+function spdxManifestRelationship(sections: readonly DepSection[]): 'DEV_DEPENDENCY_OF' | 'OPTIONAL_DEPENDENCY_OF' | undefined {
+  const mark = dependencyMark(sections);
+  if (mark === 'dev') return 'DEV_DEPENDENCY_OF';
+  if (mark === 'optional') return 'OPTIONAL_DEPENDENCY_OF';
+  return undefined;
 }
 
 /** Stable seed for the document id: format + root + the ordered dependency set + any dependency graph. */
@@ -477,7 +512,7 @@ function sbomSerialSeed(format: string, artifact: ScanArtifact, deps: FlattenedD
     artifact.vibgrateVersion ?? '',
     ...deps.map(
       (d) =>
-        `${d.ecosystem}|${d.package}|${d.version}|${d.currentSpec}|${d.project}|${d.projects.join(',')}|${d.drift}|${d.majorsBehind ?? ''}|${d.scope}|${d.section ?? ''}|${d.license?.raw ?? ''}|${d.license?.spdxId ?? ''}|${d.mergeWarnings.join(',')}|${digestIdentity(d.digests)}`,
+        `${d.ecosystem}|${d.package}|${d.version}|${d.currentSpec}|${d.project}|${d.projects.join(',')}|${d.drift}|${d.majorsBehind ?? ''}|${d.scope}|${dependencyMark(d.manifestSections) ?? ''}|${d.license?.raw ?? ''}|${d.license?.spdxId ?? ''}|${d.mergeWarnings.join(',')}|${digestIdentity(d.digests)}`,
     ),
     ...(graph?.rootDependsOn.length ? [`root>${uniqSorted(graph.rootDependsOn).join(',')}`] : []),
     ...edgeLines,
@@ -508,80 +543,72 @@ function cycloneDxDependencyGraph(
   return nodes;
 }
 
-interface SpdxRelationship {
-  spdxElementId: string;
-  relatedSpdxElementId: string;
-  relationshipType: string;
-}
-
 /**
- * SPDX 2.3 direction: SPDXRef-A is a development or optional dependency of
- * SPDXRef-B. The package is A and the document is B. Production and peer
- * edges stay `DEPENDS_ON` from the document to the package. `PROVIDED_DEPENDENCY_OF`
- * is not written for a peer.
+ * SPDX relationships for the resolved graph, plus manifest dev and optional
+ * marks. `DEPENDS_ON` keeps its direction (document or package depends on the
+ * child). `DEV_DEPENDENCY_OF` and `OPTIONAL_DEPENDENCY_OF` point the other
+ * way: the package is that kind of dependency of `SPDXRef-DOCUMENT`.
+ * A marked package that the lockfile already lists from the root replaces
+ * that `DEPENDS_ON`. A development dependency the lockfile left off the root
+ * is still written. Package-to-package edges stay `DEPENDS_ON`.
  */
-function documentLevelRelationship(section: DepSection | undefined, packageId: string): SpdxRelationship {
-  if (section === 'devDependencies') {
-    return { spdxElementId: packageId, relatedSpdxElementId: 'SPDXRef-DOCUMENT', relationshipType: 'DEV_DEPENDENCY_OF' };
-  }
-  if (section === 'optionalDependencies') {
-    return { spdxElementId: packageId, relatedSpdxElementId: 'SPDXRef-DOCUMENT', relationshipType: 'OPTIONAL_DEPENDENCY_OF' };
-  }
-  return { spdxElementId: 'SPDXRef-DOCUMENT', relatedSpdxElementId: packageId, relationshipType: 'DEPENDS_ON' };
-}
-
-/**
- * Same graph as `cycloneDxDependencyGraph`, plus manifest-section kinds on
- * the document edges. Child edges stay `DEPENDS_ON`. Omitted entirely when
- * the lockfile recorded no edges — a development row does not invent a graph
- * the lockfile did not have.
- *
- * Order: lockfile root edges (sorted), then direct `devDependencies` the
- * root edge list left out (component order), then child edges (component
- * order, children sorted).
- */
-function spdxRelationships(dependencies: FlattenedDependency[], graph: LockfileGraph | undefined): SpdxRelationship[] | undefined {
-  if (!graph?.edges) return undefined;
-  const fallback = graph.ecosystem ?? 'npm';
+function spdxRelationships(
+  dependencies: FlattenedDependency[],
+  graph: LockfileGraph | undefined,
+): Array<{ spdxElementId: string; relatedSpdxElementId: string; relationshipType: string }> | undefined {
+  const rels: Array<{ spdxElementId: string; relatedSpdxElementId: string; relationshipType: string }> = [];
   const spdxIdOf = new Map<string, string>();
-  const byIdentity = new Map<string, FlattenedDependency>();
+  const kindOf = new Map<string, 'DEV_DEPENDENCY_OF' | 'OPTIONAL_DEPENDENCY_OF'>();
   dependencies.forEach((dep, i) => {
     const identity = componentIdentity(dep.ecosystem, dep.package, dep.version);
     spdxIdOf.set(identity, `SPDXRef-Package-${i + 1}`);
-    byIdentity.set(identity, dep);
+    const kind = spdxManifestRelationship(dep.manifestSections);
+    if (kind) kindOf.set(identity, kind);
   });
   const spdxIdFor = (key: string, ecosystem: Ecosystem): string | undefined => {
     const parsed = parseEdgeKey(key, ecosystem);
     return spdxIdOf.get(componentIdentity(parsed.ecosystem, parsed.name, parsed.version));
   };
 
-  const rels: SpdxRelationship[] = [];
-  const covered = new Set<string>();
-  for (const key of uniqSorted(graph.rootDependsOn)) {
-    const parsed = parseEdgeKey(key, fallback);
-    const identity = componentIdentity(parsed.ecosystem, parsed.name, parsed.version);
-    const id = spdxIdOf.get(identity);
-    if (!id) continue;
-    rels.push(documentLevelRelationship(byIdentity.get(identity)?.section, id));
-    covered.add(identity);
-  }
-  for (const dep of dependencies) {
-    if (dep.section !== 'devDependencies') continue;
-    const identity = componentIdentity(dep.ecosystem, dep.package, dep.version);
-    if (covered.has(identity)) continue;
-    const id = spdxIdOf.get(identity);
-    if (!id) continue;
-    rels.push(documentLevelRelationship(dep.section, id));
-  }
-  for (const dep of dependencies) {
-    const fromId = spdxIdOf.get(componentIdentity(dep.ecosystem, dep.package, dep.version));
-    if (!fromId) continue;
-    for (const childKey of uniqSorted(edgesOf(graph, dep))) {
-      const toId = spdxIdFor(childKey, dep.ecosystem);
-      if (toId) rels.push({ spdxElementId: fromId, relatedSpdxElementId: toId, relationshipType: 'DEPENDS_ON' });
+  const emitted = new Set<string>();
+  if (graph?.edges) {
+    const fallback = graph.ecosystem ?? 'npm';
+    for (const key of uniqSorted(graph.rootDependsOn)) {
+      const id = spdxIdFor(key, fallback);
+      if (!id) continue;
+      const parsed = parseEdgeKey(key, fallback);
+      const identity = componentIdentity(parsed.ecosystem, parsed.name, parsed.version);
+      const kind = kindOf.get(identity);
+      if (kind) {
+        rels.push({ spdxElementId: id, relatedSpdxElementId: 'SPDXRef-DOCUMENT', relationshipType: kind });
+        emitted.add(identity);
+      } else {
+        rels.push({ spdxElementId: 'SPDXRef-DOCUMENT', relatedSpdxElementId: id, relationshipType: 'DEPENDS_ON' });
+      }
     }
   }
-  return rels;
+
+  for (const dep of dependencies) {
+    const identity = componentIdentity(dep.ecosystem, dep.package, dep.version);
+    if (emitted.has(identity)) continue;
+    const kind = kindOf.get(identity);
+    const id = spdxIdOf.get(identity);
+    if (!kind || !id) continue;
+    rels.push({ spdxElementId: id, relatedSpdxElementId: 'SPDXRef-DOCUMENT', relationshipType: kind });
+    emitted.add(identity);
+  }
+
+  if (graph?.edges) {
+    for (const dep of dependencies) {
+      const fromId = spdxIdOf.get(componentIdentity(dep.ecosystem, dep.package, dep.version));
+      if (!fromId) continue;
+      for (const childKey of uniqSorted(edgesOf(graph, dep))) {
+        const toId = spdxIdFor(childKey, dep.ecosystem);
+        if (toId) rels.push({ spdxElementId: fromId, relatedSpdxElementId: toId, relationshipType: 'DEPENDS_ON' });
+      }
+    }
+  }
+  return rels.length ? rels : undefined;
 }
 
 /** A lockfile component plus the merge facts `collectLockfileGraph` records. */
@@ -640,6 +667,7 @@ export function flattenDependencies(
           addMergeWarnings(existing, [describeLossyManifest(ecosystem, dep.package, version, project.name, existing.project)]);
         }
         addProjects(existing, [project.name]);
+        addManifestSection(existing, dep.section);
         continue;
       }
       const row: FlattenedDependency = {
@@ -651,7 +679,7 @@ export function flattenDependencies(
         drift: dep.drift,
         majorsBehind: dep.majorsBehind,
         scope: 'direct',
-        section: dep.section,
+        manifestSections: [dep.section],
         ecosystem,
         license: dep.license,
         mergeWarnings: [],
@@ -685,6 +713,7 @@ export function flattenDependencies(
       drift: 'unknown',
       majorsBehind: null,
       scope: 'transitive',
+      manifestSections: [],
       ecosystem,
       mergeWarnings: [],
       digests: orderComponentDigests(dep.digests ?? []),
@@ -883,29 +912,6 @@ function licenseFor(dep: FlattenedDependency): ComponentLicense {
   return componentLicense(dep.ecosystem, dep.package, dep.version, dep.license);
 }
 
-/**
- * CycloneDX 1.5 component `scope` from the winning manifest section.
- *
- * `required` is written, not omitted, for `dependencies`. The spec says a
- * consumer should assume `required` when `scope` is absent, so an omitted
- * value would look the same as a peer or a lockfile-only row, which stay
- * unclassified. `optionalDependencies` is `optional`. `devDependencies` is
- * `excluded`: that value documents a component that is not part of the
- * distributed runtime artifact, which is the spec's case for a development
- * dependency. The component stays in `components`. `peerDependencies` has
- * no matching value, so `scope` is omitted.
- */
-const CYCLONE_DX_COMPONENT_SCOPE: Partial<Record<DepSection, 'required' | 'optional' | 'excluded'>> = {
-  dependencies: 'required',
-  optionalDependencies: 'optional',
-  devDependencies: 'excluded',
-};
-
-function cycloneDxComponentScope(section: DepSection | undefined): 'required' | 'optional' | 'excluded' | undefined {
-  if (!section) return undefined;
-  return CYCLONE_DX_COMPONENT_SCOPE[section];
-}
-
 export function toCycloneDx(artifact: ScanArtifact, graph?: LockfileGraph): Record<string, unknown> {
   const dependencies = flattenDependencies(artifact, graph?.components ?? [], graph?.ecosystem);
   const dependencyGraph = cycloneDxDependencyGraph(dependencies, graph);
@@ -944,7 +950,6 @@ export function toCycloneDx(artifact: ScanArtifact, graph?: LockfileGraph): Reco
     components: dependencies.map((dep) => {
       const { purl, warning } = resolvePurl(dep.ecosystem, dep.package, dep.version);
       const license = licenseFor(dep);
-      const componentScope = cycloneDxComponentScope(dep.section);
       const properties: Array<{ name: string; value: string }> = [
         { name: 'vibgrate:project', value: dep.project },
         { name: 'vibgrate:projects', value: dep.projects.join(', ') },
@@ -971,6 +976,7 @@ export function toCycloneDx(artifact: ScanArtifact, graph?: LockfileGraph): Reco
         properties.push({ name: 'vibgrate:mergeWarning', value: mergeWarning });
         pushWarningCode(properties, mergeWarning);
       }
+      const componentScope = cycloneComponentScope(dep.manifestSections);
       return {
         type: 'library',
         'bom-ref': purl ?? componentBomRef(dep.ecosystem, dep.package, dep.version),
