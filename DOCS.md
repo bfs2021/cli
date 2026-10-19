@@ -531,7 +531,7 @@ vg report [--in <file>] [--format md|text|json|html]
 `html` writes one self-contained page from that same artifact. It does not call the network and does not load external files. The page opens with a summary:
 
 - DriftScore and the four component scores. A missing score is `n/a`. A measured `0` stays `0`.
-- Counts by severity for vulnerability findings and for security findings. A check that did not run stays "Not scanned" rather than a row of zeros. A check that finished with nothing to report shows zeros.
+- Counts by severity for vulnerability findings and for security findings. A check that did not run stays "Not scanned" rather than a row of zeros. That includes a security section whose packs are all `unavailable` and which has no findings. A check that finished with nothing to report shows zeros.
 - When a finding carries `details.fixedVersions`, how many of those findings name a fix.
 - A **Fix available only** checkbox. It starts unchecked, so the tables show every finding. Checking it hides findings that do not name a fix version. The page file still contains every finding, and the checkbox does not call the network.
 - Links to the full tables under the summary: vulnerabilities, security findings, and the other findings.
@@ -1569,33 +1569,45 @@ review:
     validatedTaint: true
 ```
 
-Read from the **trusted base branch** when `--base` is given, so a pull request
-cannot weaken the policy applied to itself. It is read as data: a `review` block
-in a `.ts`/`.js` config is never run, so keep it in YAML or JSON.
+#### Where `--base` reads the policy
 
-A key `vg` does not recognise, or a value of the wrong type, stops the command.
-The error names the file and, when the file makes it clear, the line and the
-key. The value is not printed. `.vibgrate/review.toml` still skips keys it does
-not recognise.
+`vg review --base <ref>` reviews the commits from the merge-base of `HEAD` and `<ref>` through `HEAD`. The review policy and the team packs are read from `<ref>`. They are not read from the commits under review, and they are not read from the working tree. `vg review explain`, `vg review findings-from-diff`, `vg review doc`, and `vg review propose` use this same load when they are given `--base`.
 
-The first `vg review` in a repository with no policy writes an advisory starter
-policy: a new `.vibgrate/config.yml` when there is no config, or a `review` block
-added to an existing `.vibgrate/config.yml` / `vibgrate.config.json`. A `.ts` or
-`.js` config is never rewritten, so those repositories get `.vibgrate/review.toml`.
+The policy is loaded with `git show <ref>:<file>`. These files are tried in order. The first one that exists at `<ref>` is the config, and later files are not read:
 
-`.vibgrate/review.toml` keeps working wherever the config has no `review` block.
-Its keys are the snake_case forms of the ones above (`fail_on`, `target_pattern`,
-`[review.protected]`). `vg doctor` says when a `review` block makes it redundant.
+1. `.vibgrate/config.yml`
+2. `.vibgrate/config.yaml`
+3. `vibgrate.config.ts`
+4. `vibgrate.config.js`
+5. `vibgrate.config.json`
 
-Team markdown packs live under `.vibgrate/review/` — the same tree the GitHub
-App reads. With `--base` they are read from the base branch, like the `review`
-policy, so a change cannot add an `ignore.md` glob over the files it breaks or
-delete a check to clear its own review; its edits apply after it merges.
-Without `--base`, the files on disk are used. `ignore.md` drops matching finding paths; `policy.md` is attached to
-the human report; `merge.md` is evaluated locally (docs-only may approve; a
-change to `merge.md` itself is refused); `checks/*.md` each produce one CLI
-pass or a skipped-with-reason line. Custom checks have no extra correctness
-engine on the CLI either.
+YAML and JSON are data. When the file that exists is one of those, its `review` block is the policy. A key `vg` does not recognise, or a value of the wrong type, stops the command. The error names the file and, when the parser can say, the line and the key. The value is not printed. A file that is present at `<ref>` but is not valid YAML or JSON stops the command the same way. It does not fall through to a later file, to `.vibgrate/review.toml`, or to the defaults.
+
+A `.ts` or `.js` file is code and is never executed, so a `review` block in it is not used. Because that file is the config, a `review` block in a later YAML or JSON file is not used either. Put review settings in `.vibgrate/config.yml` or `vibgrate.config.json`.
+
+When the config file has no `review` key, or the only config is `.ts` or `.js`, the fallback is `git show <ref>:.vibgrate/review.toml`. Unknown keys in that file are ignored. A value that is not one of the allowed ones keeps the default for that key.
+
+When `<ref>` has neither a usable `review` block nor a `.vibgrate/review.toml`, the standard defaults apply: `enforcement` is `advisory`, `failOn` is `fail`, every protected rule is on, `highConfidenceThreshold` is `0.8`, `highSeverityDecision` is `fail`, and there is no `targetPattern`. `HEAD` and the working tree are not consulted. A pull request that adds a policy to a repository whose base has none does not get that policy applied to itself.
+
+Without `--base`, the same lookup runs against the committed copy at `HEAD`. The working tree is used only when git has no committed copy to show, which is a repository with no commits. In that case the data config on disk is read, then `.vibgrate/review.toml` on disk, then the same defaults. A local review of uncommitted work uses the files on disk. It does not use a policy that exists only on another branch.
+
+The first `vg review` in a repository with no policy writes an advisory starter policy: a new `.vibgrate/config.yml` when there is no config, or a `review` block added to an existing `.vibgrate/config.yml` / `vibgrate.config.json`. A `.ts` or `.js` config is never rewritten, so those repositories get `.vibgrate/review.toml`. That write happens after the review, so the file this run creates is not part of the change set this run reviews. It is skipped for a `--base` run.
+
+`.vibgrate/review.toml` keeps working wherever the config has no `review` block. Its keys are the snake_case forms of the ones above (`fail_on`, `target_pattern`, `[review.protected]`). `vg doctor` says when a `review` block makes it redundant.
+
+**Team packs.** With `--base`, `.vibgrate/review/ignore.md`, `policy.md`, `merge.md`, and `checks/*.md` are read from `<ref>` (`git show` for each file, `git ls-tree` for the checks directory). A file the base does not have is absent. There is no fallback to the working tree, so a change cannot add an `ignore.md` glob over the files it breaks, or delete a check, to clear its own review. Those edits apply after it merges. Without `--base`, the files on disk are used. `ignore.md` drops matching finding paths. `policy.md` is attached to the human report. `merge.md` is evaluated locally: a docs-only change may be approved, and a change that edits `merge.md` itself is refused. Each `checks/*.md` produces one CLI pass or a skipped-with-reason line. A check larger than 64 KiB is skipped in both modes. Custom checks have no extra correctness engine on the CLI.
+
+**When `<ref>` cannot be read.** `vg review` needs a git repository. If this directory is not one, or git is not on `PATH`, the command stops with `` `vg review` needs a git repository — <dir> is not one (or git is not on PATH) ``. If `<ref>` does not resolve, `git merge-base HEAD <ref>` fails and `git rev-parse <ref>` fails. The diff against that name produces no files, so the change set is empty. Every `git show <ref>:<file>` fails, so the policy is the standard defaults, the same as a base that has no policy. The command does not switch to `HEAD` or to the working tree, and it does not add its own "unknown revision" line: confirm the name with git before you trust an empty review. Fetch the ref and check it, then run the review again:
+
+```bash
+git fetch origin
+git rev-parse origin/main
+vg review --base origin/main
+```
+
+A config file that is present at `<ref>` but is not valid YAML or JSON stops the command and names the file. Fix that file on the base branch.
+
+`--base-graph` is a separate checkout of the merge-base commit, used only to build a second code map. If git cannot check that commit out, the document notes `git could not check out the base commit` and continues without the before side. It does not change which policy was loaded.
 
 `--loop` applies only deterministic `package.json` version bumps it can compute
 (from a known current → latest pair). It does not rewrite lockfiles, does not
@@ -1644,6 +1656,8 @@ vg sbom vex [--from <file>] [--statement <json>...] [--product <ref>] [--out <fi
 
 Use this to treat SBOMs as operational intelligence instead of static compliance output.
 
+How `direct` and `transitive` differ from production, development, optional, and peer, and which of those signals CycloneDX and SPDX record or leave out, is in [Dependency scope](./docs/sbom-dependency-scope.md).
+
 #### Choosing CycloneDX or SPDX
 
 `vg sbom export` writes one JSON document. `--format` accepts `cyclonedx` or `spdx`, compared without regard to case. The default is `cyclonedx`. Any other value prints `Invalid SBOM format. Use cyclonedx or spdx.` and the process exits 1.
@@ -1666,14 +1680,14 @@ vg sbom export --format spdx --out sbom.spdx.json
 | Created | `metadata.timestamp` is the artifact's `timestamp` | `creationInfo.created` is that same timestamp |
 | Scan root | `metadata.component` has `type` `application`, `bom-ref` `vibgrate-root`, and `name` set to the scan root. That component is not copied into `components` | There is no package for the scan root |
 | Package identity | `components[].purl`. When a purl is written, `bom-ref` is that purl | `packages[].externalRefs[]` with `referenceCategory` `PACKAGE-MANAGER`, `referenceType` `purl`, and `referenceLocator` set to the purl. `SPDXID` is `SPDXRef-Package-N` |
-| Dependency graph | `dependencies` is an array of `{ ref, dependsOn }`. `ref` is a `bom-ref`. The first entry is `vibgrate-root`. Every component is an entry after that, in the component order above. `dependsOn` lists child `bom-ref` values, or is `[]` when none were recorded for that component | `relationships` is an array of `{ spdxElementId, relatedSpdxElementId, relationshipType }`. `relationshipType` is `DEPENDS_ON`. Edges from the document use `SPDXRef-DOCUMENT`. A row is written only for a recorded edge. `SPDXID` values follow the component order above |
+| Dependency graph | `dependencies` is an array of `{ ref, dependsOn }`. `ref` is a `bom-ref`. The first entry is `vibgrate-root`. Every component is an entry after that, in the component order above. `dependsOn` lists child `bom-ref` values, or is `[]` when none were recorded for that component. Component `scope` is separate from this graph | `relationships` is an array of `{ spdxElementId, relatedSpdxElementId, relationshipType }`. A resolved edge is `DEPENDS_ON`. A scanned development dependency is `DEV_DEPENDENCY_OF`. A scanned optional dependency is `OPTIONAL_DEPENDENCY_OF`. `SPDXID` values follow the component order above |
 | Licenses | `licenses` is present when the declared license can be written, and absent when it cannot | `licenseDeclared` is set on every package. `licenseConcluded` is `NOASSERTION` on every package. `hasExtractedLicensingInfos` is present when a `LicenseRef-…` is used. Every package has `downloadLocation` `NOASSERTION` and `filesAnalyzed` `false` |
 
 `dataLicense` `CC0-1.0` is the SPDX license for the document data. Package licenses stay on `licenseDeclared`.
 
 The UUID inside `serialNumber` and the UUID inside `documentNamespace` are different values. The hash seed starts with the format name, so the two ids differ for the same artifact. The same artifact and the same lockfiles produce the same id for that format on every run. A later scan records a new timestamp, so both ids change. The rest of the seed is under [Several versions of one package](#several-versions-of-one-package).
 
-When the lockfile records no edges, both documents leave the graph member out. CycloneDX omits `dependencies`. SPDX omits `relationships`. npm `package-lock.json` v2/v3 records edges. pnpm and yarn list the components and leave the graph member out.
+When the lockfile records no edges, CycloneDX omits `dependencies`. SPDX omits `DEPENDS_ON`. A scanned development or optional dependency still produces `DEV_DEPENDENCY_OF` or `OPTIONAL_DEPENDENCY_OF`. npm `package-lock.json` v2/v3 records edges. pnpm and yarn list the components and leave those edges out.
 
 Purl rules, the fallback `bom-ref`, and how a scan artifact joins to these fields are in [Component identity](#component-identity).
 
@@ -1924,10 +1938,12 @@ manifest declared stays in the document as `transitive`. On a transitive row,
 first sorted project path that listed it). `vibgrate:projects` still lists
 every project whose lockfile listed that identity.
 
-That value is `direct` or `transitive`. Production, development, and optional
-are recorded or dropped before export, and the CycloneDX `scope` member is
-omitted. The mapping, a worked example, and the gaps are in
-[Dependency scope](./docs/sbom-dependency-scope.md).
+That value is `direct` or `transitive`. A scanned `devDependencies` row also
+sets CycloneDX component `scope` to `excluded` and writes SPDX
+`DEV_DEPENDENCY_OF`. A scanned `optionalDependencies` row sets `scope` to
+`optional` and writes `OPTIONAL_DEPENDENCY_OF`. Production, peer, and
+lockfile-only rows omit component `scope`. The mapping, a worked example,
+and the gaps are in [Dependency scope](./docs/sbom-dependency-scope.md).
 
 ```bash
 vg sbom export --format cyclonedx --out sbom.cdx.json
@@ -1935,9 +1951,10 @@ vg sbom export --no-transitive --format cyclonedx --out sbom-direct.cdx.json
 ```
 
 `--no-transitive` keeps manifest-declared rows only. Lockfile-only versions are
-absent, and so is the dependency graph. A consumer that filters to
-`vibgrate:scope=direct` sees the same gap: other installed versions of that
-package are still in the full document, marked `transitive`.
+absent, and so is the CycloneDX dependency graph. SPDX still writes
+`DEV_DEPENDENCY_OF` and `OPTIONAL_DEPENDENCY_OF` for those rows. A consumer
+that filters to `vibgrate:scope=direct` sees the same gap: other installed
+versions of that package are still in the full document, marked `transitive`.
 
 **Order.** CycloneDX `components`, SPDX `packages`, and the package entries in
 CycloneDX `dependencies` share one order. A component with a Package URL sorts
@@ -1962,9 +1979,9 @@ repeat one identity.
 CycloneDX `serialNumber` and the SPDX `documentNamespace`. Those values are
 document identifiers. Each one is derived from the scan artifact — timestamp
 included — and from the ordered component list, contributing projects, merge
-warnings, declared licenses, license-parse notes, edges, and the ordered
-digests. A lockfile edit that changes only a digest changes the hash arrays
-and the document id. It does not reorder components. A later scan of the same
+warnings, declared licenses, license-parse notes, the development or optional
+mark, edges, and the ordered digests. A lockfile edit that changes only a
+digest changes the hash arrays and the document id. It does not reorder components. A later scan of the same
 tree records a new timestamp, so the document id changes. Purls and CycloneDX
 `bom-ref` values do not. Field shapes are in [Package digests](#package-digests).
 
@@ -1995,7 +2012,10 @@ tree records a new timestamp, so the document id changes. Purls and CycloneDX
   later list is dropped and `vibgrate:mergeWarning` names the drop. The
   CycloneDX root `dependsOn` and the SPDX document `DEPENDS_ON` relationships
   are the scan-root lockfile's direct dependencies, or the first project path
-  that has a lockfile when the root has none. A version that exists only in
+  that has a lockfile when the root has none. A scanned development or optional
+  dependency adds `DEV_DEPENDENCY_OF` or `OPTIONAL_DEPENDENCY_OF` from that
+  package to `SPDXRef-DOCUMENT`, including when the lockfile left it off the
+  root edge list. A version that exists only in
   another lockfile is still a component. Its `dependsOn` comes from that
   lockfile when the format records edges. When the document already has edges
   from another lockfile and this format does not record them, `dependsOn` is
