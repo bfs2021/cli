@@ -233,7 +233,16 @@ function vulnerabilityEvaluated(artifact: ScanArtifact, vulnFindings: Finding[])
 function securityFindings(artifact: ScanArtifact): SecurityFinding[] | null {
   const section = artifact.extended?.security;
   if (!section || !Array.isArray(section.findings)) return null;
+  // Every requested pack is `unavailable` and nothing was found: the check did
+  // not run. An empty findings array from a pack that did run stays empty.
+  if (section.findings.length === 0 && everyPackUnavailable(section.packs)) return null;
   return section.findings;
+}
+
+function everyPackUnavailable(packs: Record<string, string> | undefined): boolean {
+  if (!packs) return false;
+  const values = Object.values(packs);
+  return values.length > 0 && values.every((value) => value === 'unavailable');
 }
 
 function countVuln(findings: Finding[]): Record<VulnSeverityName | 'unspecified', number> {
