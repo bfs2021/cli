@@ -81,8 +81,8 @@ describe('review_doc, as an agent uses it', () => {
     const res = spawnSync('git', args, { cwd, encoding: 'utf8' });
     if (res.status !== 0) throw new Error(`git ${args.join(' ')}: ${res.stderr}`);
   };
-  function repo(): string {
-    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'vg-review-tool-')));
+  function repo(parentDir?: string): string {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(parentDir ?? os.tmpdir(), 'vg-review-tool-')));
     roots.push(root);
     git(root, 'init', '-q', '-b', 'main');
     git(root, 'config', 'user.email', 'test@example.com');
@@ -175,7 +175,12 @@ describe('review_doc, as an agent uses it', () => {
   });
 
   it('rejects a document id or pin that leaves the repository, and a text over the size limit', async () => {
-    const root = repo();
+    // The parent of a repo in os.tmpdir() is the shared temp dir. Other tests
+    // create and delete entries there, so the "nothing escaped" listing has to
+    // use a private parent.
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'vg-review-confine-')));
+    roots.push(sandbox);
+    const root = repo(sandbox);
     const parent = path.dirname(root);
     const before = fs.readdirSync(parent).sort();
     const outside = path.join(parent, 'outside.json');
