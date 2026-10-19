@@ -20,6 +20,8 @@ For a quick overview, see the [README](./README.md). This document covers everyt
   - [vg report](#vg-report)
     - [What each report format contains](#what-each-report-format-contains)
   - [vg review](#vg-review)
+    - [Local or cloud](#local-or-cloud)
+    - [When the other checkout is missing](#when-the-other-checkout-is-missing)
   - [vg sbom](#vg-sbom)
     - [Choosing CycloneDX or SPDX](#choosing-cyclonedx-or-spdx)
     - [Component identity](#component-identity)
@@ -697,6 +699,9 @@ vg review doc --check review.json        # validate an edited document
 vg review doc --session latest           # what the last VG Code chat did
 ```
 
+Which of these flags stay on this machine, and which call Vibgrate Cloud, is
+[Local or cloud](#local-or-cloud).
+
 **Groups.** Every changed file lands in exactly one group. Files that are not
 implementation are peeled off first, each for a reason you can see in the
 output:
@@ -916,6 +921,30 @@ vg review doc --base origin/main --check doc.json --also ../web-client
   first repository's pull request, and its pins link to each repository on
   GitHub.
 
+##### When the other checkout is missing
+
+Stdout is empty. The `error:` line is stderr. Exit is `5`. The text below was
+captured with `--no-color` from `vg review doc --also`.
+
+A path that does not exist. The path is printed as you passed it. A `=<ref>`
+suffix is left off, so `--also ../does-not-exist=origin/main` prints the same
+line:
+
+```text
+error: --also ../does-not-exist: no such directory
+```
+
+A directory that exists but is not inside a git repository, or git is not on
+`PATH`. `<root>` is that directory resolved to an absolute path (a relative
+`--also` still prints the absolute path):
+
+```text
+error: `vg review` needs a git repository — <root> is not one (or git is not on PATH)
+```
+
+`vg review doc --check <file> --also <dir>` prints that same git-repository
+line for a missing path and for a directory that is not a git checkout.
+
 **Show the document on the pull request.** `vg review doc --push` uploads the
 whole document to Vibgrate Cloud. The GitHub App then shows it in its Review
 summary comment, folded under the summary, with every pin linked to its lines
@@ -976,6 +1005,33 @@ vg review doc --base origin/main --save --push
   command into the composer, unsent. Settings → Source control's "What landed
   this week?" links each merged pull request to its review, and to its review
   document when one was pushed.
+
+##### Local or cloud
+
+`vg review doc` builds the document on this machine. The document is uploaded
+only when you pass `--push`. A workspace DSN is read only by `--push`,
+`--comments`, and `--reply`.
+
+| Flag | Where it runs | Account |
+| --- | --- | --- |
+| default | On this machine: git, and a code map or Architecture module already on disk. Printed, or written with `-o`. | None |
+| `--also` | On this machine. Each other checkout's git diff, and its code map when one is already there. | None |
+| `--session` | On this machine. The chat record in `.vibgrate/code-sessions/`. | None |
+| `--save` | On this machine. Writes `.vibgrate/review-docs/`. | None |
+| `--saved` | On this machine. Reads `.vibgrate/review-docs/` when that copy still matches the change; otherwise builds the document in memory. | None |
+| `--push` | Vibgrate Cloud. Uploads the whole document. | A workspace DSN |
+| `--comments` | Vibgrate Cloud. Lists comments on the document already pushed for this change. | A workspace DSN |
+| `--reply` | Vibgrate Cloud. Posts one reply on that document. | A workspace DSN |
+
+The DSN is the one `vg login` stored, or `VIBGRATE_DSN`, or `--dsn`. With no
+DSN, `--push`, `--comments`, and `--reply` stop before they open a connection.
+`--comments` lists comments and `--reply` posts one. `--save --push` writes
+the local copy, then uploads that document. `--base`, `--in-place`,
+`--base-graph`, `--check`, `--format`, `-o`, `--no-findings`, `--no-diagrams`,
+`--patch`, `--history`, and `--restore` stay on this machine. `--base-graph`
+uses a temporary worktree here. Over MCP, `review_doc` ops `comments` and
+`reply` use the same DSN; `open`, `get`, `patch`, `check`, `history`, and
+`restore` stay on this machine.
 
 #### Decisions
 
@@ -1632,7 +1688,10 @@ Source stays on the machine. `--push` sends the receipt — decisions, claims,
 evidence ids, paths, digests, versions — never the analysis capsule and never
 source text. Line ranges are opt-in (`--include-spans`); snippets are a second,
 explicit opt-in (`--include-snippets`) and are capped. `--offline`, or simply
-having no DSN, keeps the receipt on disk.
+having no DSN, keeps the receipt on disk. `vg review doc` keeps its document
+on the machine until you pass `vg review doc --push`. `--comments` and
+`--reply` are the other calls to Vibgrate Cloud. See
+[Local or cloud](#local-or-cloud).
 
 Ready-to-use workflows: `examples/github-actions/vibgrate-review.yml` and
 `vibgrate-review-sarif.yml`.
