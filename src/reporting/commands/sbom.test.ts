@@ -3,7 +3,8 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { toCycloneDx, toSpdx, formatDeltaText, npmPurl, purlFor, collectLockfileGraph, collectPurlWarnings, collectLicenseWarnings, describeUnavailablePurl, describeUnrepresentableLicense } from './sbom.js';
+import { fileURLToPath } from 'node:url';
+import { toCycloneDx, toSpdx, formatDeltaText, npmPurl, purlFor, collectLockfileGraph, collectPurlWarnings, collectLicenseWarnings, collectMavenGroupWarnings, describeUnavailablePurl, describeUnrepresentableLicense, describeMavenGroupMissing } from './sbom.js';
 import { LICENSE_PARSE_FAILED, licenseParseDiagnostic } from '../../core-open/licenses/diagnostic.js';
 import { buildDependencyLicense } from '../../core-open/licenses/dependency-license.js';
 import { componentLicense, EXTRACTED_LICENSE_TEXT } from './sbom-license.js';
@@ -345,10 +346,69 @@ describe('sbom helpers', () => {
     expect(purlFor('rust', 'anyhow', '1.0.104')).toBe('pkg:cargo/anyhow@1.0.104');
     expect(purlFor('go', 'github.com/gin-contrib/sse', 'v1.1.0')).toBe('pkg:golang/github.com/gin-contrib/sse@v1.1.0');
     expect(purlFor('java', 'com.google.code.gson:gson', '2.11.0')).toBe('pkg:maven/com.google.code.gson/gson@2.11.0');
+    expect(purlFor('java', 'gson', '2.11.0')).toBe('pkg:maven/gson@2.11.0');
+    expect(purlFor('java', ':empty-group', '1.0.0')).toBe('pkg:maven/empty-group@1.0.0');
     expect(purlFor('ruby', 'rails', '7.1.0')).toBe('pkg:gem/rails@7.1.0');
     expect(purlFor('php', 'monolog/monolog', '3.5.0')).toBe('pkg:composer/monolog/monolog@3.5.0');
     expect(purlFor('dotnet', 'Newtonsoft.Json', '13.0.3')).toBe('pkg:nuget/Newtonsoft.Json@13.0.3');
     expect(purlFor('dart', 'http', '1.2.0')).toBe('pkg:pub/http@1.2.0');
+  });
+
+  it('warns when a Maven component has no group and still writes the purl without a namespace', () => {
+    const fixturePath = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../../test/fixtures/sbom/maven-no-group.json');
+    const artifact = JSON.parse(fs.readFileSync(fixturePath, 'utf8')) as ScanArtifact;
+    const expected = [
+      describeMavenGroupMissing(':empty-group', '1.0.0'),
+      describeMavenGroupMissing('gson', '2.11.0'),
+    ];
+
+    const cyclone = toCycloneDx(artifact) as {
+      components: Array<{
+        name: string;
+        purl?: string;
+        properties: Array<{ name: string; value: string }>;
+      }>;
+    };
+    const again = JSON.stringify(toCycloneDx(artifact));
+    expect(JSON.stringify(cyclone)).toBe(again);
+
+    const grouped = cyclone.components.find((c) => c.name === 'com.google.code.gson:gson')!;
+    expect(grouped.purl).toBe('pkg:maven/com.google.code.gson/gson@2.11.0');
+    expect(grouped.properties.some((p) => p.name === 'vibgrate:mavenGroupWarning')).toBe(false);
+    expect(grouped.properties.some((p) => p.value === 'VG_WARN_SBOM_MAVEN_NO_GROUP')).toBe(false);
+
+    for (const name of ['gson', ':empty-group']) {
+      const row = cyclone.components.find((c) => c.name === name)!;
+      const version = name === 'gson' ? '2.11.0' : '1.0.0';
+      const artifactName = name === 'gson' ? 'gson' : 'empty-group';
+      expect(row.purl).toBe(`pkg:maven/${artifactName}@${version}`);
+      expect(row.properties.find((p) => p.name === 'vibgrate:mavenGroupWarning')?.value).toBe(
+        describeMavenGroupMissing(name, version),
+      );
+      expect(row.properties.find((p) => p.name === 'vibgrate:warningCode')?.value).toBe('VG_WARN_SBOM_MAVEN_NO_GROUP');
+      expect(row.properties.some((p) => p.name === 'vibgrate:purlStatus')).toBe(false);
+    }
+
+    expect(collectMavenGroupWarnings(artifact)).toEqual(expected);
+    expect(collectPurlWarnings(artifact)).toEqual([]);
+
+    const spdx = toSpdx(artifact) as {
+      packages: Array<{
+        name: string;
+        externalRefs?: Array<{ referenceLocator: string }>;
+        annotations: Array<{ comment: string }>;
+      }>;
+    };
+    const bare = spdx.packages.find((p) => p.name === 'gson')!;
+    expect(bare.externalRefs?.[0]?.referenceLocator).toBe('pkg:maven/gson@2.11.0');
+    expect(bare.annotations.map((a) => a.comment)).toEqual([
+      expect.stringContaining('project=app'),
+      describeMavenGroupMissing('gson', '2.11.0'),
+      'warningCode=VG_WARN_SBOM_MAVEN_NO_GROUP',
+    ]);
+    expect(spdx.packages.find((p) => p.name === 'com.google.code.gson:gson')!.annotations.map((a) => a.comment).join('\n')).not.toContain(
+      'VG_WARN_SBOM_MAVEN_NO_GROUP',
+    );
   });
 
   it('a non-npm project gets purls in its own registry, not pkg:npm', () => {

@@ -54,11 +54,11 @@ import { exportCorrectnessPublishRows } from '../review/finding-publish.js';
 import { changeSetFromUnifiedDiff, collectChangeSet, defaultRun, gitTopLevel, isGitRepo, normalizeRemote, repoKey, type ChangeSet } from '../review/git.js';
 import { addSessionTrailers, hookPath, setTrailer, trailerState, TRAILER } from '../review/provenance.js';
 import { preparePush, pushProvenance, trailerSessionIds } from '../review/provenance-cloud.js';
-import { cloudDsn, fetchComments, formatThreads, replyToComment } from '../review/doc-comments.js';
+import { cloudDsn, fetchComments, formatThreads, refuseReviewDocCloudWhenOffline, replyToComment } from '../review/doc-comments.js';
 import { loadHaileProvider } from '../engine/haile/haile-provider.js';
 import { collectGroupSignals, formatGroupsText, groupChangeSet, GROUPS_SCHEMA, validateGroups } from '../review/groups.js';
 import { buildDocument, resolveScope, scopeResolver, type BuildOptions, type DocScope } from '../review/doc-build.js';
-import { mergeDocuments, multiResolver, parseAlso, repoId, type OtherDoc } from '../review/multi-repo.js';
+import { mergeDocuments, multiResolver, parseAlso, repoId, requireAlsoCheckout, type OtherDoc } from '../review/multi-repo.js';
 import { checkAgainstChange, documentHistory, getDocument, openDocument, patchDocument, restoreVersion, savedOrBuilt } from '../review/doc-store.js';
 import {
   DOC_SCHEMA,
@@ -597,6 +597,7 @@ export function registerReview(program: Command): void {
 
       const scope = scopeOf(opts);
       if (opts.comments || opts.reply) {
+        refuseReviewDocCloudWhenOffline(opts.reply ? '--reply' : '--comments', global.offline);
         // The pushed document for this change: same repository, head and base as `--push` sends.
         const { change } = resolveScope(mainRoot, scope);
         const target = { repo_key: repoKey(change.remote, change.topLevel), head_sha: change.headSha, base_sha: change.baseSha };
@@ -630,7 +631,10 @@ export function registerReview(program: Command): void {
       const build = { findings: opts.findings, diagrams: opts.diagrams, baseGraph: opts.baseGraph, graphPath: global.graph, generatedAt: global.generatedAt, log: say };
       const show = async (doc: ReviewDoc): Promise<void> => {
         emit(doc);
-        if (opts.push) await pushDocument(mainRoot, doc, opts.dsn, say);
+        if (opts.push) {
+          refuseReviewDocCloudWhenOffline('--push', global.offline);
+          await pushDocument(mainRoot, doc, opts.dsn, say);
+        }
       };
       if (opts.also?.length) {
         if (opts.save || opts.saved || scope.kind === 'session') {
@@ -957,13 +961,15 @@ async function buildMultiRepoDocument(
   also: string[],
   build: BuildOptions & { inPlace?: boolean },
 ): Promise<ReviewDoc> {
+  const specs = also.map(parseAlso);
+  const roots = specs.map((spec) => requireAlsoCheckout(mainRoot, spec));
   const primary = await buildDocument(mainRoot, scope, build);
   const taken = new Set<string>();
   const others: OtherDoc[] = [];
   const resolvers = new Map<string, PinResolver>();
-  for (const spec of also.map(parseAlso)) {
-    const root = path.resolve(mainRoot, spec.dir);
-    if (!fs.existsSync(root)) throw new CliError(`--also ${spec.dir}: no such directory`, ExitCode.USAGE_ERROR);
+  for (let i = 0; i < specs.length; i++) {
+    const spec = specs[i]!;
+    const root = roots[i]!;
     const base = spec.base ?? (scope.kind === 'change' ? scope.base : null);
     // Each checkout reads its own code map; --graph names only this one's.
     const built = await buildDocument(root, { kind: 'change', base, in_place: Boolean(build.inPlace) }, { ...build, graphPath: undefined });
