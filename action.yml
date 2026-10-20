@@ -28,7 +28,7 @@ inputs:
     required: false
     default: ''
   fail-on-epss:
-    description: 'Fail the job when any advisory EPSS score is at or above this probability, a number from 0 to 1. Values outside 0-1 fail the step. Empty = never fail on EPSS. Requires vulns: true; without it the step fails before the scan. Older scanner images skip the flag with a notice. Maps to --fail-on-epss.'
+    description: 'Fail the job when any advisory EPSS score is at or above this probability, a number from 0 to 1. Values outside 0-1 fail the step. Empty = never fail on EPSS. Set vulns: true; without it the step fails before the scan. Maps to --fail-on-epss.'
     required: false
     default: ''
   baseline:
@@ -135,6 +135,9 @@ runs:
       run: |
         set -euo pipefail
         extra=()
+        # Validated before the image probe so a bad value never starts a scan.
+        # "0" is a real threshold; only an empty string means the gate is off.
+        fail_on_epss=""
         if [ -n "${INPUT_FAIL_ON}" ]; then
           extra+=(--fail-on "${INPUT_FAIL_ON}")
         fi
@@ -150,23 +153,18 @@ runs:
           fi
           extra+=(--drift-budget "${max_score}")
         fi
-        # Trimmed 0-1 threshold, or empty when the input was omitted. Validated
-        # before any docker call so a bad value never starts the scan.
-        epss_threshold=""
         if [ -n "${INPUT_FAIL_ON_EPSS}" ]; then
           # Trim surrounding whitespace, then enforce the documented 0-1 range.
-          # A whitespace-only value trims to empty and fails the shape check.
-          epss_threshold="${INPUT_FAIL_ON_EPSS#"${INPUT_FAIL_ON_EPSS%%[![:space:]]*}"}"
-          epss_threshold="${epss_threshold%"${epss_threshold##*[![:space:]]}"}"
-          if ! [[ "${epss_threshold}" =~ ^[0-9]+(\.[0-9]+)?$ ]] ||
-            ! awk -v score="${epss_threshold}" 'BEGIN { exit !(score + 0 <= 1) }'; then
+          # A missing EPSS score is never a 0; this input is only the threshold.
+          fail_on_epss="${INPUT_FAIL_ON_EPSS#"${INPUT_FAIL_ON_EPSS%%[![:space:]]*}"}"
+          fail_on_epss="${fail_on_epss%"${fail_on_epss##*[![:space:]]}"}"
+          if ! [[ "${fail_on_epss}" =~ ^[0-9]+(\.[0-9]+)?$ ]] ||
+            ! awk -v score="${fail_on_epss}" 'BEGIN { exit !(score + 0 <= 1) }'; then
             echo "::error::fail-on-epss must be a number from 0 to 1 (got '${INPUT_FAIL_ON_EPSS}')."
             exit 1
           fi
-          # The gate reads advisories from the vulnerability pass. Without
-          # --vulns it would skip instead of failing, so refuse that here.
           if [ "${INPUT_VULNS}" != "true" ]; then
-            echo "::error::fail-on-epss needs vulns: true — the EPSS gate reads advisories from the vulnerability pass (set vulns: true)."
+            echo "::error::fail-on-epss needs vulnerability scanning — set vulns: true."
             exit 1
           fi
         fi
@@ -207,13 +205,13 @@ runs:
         if [ "${INPUT_VULNS}" = "true" ]; then
           extra+=(--vulns)
         fi
-        if [ -n "${epss_threshold}" ]; then
-          # Reuse the scan --help probe above. An older image would fail the
-          # run on an unknown flag, so skip it and say so.
+        # Before args, so a caller's word-split flags still come last.
+        # Older images do not know the flag; reuse the help probe above.
+        if [ -n "${fail_on_epss}" ]; then
           if grep -q -- '--fail-on-epss' <<<"${help_text}"; then
-            extra+=(--fail-on-epss "${epss_threshold}")
+            extra+=(--fail-on-epss "${fail_on_epss}")
           else
-            echo "::notice::image ${INPUT_TAG} predates --fail-on-epss; the EPSS gate was not applied. Use a newer image-tag to enforce it."
+            echo "::notice::image ${INPUT_TAG} predates --fail-on-epss; the EPSS threshold was not passed to the scan. Use a newer image-tag to fail on EPSS."
           fi
         fi
         if [ -n "${INPUT_ARGS}" ]; then
