@@ -1804,6 +1804,8 @@ For `com.google.code.gson:gson` at `2.11.0` in a Java project, read these fields
 
 Key the join on `pkg:maven/com.google.code.gson/gson@2.11.0`, or on `maven` + `com.google.code.gson:gson` + `2.11.0`. The group `com.google.code.gson` is the purl namespace. SPDX stores the same purl on `externalRefs[].referenceLocator`.
 
+A Maven name with no group (`gson`, not `com.google.code.gson:gson`) still gets a package URL, and the namespace is left off (`pkg:maven/gson@2.11.0`). The component stays in the document. `vg sbom export` prints `warning [VG_WARN_SBOM_MAVEN_NO_GROUP]` for that row. Record the dependency as `group:artifact` so the group is the namespace.
+
 #### Reading an SBOM that has no package URL and no CPE
 
 `vg evidence release` reads a CycloneDX or SPDX document with `--from`, and it reads an SBOM attestation attached to `--image`. Vendored code, a file, firmware, and a machine-learning model often have a name and a version and neither a package URL nor a CPE. Those rows are part of what shipped.
@@ -6106,6 +6108,7 @@ A truncated or invalid lockfile stops the command. Warning codes cover condition
 | `VG_WARN_ROOT_PACKAGE_IDENTITY` | `vg build`, `vg scan`, `vg sbom` | The root `package.json` omitted `name`, `version`, or both. The root component uses the directory name when `name` is missing, and omits `version` when that field is missing. Dependencies are still resolved. |
 | `VG_WARN_SBOM_LOSSY_EDGES` | `vg sbom` | Merge dropped a different dependency list for one package. |
 | `VG_WARN_SBOM_LOSSY_MANIFEST` | `vg sbom` | Merge dropped differing manifest metadata for one package. |
+| `VG_WARN_SBOM_MAVEN_NO_GROUP` | `vg sbom` | A Maven component name has no groupId. The package URL is written without a namespace. The component stays in the document. |
 | `VG_WARN_SBOM_UNKNOWN_ECOSYSTEM` | `vg sbom` | Merge recorded an unknown ecosystem as npm. |
 | `VG_WARN_SBOM_UNTRACKED_EDGES` | `vg sbom` | A lockfile format does not record dependency edges. |
 
