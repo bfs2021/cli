@@ -20,8 +20,6 @@ For a quick overview, see the [README](./README.md). This document covers everyt
   - [vg report](#vg-report)
     - [What each report format contains](#what-each-report-format-contains)
   - [vg review](#vg-review)
-    - [Local or cloud](#local-or-cloud)
-    - [When the other checkout is missing](#when-the-other-checkout-is-missing)
   - [vg sbom](#vg-sbom)
     - [Choosing CycloneDX or SPDX](#choosing-cyclonedx-or-spdx)
     - [Component identity](#component-identity)
@@ -699,8 +697,28 @@ vg review doc --check review.json        # validate an edited document
 vg review doc --session latest           # what the last VG Code chat did
 ```
 
-Which of these flags stay on this machine, and which call Vibgrate Cloud, is
-[Local or cloud](#local-or-cloud).
+**On this machine, or in Vibgrate Cloud.** Building the document does not call the network. `--push`, `--comments`, and `--reply` do. Those three need a signed-in account (`vg login`, `VIBGRATE_DSN`, or `--dsn`). `--offline` and `--local` refuse them before any request. The process exits 5.
+
+| Flag | Where it runs |
+| --- | --- |
+| default | On this machine. Reads the change and writes the document here. |
+| `--also` | On this machine. Reads each other checkout here. |
+| `--session` | On this machine. Reads the VG Code chat from `.vibgrate/code-sessions/`. |
+| `--save` | On this machine. Writes the document under `.vibgrate/review-docs/`. |
+| `--saved` | On this machine. Shows the saved document, or builds one here when the saved copy no longer matches. |
+| `--push` | Vibgrate Cloud. Uploads the document. Needs a signed-in account. |
+| `--comments` | Vibgrate Cloud. Reads comments on the pushed document. Needs a signed-in account. |
+| `--reply` | Vibgrate Cloud. Posts a reply. Needs a signed-in account and `--text`. |
+
+`--base`, `--in-place`, `--format`, `--out`, `--check`, `--doc`, `--patch`, `--history`, `--restore`, `--no-findings`, `--no-diagrams`, and `--base-graph` stay on this machine. `--dsn` supplies the account for the three cloud flags. It does not call the network by itself.
+
+With `--offline` or `--local`, stderr is one of these lines:
+
+```text
+error: `--push` needs the network — drop `--offline` (or `--local`) to upload the review document, or drop `--push` to stay on this machine
+error: `--comments` needs the network — drop `--offline` (or `--local`) to read comments, or drop `--comments` to stay on this machine
+error: `--reply` needs the network — drop `--offline` (or `--local`) to post the reply, or drop `--reply` to stay on this machine
+```
 
 **Groups.** Every changed file lands in exactly one group. Files that are not
 implementation are peeled off first, each for a reason you can see in the
@@ -920,30 +938,15 @@ vg review doc --base origin/main --check doc.json --also ../web-client
   `--saved` or `--session`. With `--push`, the GitHub App shows it on the
   first repository's pull request, and its pins link to each repository on
   GitHub.
-
-##### When the other checkout is missing
-
-Stdout is empty. The `error:` line is stderr. Exit is `5`. The text below was
-captured with `--no-color` from `vg review doc --also`.
-
-A path that does not exist. The path is printed as you passed it. A `=<ref>`
-suffix is left off, so `--also ../does-not-exist=origin/main` prints the same
-line:
+- A path that is not a checkout exits 5 before anything is built. Stderr names
+  the path you passed and says what to pass instead:
 
 ```text
-error: --also ../does-not-exist: no such directory
+error: --also ../web-client: no such directory — pass a git checkout of the other repository
+error: --also ../web-client: /abs/checkout is not a git repository — pass a git checkout of the other repository (git must be on PATH)
 ```
 
-A directory that exists but is not inside a git repository, or git is not on
-`PATH`. `<root>` is that directory resolved to an absolute path (a relative
-`--also` still prints the absolute path):
-
-```text
-error: `vg review` needs a git repository — <root> is not one (or git is not on PATH)
-```
-
-`vg review doc --check <file> --also <dir>` prints that same git-repository
-line for a missing path and for a directory that is not a git checkout.
+`/abs/checkout` stands in for the path `--also` resolved. `git` has to be on `PATH`.
 
 **Show the document on the pull request.** `vg review doc --push` uploads the
 whole document to Vibgrate Cloud. The GitHub App then shows it in its Review
@@ -1005,33 +1008,6 @@ vg review doc --base origin/main --save --push
   command into the composer, unsent. Settings → Source control's "What landed
   this week?" links each merged pull request to its review, and to its review
   document when one was pushed.
-
-##### Local or cloud
-
-`vg review doc` builds the document on this machine. The document is uploaded
-only when you pass `--push`. A workspace DSN is read only by `--push`,
-`--comments`, and `--reply`.
-
-| Flag | Where it runs | Account |
-| --- | --- | --- |
-| default | On this machine: git, and a code map or Architecture module already on disk. Printed, or written with `-o`. | None |
-| `--also` | On this machine. Each other checkout's git diff, and its code map when one is already there. | None |
-| `--session` | On this machine. The chat record in `.vibgrate/code-sessions/`. | None |
-| `--save` | On this machine. Writes `.vibgrate/review-docs/`. | None |
-| `--saved` | On this machine. Reads `.vibgrate/review-docs/` when that copy still matches the change; otherwise builds the document in memory. | None |
-| `--push` | Vibgrate Cloud. Uploads the whole document. | A workspace DSN |
-| `--comments` | Vibgrate Cloud. Lists comments on the document already pushed for this change. | A workspace DSN |
-| `--reply` | Vibgrate Cloud. Posts one reply on that document. | A workspace DSN |
-
-The DSN is the one `vg login` stored, or `VIBGRATE_DSN`, or `--dsn`. With no
-DSN, `--push`, `--comments`, and `--reply` stop before they open a connection.
-`--comments` lists comments and `--reply` posts one. `--save --push` writes
-the local copy, then uploads that document. `--base`, `--in-place`,
-`--base-graph`, `--check`, `--format`, `-o`, `--no-findings`, `--no-diagrams`,
-`--patch`, `--history`, and `--restore` stay on this machine. `--base-graph`
-uses a temporary worktree here. Over MCP, `review_doc` ops `comments` and
-`reply` use the same DSN; `open`, `get`, `patch`, `check`, `history`, and
-`restore` stay on this machine.
 
 #### Decisions
 
@@ -1688,10 +1664,7 @@ Source stays on the machine. `--push` sends the receipt — decisions, claims,
 evidence ids, paths, digests, versions — never the analysis capsule and never
 source text. Line ranges are opt-in (`--include-spans`); snippets are a second,
 explicit opt-in (`--include-snippets`) and are capped. `--offline`, or simply
-having no DSN, keeps the receipt on disk. `vg review doc` keeps its document
-on the machine until you pass `vg review doc --push`. `--comments` and
-`--reply` are the other calls to Vibgrate Cloud. See
-[Local or cloud](#local-or-cloud).
+having no DSN, keeps the receipt on disk.
 
 Ready-to-use workflows: `examples/github-actions/vibgrate-review.yml` and
 `vibgrate-review-sarif.yml`.
@@ -5269,7 +5242,7 @@ The same findings and gates always produce the same bytes. Case order is fixed, 
 | `findings` | Always | One case per drift finding. `classname` is `vg.findings`. `name` is `{ruleId} {location}` (` #2`, ` #3`, … on ties). No findings → one passing case, `no findings`. |
 | `architecture` | `--fail-on architecture-finding` or `architecture-warning` | One failure per boundary row (`classname` `vg.architecture`), a passing `architecture` case when the gate is clean, or one failure when the gate could not run. |
 | `security` | `--fail-on iac-finding` or `security-finding` | One case per security finding when the packs ran (`classname` `vg.security`). Findings below the severity are `<skipped>`. A passing `security` case when there are none. One failure when the gate could not run. |
-| `gates` | A drift budget or an EPSS threshold was judged | `drift-budget` / `drift-worsening` for the DriftScore flags, or `drift-budget maxScore` and `drift-budget maxWorseningPercent` for [`driftBudget`](#drift-budget) in project config. `fail-on-epss` for [`--fail-on-epss`](#epss-gate) or `failOnEpss`. |
+| `gates` | A drift budget or an EPSS threshold was judged | `drift-budget` / `drift-worsening` for the DriftScore flags. For [`driftBudget`](#drift-budget) in project config: `drift-budget maxScore`, `drift-budget maxWorseningPercent`, `drift-budget maxRiskScore`, and `drift-budget maxRiskWorseningPercent`, in that order when configured. The two RiskScore cases are `<skipped>` on a local scan because `vg scan` does not compute RiskScore. `agents.maxWorseningPercent` never appears here; the GitHub App check evaluates it. `fail-on-epss` for [`--fail-on-epss`](#epss-gate) or `failOnEpss`. |
 
 A finding is a `<failure>` only when its level fails the drift gate you set. Anything else is `<skipped>` (present, not gating):
 

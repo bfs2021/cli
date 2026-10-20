@@ -691,14 +691,6 @@ document (blast-radius and architecture-policy `correctness` rows plus security
 scanners) and writes `.vibgrate/review-propose-handoff.json`.
 The JSON field list, every `kind`, the sort order, a captured example, and the
 failure exits are in [DOCS.md](./DOCS.md#findings-json-contract).
-`vg review doc` writes the review document for the same change. The default,
-`--also`, `--session`, `--save`, and `--saved` stay on the machine. `--push`
-uploads that document to Vibgrate Cloud; `--comments` and `--reply` are the
-other calls that need a signed-in workspace. The table is in
-[Local or cloud](./DOCS.md#local-or-cloud). The error when `--also` is missing
-or not a git checkout is in
-[When the other checkout is missing](./DOCS.md#when-the-other-checkout-is-missing).
-
 `vg review propose <id>` attaches a PatchIR dry-run — `--model` is
 `relay:<slug>` (hosted Review) or `spark` | `flow` | `forge` (local Code Mode).
 Lookup is the current change set, then `--findings` JSON, then that last-run
