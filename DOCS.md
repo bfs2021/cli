@@ -1772,7 +1772,7 @@ For `com.google.code.gson:gson` at `2.11.0` in a Java project, read these fields
 
 Key the join on `pkg:maven/com.google.code.gson/gson@2.11.0`, or on `maven` + `com.google.code.gson:gson` + `2.11.0`. The group `com.google.code.gson` is the purl namespace. SPDX stores the same purl on `externalRefs[].referenceLocator`.
 
-A name with no group still produces a component. `gson` at `2.11.0` (no `:`) is `pkg:maven/gson@2.11.0`, a purl with no namespace. An empty group segment (`:gson`) is the same purl. `vg sbom export` warns with `VG_WARN_MAVEN_GROUP_MISSING` and keeps the purl. CycloneDX records the reason on `vibgrate:mavenWarning` and the code on `vibgrate:warningCode`. SPDX keeps the purl on `externalRefs[].referenceLocator` and repeats the reason and `warningCode=VG_WARN_MAVEN_GROUP_MISSING` as annotations. Record the coordinate as `group:artifact`.
+A Maven name with no group (`gson`, not `com.google.code.gson:gson`) still gets a package URL, and the namespace is left off (`pkg:maven/gson@2.11.0`). The component stays in the document. `vg sbom export` prints `warning [VG_WARN_SBOM_MAVEN_NO_GROUP]` for that row. Record the dependency as `group:artifact` so the group is the namespace.
 
 #### Reading an SBOM that has no package URL and no CPE
 
@@ -5212,7 +5212,7 @@ The same findings and gates always produce the same bytes. Case order is fixed, 
 | `findings` | Always | One case per drift finding. `classname` is `vg.findings`. `name` is `{ruleId} {location}` (` #2`, ` #3`, … on ties). No findings → one passing case, `no findings`. |
 | `architecture` | `--fail-on architecture-finding` or `architecture-warning` | One failure per boundary row (`classname` `vg.architecture`), a passing `architecture` case when the gate is clean, or one failure when the gate could not run. |
 | `security` | `--fail-on iac-finding` or `security-finding` | One case per security finding when the packs ran (`classname` `vg.security`). Findings below the severity are `<skipped>`. A passing `security` case when there are none. One failure when the gate could not run. |
-| `gates` | A drift budget or an EPSS threshold was judged | `drift-budget` / `drift-worsening` for the DriftScore flags, or `drift-budget maxScore` and `drift-budget maxWorseningPercent` for [`driftBudget`](#drift-budget) in project config. `fail-on-epss` for [`--fail-on-epss`](#epss-gate) or `failOnEpss`. |
+| `gates` | A drift budget or an EPSS threshold was judged | `drift-budget` / `drift-worsening` for the DriftScore flags. For [`driftBudget`](#drift-budget) in project config: `drift-budget maxScore`, `drift-budget maxWorseningPercent`, `drift-budget maxRiskScore`, and `drift-budget maxRiskWorseningPercent`, in that order when configured. The two RiskScore cases are `<skipped>` on a local scan because `vg scan` does not compute RiskScore. `agents.maxWorseningPercent` never appears here; the GitHub App check evaluates it. `fail-on-epss` for [`--fail-on-epss`](#epss-gate) or `failOnEpss`. |
 
 A finding is a `<failure>` only when its level fails the drift gate you set. Anything else is `<skipped>` (present, not gating):
 
@@ -6073,10 +6073,10 @@ A truncated or invalid lockfile stops the command. Warning codes cover condition
 | `VG_WARN_LICENSE_UNREPRESENTABLE` | `vg sbom` | A declared license cannot be represented in an SBOM. |
 | `VG_WARN_CVSS_UNPARSEABLE` | `vg scan` | A CVSS vector was present and could not be parsed. |
 | `VG_WARN_PURL_UNAVAILABLE` | `vg sbom` | A package URL could not be formed. The component is included without a purl. |
-| `VG_WARN_MAVEN_GROUP_MISSING` | `vg sbom` | A Maven component has no groupId. The component stays, and the purl has no namespace (`pkg:maven/<artifact>@<version>`). |
 | `VG_WARN_ROOT_PACKAGE_IDENTITY` | `vg build`, `vg scan`, `vg sbom` | The root `package.json` omitted `name`, `version`, or both. The root component uses the directory name when `name` is missing, and omits `version` when that field is missing. Dependencies are still resolved. |
 | `VG_WARN_SBOM_LOSSY_EDGES` | `vg sbom` | Merge dropped a different dependency list for one package. |
 | `VG_WARN_SBOM_LOSSY_MANIFEST` | `vg sbom` | Merge dropped differing manifest metadata for one package. |
+| `VG_WARN_SBOM_MAVEN_NO_GROUP` | `vg sbom` | A Maven component name has no groupId. The package URL is written without a namespace. The component stays in the document. |
 | `VG_WARN_SBOM_UNKNOWN_ECOSYSTEM` | `vg sbom` | Merge recorded an unknown ecosystem as npm. |
 | `VG_WARN_SBOM_UNTRACKED_EDGES` | `vg sbom` | A lockfile format does not record dependency edges. |
 

@@ -65,17 +65,14 @@ export const WARNING_CODES = {
   CVSS_UNPARSEABLE: 'VG_WARN_CVSS_UNPARSEABLE',
   /** A package URL could not be formed. The component is included without a purl. */
   PURL_UNAVAILABLE: 'VG_WARN_PURL_UNAVAILABLE',
-  /**
-   * A Maven coordinate has no group. The component stays, and its purl has
-   * no namespace (`pkg:maven/<artifact>@<version>`).
-   */
-  MAVEN_GROUP_MISSING: 'VG_WARN_MAVEN_GROUP_MISSING',
   /** Root package.json omitted name, version, or both. The root component keeps a directory-name fallback. */
   ROOT_PACKAGE_IDENTITY: 'VG_WARN_ROOT_PACKAGE_IDENTITY',
   /** SBOM merge dropped a different dependency list for one package. */
   SBOM_LOSSY_EDGES: 'VG_WARN_SBOM_LOSSY_EDGES',
   /** SBOM merge dropped differing manifest metadata for one package. */
   SBOM_LOSSY_MANIFEST: 'VG_WARN_SBOM_LOSSY_MANIFEST',
+  /** A Maven component name has no groupId. The purl is written without a namespace. */
+  SBOM_MAVEN_NO_GROUP: 'VG_WARN_SBOM_MAVEN_NO_GROUP',
   /** SBOM merge recorded an unknown ecosystem as npm. */
   SBOM_UNKNOWN_ECOSYSTEM: 'VG_WARN_SBOM_UNKNOWN_ECOSYSTEM',
   /** A lockfile format does not record dependency edges. */

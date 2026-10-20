@@ -6,12 +6,7 @@
   "drift": {
     "score": 90,
     "riskLevel": "moderate",
-    "components": {
-      "runtimeScore": 70,
-      "frameworkScore": 70,
-      "dependencyScore": 70,
-      "eolScore": 70
-    }
+    "components": { "runtimeScore": 70, "frameworkScore": 70, "dependencyScore": 70, "eolScore": 70 }
   },
   "findings": [],
   "projects": [
@@ -38,14 +33,18 @@
           "latestStable": "2.11.0",
           "majorsBehind": 0,
           "drift": "current"
+        },
+        {
+          "package": ":empty-group",
+          "section": "dependencies",
+          "currentSpec": "1.0.0",
+          "resolvedVersion": "1.0.0",
+          "latestStable": "1.0.0",
+          "majorsBehind": 0,
+          "drift": "current"
         }
       ],
-      "dependencyAgeBuckets": {
-        "current": 2,
-        "oneBehind": 0,
-        "twoPlusBehind": 0,
-        "unknown": 0
-      }
+      "dependencyAgeBuckets": { "current": 3, "oneBehind": 0, "twoPlusBehind": 0, "unknown": 0 }
     }
   ]
 }
