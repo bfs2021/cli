@@ -67,7 +67,7 @@ npx @vibgrate/cli@2026.1005.1 scan --format json --out vibgrate-report.json --fa
 
 `vg build` copies each `uses:` string into the code map. It does not resolve a tag to a commit. See [Action pins in the code map](../../docs/ci/github-actions.md#action-pins-in-the-code-map).
 
-Omit `image-tag` to use that default. Omit `fail-on` and the job does not fail on findings. A budget you still want enforced goes in `args`:
+Omit `image-tag` to use that default. Omit `fail-on` and the job does not fail on findings. `max-score` maps to `--drift-budget`. `fail-on-epss` maps to `--fail-on-epss` and needs `vulns: true`:
 
 ```yaml
 - uses: vibgrate/cli@v1
@@ -75,7 +75,9 @@ Omit `image-tag` to use that default. Omit `fail-on` and the job does not fail o
     format: json
     output: vibgrate-report.json
     fail-on: error
-    args: --drift-budget 40
+    max-score: 40
+    vulns: true
+    fail-on-epss: '0.1'
     image-tag: "2026.1005.1"
 ```
 
@@ -90,7 +92,7 @@ Two different knobs both use the word "warn". They do not mean the same thing.
 
 `--drift-budget` and `--drift-worsening` are flags. They have no warn mode. On a breach they exit 2. If either flag is present, `driftBudget` in the project config is ignored.
 
-`--fail-on-epss` replaces `failOnEpss` in `.vibgrate/config.yml` or `vibgrate.config.json`. The threshold is a probability from 0 to 1. A score equal to the threshold exits 2. A missing score is not compared and is not treated as 0. The flag reads advisories from `--vulns` or `--full`. When there is no score to compare, the job exits 0.
+`--fail-on-epss` replaces `failOnEpss` in `.vibgrate/config.yml` or `vibgrate.config.json`. The threshold is a probability from 0 to 1. A score equal to the threshold exits 2. A missing score is not compared and is not treated as 0. The flag reads advisories from `--vulns` or `--full`. When there is no score to compare, the job exits 0. On the `vibgrate/cli` Action the same threshold is `fail-on-epss`, and the step fails before the scan unless `vulns: true`.
 
 | Situation | Exit | Job |
 | --- | --- | --- |

@@ -105,13 +105,22 @@ steps:
     with:
       vulns: true
       fail-on: error        # critical/high block the merge
+      max-score: 40
+      fail-on-epss: '0.1'   # any advisory EPSS at or above 0.1 fails the job
       upload-sarif: true
       category: vibgrate-vulns
 ```
 
 The Action inputs map to scan flags: `vulns: true` adds `--vulns`, `fail-on` adds
-`--fail-on`, and `upload-sarif: true` runs `github/codeql-action/upload-sarif`
+`--fail-on`, `max-score` adds `--drift-budget`, `fail-on-epss` adds
+`--fail-on-epss`, and `upload-sarif: true` runs `github/codeql-action/upload-sarif`
 after the scan (with `always()`, so findings still surface when the gate fails).
+`fail-on-epss` is a probability from 0 to 1. Empty means never fail on EPSS.
+It needs `vulns: true`; without that input the step fails before the scan,
+because the gate reads advisories from the vulnerability pass. A value that is
+not a number from 0 to 1 fails the step the same way. An older scanner image
+that does not know `--fail-on-epss` skips the flag and prints a notice.
+
 Prefer raw CLI steps? `npx @vibgrate/cli scan --vulns --format sarif --out
 vibgrate-vulns.sarif --fail-on error`, then upload the file yourself.
 
