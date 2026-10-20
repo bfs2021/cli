@@ -53,7 +53,7 @@ import { ensureCodeMap, reviewPolicyState, seedReviewPolicy } from '../review/pr
 import { exportCorrectnessPublishRows } from '../review/finding-publish.js';
 import { changeSetFromUnifiedDiff, collectChangeSet, defaultRun, gitTopLevel, isGitRepo, normalizeRemote, repoKey, type ChangeSet } from '../review/git.js';
 import { addSessionTrailers, hookPath, setTrailer, trailerState, TRAILER } from '../review/provenance.js';
-import { preparePush, pushProvenance, trailerSessionIds } from '../review/provenance-cloud.js';
+import { nothingToPushLine, preparePush, pushProvenance, refuseProvenancePushWhenOffline, trailerSessionIds } from '../review/provenance-cloud.js';
 import { cloudDsn, fetchComments, formatThreads, replyToComment } from '../review/doc-comments.js';
 import { loadHaileProvider } from '../engine/haile/haile-provider.js';
 import { collectGroupSignals, formatGroupsText, groupChangeSet, GROUPS_SCHEMA, validateGroups } from '../review/groups.js';
@@ -456,7 +456,7 @@ export function registerReview(program: Command): void {
       }
       if (!isGitRepo(root)) throw new CliError('`vg review trailer` needs a git repository', ExitCode.USAGE_ERROR);
       if (state === 'push') {
-        await pushTrailerSessions(top, opts, Boolean(global.json));
+        await pushTrailerSessions(top, opts, Boolean(global.json), global.offline);
         return;
       }
       if (state !== 'on' && state !== 'off' && state !== 'status') {
@@ -1141,7 +1141,7 @@ function reportIssues(issues: { path: string; code: string; message: string }[],
  * `vg why <file:line> --cloud` can read them. Sessions that ran elsewhere are
  * listed, not sent; Cloud stores nothing unless Agent provenance is on.
  */
-async function pushTrailerSessions(top: string, opts: { base?: string; dsn?: string; dryRun?: boolean }, asJson: boolean): Promise<void> {
+async function pushTrailerSessions(top: string, opts: { base?: string; dsn?: string; dryRun?: boolean }, asJson: boolean, offline: boolean | undefined): Promise<void> {
   const ids = trailerSessionIds(top, opts.base);
   const prepared = preparePush(top, ids);
   const summary = {
@@ -1153,13 +1153,14 @@ async function pushTrailerSessions(top: string, opts: { base?: string; dsn?: str
   if (opts.dryRun || prepared.sessions.length === 0) {
     if (asJson) out(JSON.stringify({ ...summary, sent: 0 }));
     else {
-      if (ids.length === 0) info(c.dim(`  no ${TRAILER} trailer on ${opts.base ? `${opts.base}..HEAD` : 'the commits no remote branch has yet'}`));
+      if (ids.length === 0) info(c.dim(`  ${nothingToPushLine(opts.base)}`));
       for (const s of summary.sessions) info(`  would send ${c.bold(s.id)}: ${s.title} ${c.dim(`(${s.turns} turns)`)}`);
       for (const id of prepared.missing) info(c.dim(`  ${id} is not on this machine, so it was not sent`));
       for (const r of prepared.refused) info(c.yellow(`  ${r.id} was not sent: ${r.reason}`));
     }
     return;
   }
+  refuseProvenancePushWhenOffline(offline);
   const stored = await pushProvenance(cloudDsn(opts.dsn), prepared);
   if (asJson) {
     out(JSON.stringify({ ...summary, sent: stored }));
