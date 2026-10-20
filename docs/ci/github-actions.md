@@ -30,6 +30,25 @@ scan runs.
     max-score: 40
 ```
 
+`fail-on-epss` is the same kind of input for advisory EPSS scores. It takes a
+probability from 0 to 1 and maps to `--fail-on-epss`. Leave it empty to never
+fail on EPSS. It needs `vulns: true`; without that the step fails before the
+scan and tells you to set it. A value that is not a number from 0 to 1 fails
+the step before the scan. A scanner image that does not list `--fail-on-epss`
+in `scan --help` prints a notice and runs the scan without that flag. A missing
+EPSS score is never treated as 0; without the vulnerability pass there is
+nothing to compare.
+
+```yaml
+- uses: actions/checkout@v4
+- uses: vibgrate/cli@v1
+  with:
+    vulns: true
+    fail-on: error
+    max-score: 40
+    fail-on-epss: '0.1'
+```
+
 ## Read the score in a later step
 
 The Action exposes the result as step outputs, and adds a line to the job
@@ -105,13 +124,15 @@ steps:
     with:
       vulns: true
       fail-on: error        # critical/high block the merge
+      fail-on-epss: '0.1'   # advisory EPSS at or above 0.1
       upload-sarif: true
       category: vibgrate-vulns
 ```
 
 The Action inputs map to scan flags: `vulns: true` adds `--vulns`, `fail-on` adds
-`--fail-on`, and `upload-sarif: true` runs `github/codeql-action/upload-sarif`
-after the scan (with `always()`, so findings still surface when the gate fails).
+`--fail-on`, `fail-on-epss` adds `--fail-on-epss` (and needs `vulns: true`), and
+`upload-sarif: true` runs `github/codeql-action/upload-sarif` after the scan
+(with `always()`, so findings still surface when the gate fails).
 Prefer raw CLI steps? `npx @vibgrate/cli scan --vulns --format sarif --out
 vibgrate-vulns.sarif --fail-on error`, then upload the file yourself.
 

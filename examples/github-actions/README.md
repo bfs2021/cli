@@ -79,6 +79,18 @@ Omit `image-tag` to use that default. Omit `fail-on` and the job does not fail o
     image-tag: "2026.1005.1"
 ```
 
+`fail-on`, `max-score`, and `fail-on-epss` are separate gates on the same Action. `max-score` is a DriftScore from 0 to 100 and maps to `--drift-budget`. `fail-on-epss` is a probability from 0 to 1 and maps to `--fail-on-epss`. Leave `fail-on-epss` empty to never fail on EPSS. It needs `vulns: true`; without that the step fails before the scan and tells you to set it. A value that is not a number from 0 to 1 fails the step before the scan. A scanner image that does not list `--fail-on-epss` in `scan --help` prints a notice and runs the scan without that flag.
+
+
+```yaml
+- uses: vibgrate/cli@v1
+  with:
+    vulns: true
+    fail-on: error
+    max-score: 40
+    fail-on-epss: '0.1'
+```
+
 ## When the job fails, and when it only warns
 
 Two different knobs both use the word "warn". They do not mean the same thing.

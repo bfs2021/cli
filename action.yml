@@ -27,6 +27,10 @@ inputs:
     description: 'Fail the job when the DriftScore is above this budget, a number from 0 to 100 (lower is better). Values outside 0-100 fail the step. Empty = never fail on the score. Maps to --drift-budget.'
     required: false
     default: ''
+  fail-on-epss:
+    description: 'Fail the job when any advisory EPSS score is at or above this probability, a number from 0 to 1. Values outside 0-1 fail the step. Empty = never fail on EPSS. Set vulns: true; without it the step fails before the scan. Maps to --fail-on-epss.'
+    required: false
+    default: ''
   baseline:
     description: 'Repo-relative path to a committed baseline (create one with `vg baseline` and commit .vibgrate/baseline.json). Enables the change-since-baseline outputs and the max-worsening gate.'
     required: false
@@ -121,6 +125,7 @@ runs:
         INPUT_OUTPUT: ${{ inputs.output }}
         INPUT_FAIL_ON: ${{ inputs.fail-on }}
         INPUT_MAX_SCORE: ${{ inputs.max-score }}
+        INPUT_FAIL_ON_EPSS: ${{ inputs.fail-on-epss }}
         INPUT_BASELINE: ${{ inputs.baseline }}
         INPUT_MAX_WORSENING: ${{ inputs.max-worsening }}
         INPUT_SUMMARY: ${{ inputs.summary }}
@@ -130,6 +135,9 @@ runs:
       run: |
         set -euo pipefail
         extra=()
+        # Validated before the image probe so a bad value never starts a scan.
+        # "0" is a real threshold; only an empty string means the gate is off.
+        fail_on_epss=""
         if [ -n "${INPUT_FAIL_ON}" ]; then
           extra+=(--fail-on "${INPUT_FAIL_ON}")
         fi
@@ -144,6 +152,21 @@ runs:
             exit 1
           fi
           extra+=(--drift-budget "${max_score}")
+        fi
+        if [ -n "${INPUT_FAIL_ON_EPSS}" ]; then
+          # Trim surrounding whitespace, then enforce the documented 0-1 range.
+          # A missing EPSS score is never a 0; this input is only the threshold.
+          fail_on_epss="${INPUT_FAIL_ON_EPSS#"${INPUT_FAIL_ON_EPSS%%[![:space:]]*}"}"
+          fail_on_epss="${fail_on_epss%"${fail_on_epss##*[![:space:]]}"}"
+          if ! [[ "${fail_on_epss}" =~ ^[0-9]+(\.[0-9]+)?$ ]] ||
+            ! awk -v score="${fail_on_epss}" 'BEGIN { exit !(score + 0 <= 1) }'; then
+            echo "::error::fail-on-epss must be a number from 0 to 1 (got '${INPUT_FAIL_ON_EPSS}')."
+            exit 1
+          fi
+          if [ "${INPUT_VULNS}" != "true" ]; then
+            echo "::error::fail-on-epss needs vulnerability scanning — set vulns: true."
+            exit 1
+          fi
         fi
         if [ -n "${INPUT_MAX_WORSENING}" ]; then
           if ! [[ "${INPUT_MAX_WORSENING}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
@@ -181,6 +204,15 @@ runs:
         fi
         if [ "${INPUT_VULNS}" = "true" ]; then
           extra+=(--vulns)
+        fi
+        # Before args, so a caller's word-split flags still come last.
+        # Older images do not know the flag; reuse the help probe above.
+        if [ -n "${fail_on_epss}" ]; then
+          if grep -q -- '--fail-on-epss' <<<"${help_text}"; then
+            extra+=(--fail-on-epss "${fail_on_epss}")
+          else
+            echo "::notice::image ${INPUT_TAG} predates --fail-on-epss; the EPSS threshold was not passed to the scan. Use a newer image-tag to fail on EPSS."
+          fi
         fi
         if [ -n "${INPUT_ARGS}" ]; then
           # Word-split intentionally: callers pass extra flags as a string.
