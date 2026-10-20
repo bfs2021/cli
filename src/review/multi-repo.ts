@@ -11,14 +11,38 @@
  * keeps its primary diagram; the others' diagrams stay, not primary.
  */
 
+import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { CliError, ExitCode } from '../util/exit.js';
 import { REPO_ID, sealReviewDoc, withIds, type DocBlock, type DocRepo, type DocSection, type PinResolver, type ReviewDoc, type SectionKind } from './doc.js';
+import { isGitRepo } from './git.js';
 
 export interface AlsoSpec {
   /** The other checkout, as given. */
   dir: string;
   /** `--also <dir>=<ref>`: review it against this base instead of the document's own. */
   base: string | null;
+}
+
+/**
+ * The checkout `--also` names. A missing path or a directory that is not a
+ * git repository is a usage error that names the flag and what to pass.
+ */
+export function requireAlsoCheckout(mainRoot: string, spec: AlsoSpec): string {
+  const root = path.resolve(mainRoot, spec.dir);
+  if (!fs.existsSync(root)) {
+    throw new CliError(
+      `--also ${spec.dir}: no such directory — pass a git checkout of the other repository`,
+      ExitCode.USAGE_ERROR,
+    );
+  }
+  if (!isGitRepo(root)) {
+    throw new CliError(
+      `--also ${spec.dir}: ${root} is not a git repository — pass a git checkout of the other repository (git must be on PATH)`,
+      ExitCode.USAGE_ERROR,
+    );
+  }
+  return root;
 }
 
 /** `../client` or `../client=origin/main`. */

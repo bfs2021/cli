@@ -71,6 +71,8 @@ export const WARNING_CODES = {
   SBOM_LOSSY_EDGES: 'VG_WARN_SBOM_LOSSY_EDGES',
   /** SBOM merge dropped differing manifest metadata for one package. */
   SBOM_LOSSY_MANIFEST: 'VG_WARN_SBOM_LOSSY_MANIFEST',
+  /** A Maven component name has no groupId. The purl is written without a namespace. */
+  SBOM_MAVEN_NO_GROUP: 'VG_WARN_SBOM_MAVEN_NO_GROUP',
   /** SBOM merge recorded an unknown ecosystem as npm. */
   SBOM_UNKNOWN_ECOSYSTEM: 'VG_WARN_SBOM_UNKNOWN_ECOSYSTEM',
   /** A lockfile format does not record dependency edges. */

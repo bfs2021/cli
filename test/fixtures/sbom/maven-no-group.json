@@ -1,0 +1,50 @@
+{
+  "schemaVersion": "1.0",
+  "timestamp": "2026-02-19T00:00:00.000Z",
+  "vibgrateVersion": "0.0.1",
+  "rootPath": "repo",
+  "drift": {
+    "score": 90,
+    "riskLevel": "moderate",
+    "components": { "runtimeScore": 70, "frameworkScore": 70, "dependencyScore": 70, "eolScore": 70 }
+  },
+  "findings": [],
+  "projects": [
+    {
+      "type": "java",
+      "path": ".",
+      "name": "app",
+      "frameworks": [],
+      "dependencies": [
+        {
+          "package": "gson",
+          "section": "dependencies",
+          "currentSpec": "2.11.0",
+          "resolvedVersion": "2.11.0",
+          "latestStable": "2.11.0",
+          "majorsBehind": 0,
+          "drift": "current"
+        },
+        {
+          "package": "com.google.code.gson:gson",
+          "section": "dependencies",
+          "currentSpec": "2.11.0",
+          "resolvedVersion": "2.11.0",
+          "latestStable": "2.11.0",
+          "majorsBehind": 0,
+          "drift": "current"
+        },
+        {
+          "package": ":empty-group",
+          "section": "dependencies",
+          "currentSpec": "1.0.0",
+          "resolvedVersion": "1.0.0",
+          "latestStable": "1.0.0",
+          "majorsBehind": 0,
+          "drift": "current"
+        }
+      ],
+      "dependencyAgeBuckets": { "current": 3, "oneBehind": 0, "twoPlusBehind": 0, "unknown": 0 }
+    }
+  ]
+}

@@ -697,6 +697,29 @@ vg review doc --check review.json        # validate an edited document
 vg review doc --session latest           # what the last VG Code chat did
 ```
 
+**On this machine, or in Vibgrate Cloud.** Building the document does not call the network. `--push`, `--comments`, and `--reply` do. Those three need a signed-in account (`vg login`, `VIBGRATE_DSN`, or `--dsn`). `--offline` and `--local` refuse them before any request. The process exits 5.
+
+| Flag | Where it runs |
+| --- | --- |
+| default | On this machine. Reads the change and writes the document here. |
+| `--also` | On this machine. Reads each other checkout here. |
+| `--session` | On this machine. Reads the VG Code chat from `.vibgrate/code-sessions/`. |
+| `--save` | On this machine. Writes the document under `.vibgrate/review-docs/`. |
+| `--saved` | On this machine. Shows the saved document, or builds one here when the saved copy no longer matches. |
+| `--push` | Vibgrate Cloud. Uploads the document. Needs a signed-in account. |
+| `--comments` | Vibgrate Cloud. Reads comments on the pushed document. Needs a signed-in account. |
+| `--reply` | Vibgrate Cloud. Posts a reply. Needs a signed-in account and `--text`. |
+
+`--base`, `--in-place`, `--format`, `--out`, `--check`, `--doc`, `--patch`, `--history`, `--restore`, `--no-findings`, `--no-diagrams`, and `--base-graph` stay on this machine. `--dsn` supplies the account for the three cloud flags. It does not call the network by itself.
+
+With `--offline` or `--local`, stderr is one of these lines:
+
+```text
+error: `--push` needs the network — drop `--offline` (or `--local`) to upload the review document, or drop `--push` to stay on this machine
+error: `--comments` needs the network — drop `--offline` (or `--local`) to read comments, or drop `--comments` to stay on this machine
+error: `--reply` needs the network — drop `--offline` (or `--local`) to post the reply, or drop `--reply` to stay on this machine
+```
+
 **Groups.** Every changed file lands in exactly one group. Files that are not
 implementation are peeled off first, each for a reason you can see in the
 output:
@@ -915,6 +938,15 @@ vg review doc --base origin/main --check doc.json --also ../web-client
   `--saved` or `--session`. With `--push`, the GitHub App shows it on the
   first repository's pull request, and its pins link to each repository on
   GitHub.
+- A path that is not a checkout exits 5 before anything is built. Stderr names
+  the path you passed and says what to pass instead:
+
+```text
+error: --also ../web-client: no such directory — pass a git checkout of the other repository
+error: --also ../web-client: /abs/checkout is not a git repository — pass a git checkout of the other repository (git must be on PATH)
+```
+
+`/abs/checkout` stands in for the path `--also` resolved. `git` has to be on `PATH`.
 
 **Show the document on the pull request.** `vg review doc --push` uploads the
 whole document to Vibgrate Cloud. The GitHub App then shows it in its Review
@@ -1771,6 +1803,8 @@ For `com.google.code.gson:gson` at `2.11.0` in a Java project, read these fields
 ```
 
 Key the join on `pkg:maven/com.google.code.gson/gson@2.11.0`, or on `maven` + `com.google.code.gson:gson` + `2.11.0`. The group `com.google.code.gson` is the purl namespace. SPDX stores the same purl on `externalRefs[].referenceLocator`.
+
+A Maven name with no group (`gson`, not `com.google.code.gson:gson`) still gets a package URL, and the namespace is left off (`pkg:maven/gson@2.11.0`). The component stays in the document. `vg sbom export` prints `warning [VG_WARN_SBOM_MAVEN_NO_GROUP]` for that row. Record the dependency as `group:artifact` so the group is the namespace.
 
 #### Reading an SBOM that has no package URL and no CPE
 
@@ -6125,6 +6159,7 @@ A truncated or invalid lockfile stops the command. Warning codes cover condition
 | `VG_WARN_ROOT_PACKAGE_IDENTITY` | `vg build`, `vg scan`, `vg sbom` | The root `package.json` omitted `name`, `version`, or both. The root component uses the directory name when `name` is missing, and omits `version` when that field is missing. Dependencies are still resolved. |
 | `VG_WARN_SBOM_LOSSY_EDGES` | `vg sbom` | Merge dropped a different dependency list for one package. |
 | `VG_WARN_SBOM_LOSSY_MANIFEST` | `vg sbom` | Merge dropped differing manifest metadata for one package. |
+| `VG_WARN_SBOM_MAVEN_NO_GROUP` | `vg sbom` | A Maven component name has no groupId. The package URL is written without a namespace. The component stays in the document. |
 | `VG_WARN_SBOM_UNKNOWN_ECOSYSTEM` | `vg sbom` | Merge recorded an unknown ecosystem as npm. |
 | `VG_WARN_SBOM_UNTRACKED_EDGES` | `vg sbom` | A lockfile format does not record dependency edges. |
 
