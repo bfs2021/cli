@@ -77,6 +77,14 @@ backward compatible.
 
 ### Fixed
 
+- **`vg sbom export` marks an optional Cargo crate.** A `[dependencies]`
+  entry with `optional = true` is stored as section `optionalDependencies`.
+  CycloneDX component `scope` is `optional`, and SPDX writes
+  `OPTIONAL_DEPENDENCY_OF`. A required crate still omits component `scope`.
+  `vibgrate:scope` stays `direct`. An `optional = true` entry under
+  `[dev-dependencies]` is still left out of the scan artifact with the other
+  dev-dependencies.
+
 - **`vg report --format html` does not turn a skipped security pack into a
   row of zeros.** A DriftScore that was not measured stays `n/a`. A security
   section whose packs are all `unavailable`, and which has no findings, stays
