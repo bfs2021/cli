@@ -77,6 +77,14 @@ backward compatible.
 
 ### Fixed
 
+- **`vg sbom export` marks a PEP 621 extra.** A package under `pyproject.toml`
+  `[project.optional-dependencies]` is stored as section `optionalDependencies`.
+  CycloneDX component `scope` is `optional`, and SPDX writes
+  `OPTIONAL_DEPENDENCY_OF`. A package also listed in `[project] dependencies`
+  keeps the optional row. The same package in several extras is one row.
+  `[dependency-groups]` and Poetry dependency groups stay unparsed. A
+  `[project] dependencies` package still omits component `scope`.
+
 - **`vg sbom export` marks an optional Cargo crate.** A `[dependencies]`
   entry with `optional = true` is stored as section `optionalDependencies`.
   CycloneDX component `scope` is `optional`, and SPDX writes

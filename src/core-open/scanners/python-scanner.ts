@@ -140,6 +140,12 @@ interface PythonDependency {
   spec: string;
   /** Normalised name for PyPI lookup (lowercase, hyphens) */
   normalisedName: string;
+  /**
+   * Manifest section for this row. Omitted means `dependencies`, so
+   * requirements.txt, Pipfile, setup.cfg, and Poetry production rows stay
+   * production. Poetry optional dependencies use this same field.
+   */
+  section?: 'dependencies' | 'optionalDependencies';
 }
 
 /**
@@ -212,8 +218,104 @@ interface PyProjectToml {
 }
 
 /**
+ * Body of a TOML table, up to the next header. The header match is not
+ * anchored with `/m`, so `$` stays end-of-string and a multi-line table is
+ * not cut off at the first line.
+ */
+function tomlTableBody(content: string, header: string): string | null {
+  const escaped = header.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = content.match(new RegExp(`\\[${escaped}\\][^\\n]*\\n([\\s\\S]*?)(?=\\n\\s*\\[|\\n*$)`));
+  return match?.[1] ?? null;
+}
+
+/** Quoted strings inside one TOML array. A `]` inside a string does not end it. */
+function readTomlStringArray(text: string, open: number): { values: string[]; end: number } | null {
+  if (text[open] !== '[') return null;
+  const values: string[] = [];
+  let i = open + 1;
+  while (i < text.length) {
+    const ch = text[i]!;
+    if (ch === ']') return { values, end: i + 1 };
+    if (ch === '"' || ch === "'") {
+      const quote = ch;
+      i += 1;
+      let cur = '';
+      let closed = false;
+      while (i < text.length) {
+        const c = text[i]!;
+        if (c === '\\' && quote === '"' && i + 1 < text.length) {
+          cur += text[i + 1];
+          i += 2;
+          continue;
+        }
+        if (c === quote) {
+          closed = true;
+          i += 1;
+          break;
+        }
+        cur += c;
+        i += 1;
+      }
+      if (!closed) return null;
+      values.push(cur);
+      continue;
+    }
+    if (ch === '#') {
+      while (i < text.length && text[i] !== '\n') i += 1;
+      continue;
+    }
+    i += 1;
+  }
+  return null;
+}
+
+/**
+ * One row per normalised name. The kept spec is the code-unit-smallest
+ * requirement text, then the smallest raw name, so extra order and entry
+ * order do not change the row.
+ */
+function preferOptionalRow(current: PythonDependency, next: PythonDependency): PythonDependency {
+  const bySpec = compareCodeUnits(current.spec, next.spec);
+  if (bySpec !== 0) return bySpec < 0 ? current : next;
+  return compareCodeUnits(current.name, next.name) <= 0 ? current : next;
+}
+
+/**
+ * PEP 621 `[project.optional-dependencies]` extras. Each extra is an array of
+ * requirement strings (one line or several, with environment markers).
+ * `[dependency-groups]` and Poetry groups are left unread.
+ */
+function parseProjectOptionalDependencies(content: string): PythonDependency[] {
+  const section = tomlTableBody(content, 'project.optional-dependencies');
+  if (!section) return [];
+  const byName = new Map<string, PythonDependency>();
+  const keyRe = /^\s*([A-Za-z0-9][-A-Za-z0-9_.]*)\s*=\s*\[/gm;
+  let match: RegExpExecArray | null;
+  while ((match = keyRe.exec(section)) !== null) {
+    const open = match.index + match[0].length - 1;
+    const parsed = readTomlStringArray(section, open);
+    if (!parsed) {
+      keyRe.lastIndex = open + 1;
+      continue;
+    }
+    keyRe.lastIndex = parsed.end;
+    for (const raw of parsed.values) {
+      const dep = parseRequirementLine(raw);
+      if (!dep) continue;
+      const row: PythonDependency = { ...dep, section: 'optionalDependencies' };
+      const prev = byName.get(dep.normalisedName);
+      byName.set(dep.normalisedName, prev ? preferOptionalRow(prev, row) : row);
+    }
+  }
+  return [...byName.values()].sort(
+    (a, b) => compareCodeUnits(a.normalisedName, b.normalisedName) || compareCodeUnits(a.name, b.name) || compareCodeUnits(a.spec, b.spec),
+  );
+}
+
+/**
  * Very lightweight TOML parser — handles the subset we care about:
  * [project] name, requires-python, dependencies array,
+ * [project.optional-dependencies] extras,
  * [tool.poetry.dependencies] table.
  *
  * We don't pull in a full TOML parser to keep deps minimal.
@@ -259,6 +361,13 @@ function parsePyprojectToml(content: string): PyProjectToml {
         result.dependencies.push({ name, spec: ver ? `==${ver}` : '', normalisedName });
       }
     }
+  }
+
+  // An optionalDependencies row wins over a production listing of the same name.
+  const optional = parseProjectOptionalDependencies(content);
+  if (optional.length > 0) {
+    const names = new Set(optional.map((dep) => dep.normalisedName));
+    result.dependencies = result.dependencies.filter((dep) => !names.has(dep.normalisedName)).concat(optional);
   }
 
   return result;
@@ -529,7 +638,7 @@ async function scanOnePythonProject(
 
     dependencies.push({
       package: dep.name,
-      section: 'dependencies',
+      section: dep.section ?? 'dependencies',
       currentSpec: dep.spec || '*',
       resolvedVersion,
       latestStable,
