@@ -13,7 +13,7 @@ import { PyPICache } from './pypi-cache.js';
 import { latestStable, runtimeEolStatus, extractCycle, eolDate } from '../runtimes/catalog.js';
 import { BUNDLED_RUNTIME_CATALOG } from '../runtimes/snapshot.js';
 import type { RuntimeCatalog } from '../runtimes/types.js';
-import type { ProjectScan, DependencyRow, DetectedFramework } from '../types.js';
+import type { ProjectScan, DependencyRow, DetectedFramework, DepSection } from '../types.js';
 import { compareCodeUnits } from '../utils/code-unit.js';
 
 /** Well-known Python frameworks / libraries to track */
@@ -141,10 +141,11 @@ interface PythonDependency {
   /** Normalised name for PyPI lookup (lowercase, hyphens) */
   normalisedName: string;
   /**
-   * Manifest section. Absent means `dependencies`. A Poetry inline table
-   * with `optional = true` sets `optionalDependencies`.
+   * Manifest section. Omitted means `dependencies`.
+   * PEP 621 extras and a Poetry inline table with `optional = true`
+   * both set `optionalDependencies` on this field.
    */
-  section?: 'dependencies' | 'optionalDependencies';
+  section?: DepSection;
 }
 
 /**
@@ -216,6 +217,169 @@ interface PyProjectToml {
   projectName?: string;
 }
 
+function declaredSection(dep: PythonDependency): DepSection {
+  return dep.section ?? 'dependencies';
+}
+
+/**
+ * One row per normalised name.
+ * `optionalDependencies` wins over a production listing. `devDependencies`
+ * wins only when the name is not also in `dependencies` (including a
+ * dev-only optional name). Two optional rows keep the code-unit-smaller
+ * spec, then the smaller raw name, so extra order does not matter.
+ * Two production rows keep the first one parsed.
+ */
+function pickPythonDep(rows: PythonDependency[]): PythonDependency {
+  if (rows.length === 1) return rows[0]!;
+  const sections = new Set(rows.map(declaredSection));
+  let winning: DepSection = 'dependencies';
+  if (sections.has('devDependencies') && !sections.has('dependencies')) winning = 'devDependencies';
+  else if (sections.has('optionalDependencies')) winning = 'optionalDependencies';
+
+  const candidates = rows.filter((row) => declaredSection(row) === winning);
+  if (candidates.length === 0) return rows[0]!;
+  if (winning !== 'optionalDependencies') return candidates[0]!;
+  return candidates.slice().sort((a, b) => {
+    const bySpec = compareCodeUnits(a.spec, b.spec);
+    if (bySpec !== 0) return bySpec;
+    return compareCodeUnits(a.name, b.name);
+  })[0]!;
+}
+
+function collapsePythonDeps(rows: PythonDependency[]): PythonDependency[] {
+  const groups = new Map<string, PythonDependency[]>();
+  const order: string[] = [];
+  for (const row of rows) {
+    const list = groups.get(row.normalisedName);
+    if (list) list.push(row);
+    else {
+      groups.set(row.normalisedName, [row]);
+      order.push(row.normalisedName);
+    }
+  }
+  return order.map((key) => pickPythonDep(groups.get(key)!));
+}
+
+/** Body of a TOML table, up to the next header. The header line itself is excluded. */
+function tomlTableBody(content: string, header: string): string | null {
+  const escaped = header.replace(/\./g, '\\.');
+  const re = new RegExp(`^[ \\t]*\\[\\s*${escaped}\\s*\\][^\\n]*(?:\\n|$)`, 'm');
+  const match = re.exec(content);
+  if (!match) return null;
+  const after = content.slice(match.index + match[0].length);
+  const next = after.search(/\n[ \t]*\[/);
+  return next === -1 ? after : after.slice(0, next);
+}
+
+function skipTomlString(text: string, start: number): number {
+  const quote = text[start]!;
+  if (text.startsWith(quote + quote + quote, start)) {
+    const end = text.indexOf(quote + quote + quote, start + 3);
+    return end === -1 ? text.length : end + 3;
+  }
+  let i = start + 1;
+  while (i < text.length) {
+    if (quote === '"' && text[i] === '\\') {
+      i += 2;
+      continue;
+    }
+    if (text[i] === quote) return i + 1;
+    if (text[i] === '\n') return i;
+    i++;
+  }
+  return text.length;
+}
+
+/** Index of the `]` that closes an array starting at `start` (the first character inside the array). */
+function indexOfClosingBracket(text: string, start: number): number {
+  let i = start;
+  while (i < text.length) {
+    const ch = text[i]!;
+    if (ch === '#') {
+      const nl = text.indexOf('\n', i);
+      i = nl === -1 ? text.length : nl + 1;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      i = skipTomlString(text, i);
+      continue;
+    }
+    if (ch === ']') return i;
+    i++;
+  }
+  return -1;
+}
+
+function collectQuotedStrings(body: string, out: string[]): void {
+  let i = 0;
+  while (i < body.length) {
+    const ch = body[i]!;
+    if (ch === '#') {
+      const nl = body.indexOf('\n', i);
+      i = nl === -1 ? body.length : nl + 1;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      if (body.startsWith(ch + ch + ch, i)) {
+        const end = body.indexOf(ch + ch + ch, i + 3);
+        if (end === -1) return;
+        out.push(body.slice(i + 3, end));
+        i = end + 3;
+        continue;
+      }
+      let j = i + 1;
+      let value = '';
+      while (j < body.length) {
+        if (ch === '"' && body[j] === '\\') {
+          const escaped = body[j + 1];
+          if (escaped === undefined) break;
+          value += escaped;
+          j += 2;
+          continue;
+        }
+        if (body[j] === ch || body[j] === '\n') break;
+        value += body[j];
+        j++;
+      }
+      out.push(value);
+      i = body[j] === ch ? j + 1 : j;
+      continue;
+    }
+    i++;
+  }
+}
+
+/**
+ * Requirement strings from every array in a TOML table body.
+ * A `]` inside a quoted requirement (an extra marker) does not end the array.
+ * Comments are skipped. `[dependency-groups]` is a different table and is not read here.
+ */
+function requirementStringsFromTomlArrays(section: string): string[] {
+  const out: string[] = [];
+  let i = 0;
+  while (i < section.length) {
+    const ch = section[i]!;
+    if (ch === '#') {
+      const nl = section.indexOf('\n', i);
+      i = nl === -1 ? section.length : nl + 1;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      i = skipTomlString(section, i);
+      continue;
+    }
+    if (ch === '[') {
+      const end = indexOfClosingBracket(section, i + 1);
+      if (end === -1) break;
+      collectQuotedStrings(section.slice(i + 1, end), out);
+      i = end + 1;
+      continue;
+    }
+    i++;
+  }
+  return out;
+}
+
 /**
  * True when a Poetry inline table sets `optional = true`.
  * `optional = false` and a quoted version spec stay required.
@@ -229,12 +393,15 @@ function poetryInlineOptional(line: string): boolean {
 /**
  * Very lightweight TOML parser — handles the subset we care about:
  * [project] name, requires-python, dependencies array,
+ * [project.optional-dependencies] extra arrays,
  * [tool.poetry.dependencies] table.
  *
+ * `[dependency-groups]` and `[tool.poetry.group.*.dependencies]` are not read.
  * We don't pull in a full TOML parser to keep deps minimal.
  */
 function parsePyprojectToml(content: string): PyProjectToml {
   const result: PyProjectToml = { dependencies: [] };
+  const rows: PythonDependency[] = [];
 
   // Extract project name
   const nameMatch = content.match(/^\s*name\s*=\s*"([^"]+)"/m);
@@ -253,7 +420,7 @@ function parsePyprojectToml(content: string): PyProjectToml {
     let m: RegExpExecArray | null;
     while ((m = lineRegex.exec(block)) !== null) {
       const dep = parseRequirementLine(m[1]!);
-      if (dep) result.dependencies.push(dep);
+      if (dep) rows.push(dep);
     }
   }
 
@@ -271,13 +438,14 @@ function parsePyprojectToml(content: string): PyProjectToml {
         }
         const ver = kv[2] ?? kv[3] ?? '';
         const normalisedName = name.toLowerCase().replace(/[_.]+/g, '-');
+        const spec = ver ? `==${ver}` : '';
         // Quoted specs stay required. `optional = true` is read only from an
         // inline table (`psycopg = { version = "^3.1", optional = true }`).
         // The `python` key continued above and is not a package row.
         const optional = kv[3] !== undefined && poetryInlineOptional(line);
-        result.dependencies.push({
+        rows.push({
           name,
-          spec: ver ? `==${ver}` : '',
+          spec,
           normalisedName,
           ...(optional ? { section: 'optionalDependencies' as const } : {}),
         });
@@ -285,6 +453,16 @@ function parsePyprojectToml(content: string): PyProjectToml {
     }
   }
 
+  // PEP 621 extras. Every extra is optional, including one named `dev`.
+  const optionalSection = tomlTableBody(content, 'project.optional-dependencies');
+  if (optionalSection) {
+    for (const requirement of requirementStringsFromTomlArrays(optionalSection)) {
+      const dep = parseRequirementLine(requirement);
+      if (dep) rows.push({ ...dep, section: 'optionalDependencies' });
+    }
+  }
+
+  result.dependencies = collapsePythonDeps(rows);
   return result;
 }
 
