@@ -131,9 +131,11 @@ asserts stable output.
                            path/tree/...)      AI coding agents)
 ```
 
-1. **build** discovers files, parses them via the worker pool using bundled
-   tree-sitter WASM grammars, resolves symbols/imports into typed relations,
-   runs analysis, and writes a stable `graph.json`.
+1. **build** lists each project directory once and reuses that listing for
+   lockfiles, source discovery, manifests, docs, and workspace packages. It
+   parses files via the worker pool using bundled tree-sitter WASM grammars,
+   resolves symbols/imports into typed relations, runs analysis, and writes a
+   stable `graph.json`.
 2. **query** commands and the **MCP server** both load `graph.json` and answer
    questions against it — they do not re-parse the source.
 3. **drift reporting** runs on top of `@vibgrate/core-open` and the resolved

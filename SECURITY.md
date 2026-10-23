@@ -75,7 +75,7 @@ schema checks it on arrival.
 **The remediation agent is the one exception across Vibgrate.** When you ask it
 to write a fix, it clones your repository into an isolated virtual machine we
 control, makes the change, and hands you a pull request. It only runs when you
-ask. See <https://vibgrate.com/subprocessors> for who handles what.
+ask. See <https://vibgrate.com/trust/subprocessors> for who handles what.
 
 Find a path where code or sensitive data leaves your machine without you asking?
 That is a security issue. Report it through the process above.

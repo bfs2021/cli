@@ -500,6 +500,8 @@ export async function openDocument(
 }
 
 function current(mainRoot: string, id: string): { meta: StoreMeta; doc: ReviewDoc } {
+  // Reject before any path join. `../` and other non-ids never become a directory.
+  if (!validId(id)) throw new Error(`not a review document id: ${id}`);
   const meta = readMeta(mainRoot, id);
   const doc = meta ? readVersion(mainRoot, id, meta.current) : null;
   if (!meta || !doc) throw new Error(`no saved review document ${id} — open one first`);

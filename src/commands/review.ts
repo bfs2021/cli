@@ -53,12 +53,12 @@ import { ensureCodeMap, reviewPolicyState, seedReviewPolicy } from '../review/pr
 import { exportCorrectnessPublishRows } from '../review/finding-publish.js';
 import { changeSetFromUnifiedDiff, collectChangeSet, defaultRun, gitTopLevel, isGitRepo, normalizeRemote, repoKey, type ChangeSet } from '../review/git.js';
 import { addSessionTrailers, hookPath, setTrailer, trailerState, TRAILER } from '../review/provenance.js';
-import { preparePush, pushProvenance, trailerSessionIds } from '../review/provenance-cloud.js';
-import { cloudDsn, fetchComments, formatThreads, replyToComment } from '../review/doc-comments.js';
+import { nothingToPushLine, preparePush, pushProvenance, refuseProvenancePushWhenOffline, trailerSessionIds } from '../review/provenance-cloud.js';
+import { cloudDsn, fetchComments, formatThreads, refuseReviewDocCloudWhenOffline, replyToComment } from '../review/doc-comments.js';
 import { loadHaileProvider } from '../engine/haile/haile-provider.js';
 import { collectGroupSignals, formatGroupsText, groupChangeSet, GROUPS_SCHEMA, validateGroups } from '../review/groups.js';
 import { buildDocument, resolveScope, scopeResolver, type BuildOptions, type DocScope } from '../review/doc-build.js';
-import { mergeDocuments, multiResolver, parseAlso, repoId, type OtherDoc } from '../review/multi-repo.js';
+import { mergeDocuments, multiResolver, parseAlso, repoId, requireAlsoCheckout, type OtherDoc } from '../review/multi-repo.js';
 import { checkAgainstChange, documentHistory, getDocument, openDocument, patchDocument, restoreVersion, savedOrBuilt } from '../review/doc-store.js';
 import {
   DOC_SCHEMA,
@@ -105,7 +105,7 @@ export function registerReview(program: Command): void {
   const cmd = program
     .command('review')
     .description('Vibgrate Review — architecture + security-control review of the current change, locally')
-    .option('--base <ref>', 'review HEAD against the merge-base with <ref> (e.g. origin/main)')
+    .option('--base <ref>', 'review HEAD against the merge-base with <ref> (e.g. origin/main); read the review policy and .vibgrate/review packs from <ref>, not from this change')
     .option(
       '--in-place',
       'review the working tree as-is (the default without --base; with --base, include uncommitted work against the merge-base)',
@@ -242,7 +242,7 @@ export function registerReview(program: Command): void {
     .command('explain')
     .description('show the evidence behind one finding from the current change')
     .argument('<finding-id>', 'a finding id from the current change (e.g. blast:<node_id>, arch:<rule>:<path>)')
-    .option('--base <ref>', 'review HEAD against the merge-base with <ref>')
+    .option('--base <ref>', 'review HEAD against the merge-base with <ref>; read the review policy and .vibgrate/review packs from <ref>, not from this change')
     .action(async function (this: Command, findingId: string, opts: { base?: string }) {
       const global = readGlobal(this);
       const explainRoot = rootOf(global);
@@ -293,7 +293,7 @@ export function registerReview(program: Command): void {
     .description(
       'emit deterministic vg.review.findings.v1 rows from the change set and the code graph (correctness blast-radius + architecture/security scanners; no hosted model; writes .vibgrate/review-propose-handoff.json for vg review propose)',
     )
-    .option('--base <ref>', 'review HEAD against the merge-base with <ref> (e.g. origin/main)')
+    .option('--base <ref>', 'review HEAD against the merge-base with <ref> (e.g. origin/main); read the review policy and .vibgrate/review packs from <ref>, not from this change')
     .option(
       '--in-place',
       'include the working tree when --base is also set (the default without --base already is in-place)',
@@ -456,7 +456,7 @@ export function registerReview(program: Command): void {
       }
       if (!isGitRepo(root)) throw new CliError('`vg review trailer` needs a git repository', ExitCode.USAGE_ERROR);
       if (state === 'push') {
-        await pushTrailerSessions(top, opts, Boolean(global.json));
+        await pushTrailerSessions(top, opts, Boolean(global.json), global.offline);
         return;
       }
       if (state !== 'on' && state !== 'off' && state !== 'status') {
@@ -485,7 +485,7 @@ export function registerReview(program: Command): void {
     .description(
       'write the review document for this change (vg.review.doc.v1): what changed, grouped, with every hunk and finding pinned to verified lines; --check validates one an agent or person edited; --save keeps it so an agent can patch it block by block',
     )
-    .option('--base <ref>', 'review HEAD against the merge-base with <ref> (e.g. origin/main)')
+    .option('--base <ref>', 'review HEAD against the merge-base with <ref> (e.g. origin/main); read the review policy and .vibgrate/review packs from <ref>, not from this change')
     .option('--in-place', 'include the working tree when --base is also set')
     .option('--format <fmt>', 'output format (md | json)', 'md')
     .option('-o, --out <file>', 'write the document to a file')
@@ -597,6 +597,7 @@ export function registerReview(program: Command): void {
 
       const scope = scopeOf(opts);
       if (opts.comments || opts.reply) {
+        refuseReviewDocCloudWhenOffline(opts.reply ? '--reply' : '--comments', global.offline);
         // The pushed document for this change: same repository, head and base as `--push` sends.
         const { change } = resolveScope(mainRoot, scope);
         const target = { repo_key: repoKey(change.remote, change.topLevel), head_sha: change.headSha, base_sha: change.baseSha };
@@ -630,7 +631,10 @@ export function registerReview(program: Command): void {
       const build = { findings: opts.findings, diagrams: opts.diagrams, baseGraph: opts.baseGraph, graphPath: global.graph, generatedAt: global.generatedAt, log: say };
       const show = async (doc: ReviewDoc): Promise<void> => {
         emit(doc);
-        if (opts.push) await pushDocument(mainRoot, doc, opts.dsn, say);
+        if (opts.push) {
+          refuseReviewDocCloudWhenOffline('--push', global.offline);
+          await pushDocument(mainRoot, doc, opts.dsn, say);
+        }
       };
       if (opts.also?.length) {
         if (opts.save || opts.saved || scope.kind === 'session') {
@@ -667,7 +671,7 @@ export function registerReview(program: Command): void {
       '<finding-id>',
       'a finding id from the current change, --findings JSON, or the last-run .vibgrate/review-propose-handoff.json (e.g. blast:<node_id>, arch:<rule>:<path>)',
     )
-    .option('--base <ref>', 'review HEAD against the merge-base with <ref> (same as findings-from-diff --base)')
+    .option('--base <ref>', 'review HEAD against the merge-base with <ref> (same as findings-from-diff --base); read the review policy and .vibgrate/review packs from <ref>, not from this change')
     .option(
       '--in-place',
       'include the working tree when --base is also set (same as findings-from-diff --in-place)',
@@ -957,13 +961,15 @@ async function buildMultiRepoDocument(
   also: string[],
   build: BuildOptions & { inPlace?: boolean },
 ): Promise<ReviewDoc> {
+  const specs = also.map(parseAlso);
+  const roots = specs.map((spec) => requireAlsoCheckout(mainRoot, spec));
   const primary = await buildDocument(mainRoot, scope, build);
   const taken = new Set<string>();
   const others: OtherDoc[] = [];
   const resolvers = new Map<string, PinResolver>();
-  for (const spec of also.map(parseAlso)) {
-    const root = path.resolve(mainRoot, spec.dir);
-    if (!fs.existsSync(root)) throw new CliError(`--also ${spec.dir}: no such directory`, ExitCode.USAGE_ERROR);
+  for (let i = 0; i < specs.length; i++) {
+    const spec = specs[i]!;
+    const root = roots[i]!;
     const base = spec.base ?? (scope.kind === 'change' ? scope.base : null);
     // Each checkout reads its own code map; --graph names only this one's.
     const built = await buildDocument(root, { kind: 'change', base, in_place: Boolean(build.inPlace) }, { ...build, graphPath: undefined });
@@ -1141,7 +1147,7 @@ function reportIssues(issues: { path: string; code: string; message: string }[],
  * `vg why <file:line> --cloud` can read them. Sessions that ran elsewhere are
  * listed, not sent; Cloud stores nothing unless Agent provenance is on.
  */
-async function pushTrailerSessions(top: string, opts: { base?: string; dsn?: string; dryRun?: boolean }, asJson: boolean): Promise<void> {
+async function pushTrailerSessions(top: string, opts: { base?: string; dsn?: string; dryRun?: boolean }, asJson: boolean, offline: boolean | undefined): Promise<void> {
   const ids = trailerSessionIds(top, opts.base);
   const prepared = preparePush(top, ids);
   const summary = {
@@ -1153,13 +1159,14 @@ async function pushTrailerSessions(top: string, opts: { base?: string; dsn?: str
   if (opts.dryRun || prepared.sessions.length === 0) {
     if (asJson) out(JSON.stringify({ ...summary, sent: 0 }));
     else {
-      if (ids.length === 0) info(c.dim(`  no ${TRAILER} trailer on ${opts.base ? `${opts.base}..HEAD` : 'the commits no remote branch has yet'}`));
+      if (ids.length === 0) info(c.dim(`  ${nothingToPushLine(opts.base)}`));
       for (const s of summary.sessions) info(`  would send ${c.bold(s.id)}: ${s.title} ${c.dim(`(${s.turns} turns)`)}`);
       for (const id of prepared.missing) info(c.dim(`  ${id} is not on this machine, so it was not sent`));
       for (const r of prepared.refused) info(c.yellow(`  ${r.id} was not sent: ${r.reason}`));
     }
     return;
   }
+  refuseProvenancePushWhenOffline(offline);
   const stored = await pushProvenance(cloudDsn(opts.dsn), prepared);
   if (asJson) {
     out(JSON.stringify({ ...summary, sent: stored }));
