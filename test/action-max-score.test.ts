@@ -37,6 +37,7 @@ function runScan(maxScore: string) {
       INPUT_OUTPUT: 'vibgrate.sarif',
       INPUT_FAIL_ON: '',
       INPUT_MAX_SCORE: maxScore,
+      INPUT_FAIL_ON_EPSS: '',
       INPUT_BASELINE: '',
       INPUT_MAX_WORSENING: '',
       INPUT_SUMMARY: 'vibgrate-summary.json',

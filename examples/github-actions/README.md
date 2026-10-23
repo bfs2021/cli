@@ -79,6 +79,18 @@ Omit `image-tag` to use that default. Omit `fail-on` and the job does not fail o
     image-tag: "2026.1005.1"
 ```
 
+`fail-on`, `max-score`, and `fail-on-epss` are separate gates on the same Action. `max-score` is a DriftScore from 0 to 100 and maps to `--drift-budget`. `fail-on-epss` is a probability from 0 to 1 and maps to `--fail-on-epss`. Leave `fail-on-epss` empty to never fail on EPSS. It needs `vulns: true`; without that the step fails before the scan and tells you to set it. A value that is not a number from 0 to 1 fails the step before the scan. A scanner image that does not list `--fail-on-epss` in `scan --help` prints a notice and runs the scan without that flag.
+
+
+```yaml
+- uses: vibgrate/cli@v1
+  with:
+    vulns: true
+    fail-on: error
+    max-score: 40
+    fail-on-epss: '0.1'
+```
+
 ## When the job fails, and when it only warns
 
 Two different knobs both use the word "warn". They do not mean the same thing.
@@ -90,12 +102,18 @@ Two different knobs both use the word "warn". They do not mean the same thing.
 
 `--drift-budget` and `--drift-worsening` are flags. They have no warn mode. On a breach they exit 2. If either flag is present, `driftBudget` in the project config is ignored.
 
+`--fail-on-epss` replaces `failOnEpss` in `.vibgrate/config.yml` or `vibgrate.config.json`. The threshold is a probability from 0 to 1. A score equal to the threshold exits 2. A missing score is not compared and is not treated as 0. The flag reads advisories from `--vulns` or `--full`. When there is no score to compare, the job exits 0.
+
 | Situation | Exit | Job |
 | --- | --- | --- |
 | No `--fail-on`, no budget flag, and no enforced config budget | 0 | Pass. Findings are still in the report. |
 | `--fail-on error`, and no error-level finding | 0 | Pass. Warnings do not fail this gate. |
 | `--fail-on error`, and at least one error-level finding | 2 | Fail. |
 | `--fail-on warn`, and any warning or error finding | 2 | Fail. |
+| `--fail-on-epss 0.1`, an advisory EPSS score at or above 0.1 | 2 | Fail. A score equal to the threshold fails. |
+| `--fail-on-epss 0.1`, every compared score below 0.1 | 0 | Pass. |
+| `--fail-on-epss`, no EPSS score to compare | 0 | Pass. A missing score is absent, not 0. |
+| `--fail-on-epss` value outside 0 to 1 | 1 | Fail before the scan. This is a runtime error, not a usage error. |
 | `--drift-budget 40`, DriftScore **above** 40 | 2 | Fail. A score equal to 40 passes. |
 | `--drift-budget 40`, DriftScore not measured | 0 | Pass. The score is absent, not 0, and the budget is not compared. |
 | `--drift-worsening 5`, score measured, no `--baseline` | 2 | Fail. The flag cannot compare. |
