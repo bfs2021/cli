@@ -13,7 +13,7 @@ import { PyPICache } from './pypi-cache.js';
 import { latestStable, runtimeEolStatus, extractCycle, eolDate } from '../runtimes/catalog.js';
 import { BUNDLED_RUNTIME_CATALOG } from '../runtimes/snapshot.js';
 import type { RuntimeCatalog } from '../runtimes/types.js';
-import type { ProjectScan, DependencyRow, DetectedFramework } from '../types.js';
+import type { DepSection, ProjectScan, DependencyRow, DetectedFramework } from '../types.js';
 import { compareCodeUnits } from '../utils/code-unit.js';
 
 /** Well-known Python frameworks / libraries to track */
@@ -140,6 +140,11 @@ interface PythonDependency {
   spec: string;
   /** Normalised name for PyPI lookup (lowercase, hyphens) */
   normalisedName: string;
+  /**
+   * Manifest section for the scan row. Omitted means `dependencies`.
+   * A Poetry inline table with `optional = true` sets `optionalDependencies`.
+   */
+  section?: DepSection;
 }
 
 /**
@@ -214,7 +219,7 @@ interface PyProjectToml {
 /**
  * Very lightweight TOML parser — handles the subset we care about:
  * [project] name, requires-python, dependencies array,
- * [tool.poetry.dependencies] table.
+ * [tool.poetry.dependencies] table, including inline `optional = true`.
  *
  * We don't pull in a full TOML parser to keep deps minimal.
  */
@@ -256,7 +261,17 @@ function parsePyprojectToml(content: string): PyProjectToml {
         }
         const ver = kv[2] ?? kv[3] ?? '';
         const normalisedName = name.toLowerCase().replace(/[_.]+/g, '-');
-        result.dependencies.push({ name, spec: ver ? `==${ver}` : '', normalisedName });
+        // `optional = true` lives only on an inline table. A plain string
+        // requirement, and `optional = false`, stay a production row. The
+        // `python` key is skipped above and never reaches this push.
+        const inline = /\{.*\}/.exec(kv[0])?.[0];
+        const optional = inline !== undefined && /optional\s*=\s*true/.test(inline);
+        result.dependencies.push({
+          name,
+          spec: ver ? `==${ver}` : '',
+          normalisedName,
+          ...(optional ? { section: 'optionalDependencies' as const } : {}),
+        });
       }
     }
   }
@@ -529,7 +544,7 @@ async function scanOnePythonProject(
 
     dependencies.push({
       package: dep.name,
-      section: 'dependencies',
+      section: dep.section ?? 'dependencies',
       currentSpec: dep.spec || '*',
       resolvedVersion,
       latestStable,

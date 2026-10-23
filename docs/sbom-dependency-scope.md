@@ -56,7 +56,7 @@ When the same name and version is declared in more than one section, one mark is
 | `composer.json` `require` | Section `dependencies`. Exported. | `vibgrate:scope` = `direct`. `dependencies` omitted. | Annotation `scope=direct`. `relationships` omitted. |
 | `composer.json` `require-dev` | Parsed, then removed before the scan artifact is built. | Absent. `composer.lock` `packages-dev` is not expanded into components. | Absent. |
 | `composer.lock` `packages` (a production package the manifest did not declare) | Not expanded into SBOM components. | Absent. | Absent. |
-| `pyproject.toml` `[project] dependencies` and `[tool.poetry.dependencies]` | Stored as section `dependencies`. The `python` key is skipped. | `vibgrate:scope` = `direct`. `dependencies` omitted. | Annotation `scope=direct`. `relationships` omitted. |
+| `pyproject.toml` `[project] dependencies` and `[tool.poetry.dependencies]`, including Poetry `optional = true` | A `[project] dependencies` entry and a required Poetry dependency are section `dependencies`. A Poetry inline table with `optional = true` is section `optionalDependencies`. The `python` key is skipped. Both are exported. | `vibgrate:scope` = `direct` for both. Component `scope` = `optional` on the optional package. Omitted on a required package. `dependencies` omitted. | Annotation `scope=direct`. `OPTIONAL_DEPENDENCY_OF` from the optional package to `SPDXRef-DOCUMENT`. A required package has no document relationship. |
 | `pyproject.toml` `[project.optional-dependencies]`, `[dependency-groups]`, `[tool.poetry.group.dev.dependencies]` | Not parsed. | Absent, unless `poetry.lock` lists the package, in which case `vibgrate:scope` = `transitive`. | Same. |
 | `poetry.lock` `category` (`main` or `dev`) | Not read. Name and version only. `uv.lock` uses the same collector. | `direct` when a parsed manifest row has that version, otherwise `transitive`. A `category = "dev"` package is `transitive`. | Annotation `scope=direct` or `scope=transitive`. `relationships` omitted. |
 
@@ -101,6 +101,8 @@ The same manifest with a `pnpm-lock.yaml` or a `yarn.lock` writes the same `dire
 
 A Cargo tree with `[dependencies] serde`, `[dependencies] optional-crate` (`optional = true`), `[dev-dependencies] criterion`, and `[build-dependencies] cc` exports `serde` and `optional-crate` as `direct`. `criterion`, `cc`, and the root package entry from `Cargo.lock` are `transitive`. `optional-crate` has component `scope` `optional` and SPDX `OPTIONAL_DEPENDENCY_OF`. `serde` omits component `scope`. Lockfile `dependencies` and `DEPENDS_ON` are omitted.
 
+A Poetry `[tool.poetry.dependencies]` table with `requests = "2.31.0"` and `psycopg = { version = "^3.1", optional = true }` exports both as `direct`. `psycopg` has component `scope` `optional` and SPDX `OPTIONAL_DEPENDENCY_OF`. `requests` omits component `scope`. The `python` key is skipped. Lockfile `dependencies` and `DEPENDS_ON` are omitted.
+
 ## Gaps
 
 1. CycloneDX component `scope` is omitted on a production row, a peer row, and a lockfile-only row. The value `required` is never written. A consumer that follows the spec treats an omitted `scope` as `required`. Peer dependencies have no scope value of their own.
@@ -112,5 +114,5 @@ A Cargo tree with `[dependencies] serde`, `[dependencies] optional-crate` (`opti
 7. The scan's pnpm version index does not read importer `peerDependencies`. A peer whose spec is one concrete version is still exported at that spec, as `direct`, when the index has no pin.
 8. Cargo `[dev-dependencies]` and `[build-dependencies]` are not direct rows. When `Cargo.lock` lists them they are `transitive`. The root `[[package]]` is a component too. When the lockfile does not list a dev or build crate, that crate is absent.
 9. PHP `require-dev` is absent, including packages under `composer.lock` `packages-dev`. A production package that appears only under `composer.lock` `packages` is also absent. The export does not expand `composer.lock`.
-10. Poetry optional extras (`[project.optional-dependencies]`), `[dependency-groups]`, and `[tool.poetry.group.dev.dependencies]` are not manifest rows. `poetry.lock` `category = "dev"` becomes `transitive`. A dev package in the manifest group and missing from the lockfile is absent.
+10. Poetry optional extras (`[project.optional-dependencies]`), `[dependency-groups]`, and `[tool.poetry.group.dev.dependencies]` are not manifest rows. An inline `optional = true` on a `[tool.poetry.dependencies]` entry is a manifest row (see the mapping). `poetry.lock` `category = "dev"` becomes `transitive`. A dev package in the manifest group and missing from the lockfile is absent.
 11. `--no-transitive` removes lockfile-only packages and the CycloneDX dependency graph. Development, optional, and peer packages that the manifest declared remain, marked `direct`. Development and optional rows still get component `scope` and the SPDX relationship. Peer rows do not.
