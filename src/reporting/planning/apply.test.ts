@@ -1,4 +1,7 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { pmCommandFor, applyPlan, type UpgradeCommand } from './apply.js';
 import type { PlannedUpgrade } from './types.js';
 
@@ -139,5 +142,55 @@ describe('applyPlan', () => {
     });
     expect(results[0].status).toBe('manual');
     expect(results[0].detail).toMatch(/cargo is not installed.*upgrade manually/);
+  });
+
+  it('does not run the package manager for an upgrade the planner already blocked', () => {
+    const run = vi.fn(() => ({ ok: true }));
+    const results = applyPlan('/repo', [upgrade({ package: 'lodash', ecosystem: 'npm', to: '4.17.21', block: 'policy' })], { run });
+    expect(run).not.toHaveBeenCalled();
+    expect(results[0]).toMatchObject({ status: 'skipped', detail: 'blocked by policy' });
+  });
+});
+
+describe('applyPlan manifest restore', () => {
+  let dir: string;
+  afterEach(() => {
+    if (dir) fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  function seed(): { pkg: string; lock: string } {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vg-fix-restore-'));
+    const pkg = path.join(dir, 'package.json');
+    const lock = path.join(dir, 'package-lock.json');
+    fs.writeFileSync(pkg, JSON.stringify({ dependencies: { lodash: '4.17.20' } }));
+    fs.writeFileSync(lock, JSON.stringify({ packages: { 'node_modules/lodash': { version: '4.17.20' } } }));
+    return { pkg, lock };
+  }
+
+  it('restores the manifest and lockfile when the install fails after editing them', () => {
+    const { pkg, lock } = seed();
+    const beforePkg = fs.readFileSync(pkg);
+    const beforeLock = fs.readFileSync(lock);
+    const results = applyPlan(dir, [upgrade({ package: 'lodash', ecosystem: 'npm', to: '4.17.21' })], {
+      run: () => {
+        fs.writeFileSync(pkg, JSON.stringify({ dependencies: { lodash: '4.17.21' } }));
+        fs.writeFileSync(lock, JSON.stringify({ packages: { 'node_modules/lodash': { version: '4.17.21' } } }));
+        return { ok: false, detail: 'exit 1' };
+      },
+    });
+    expect(results[0].status).toBe('failed');
+    expect(fs.readFileSync(pkg)).toEqual(beforePkg);
+    expect(fs.readFileSync(lock)).toEqual(beforeLock);
+  });
+
+  it('keeps a successful install', () => {
+    const { pkg } = seed();
+    applyPlan(dir, [upgrade({ package: 'lodash', ecosystem: 'npm', to: '4.17.21' })], {
+      run: () => {
+        fs.writeFileSync(pkg, JSON.stringify({ dependencies: { lodash: '4.17.21' } }));
+        return { ok: true };
+      },
+    });
+    expect(JSON.parse(fs.readFileSync(pkg, 'utf8')).dependencies.lodash).toBe('4.17.21');
   });
 });
