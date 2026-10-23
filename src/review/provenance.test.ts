@@ -101,8 +101,10 @@ describe('who wrote a line', () => {
     const found = p.sessions[0]!.found!;
     expect(turnsTouching(found, dir, 'src/a.ts')).toEqual([{ turn: 2, asked: 'ask 2', answered: 'did 2' }]);
 
-    // Line 1 came from a commit with no trailer.
+    // Line 1 came from a commit with no trailer. git log's trailer format is empty.
     expect(lineProvenance(dir, 'src/a.ts', 1).sessions).toEqual([]);
+    expect(git('log', '-1', '--skip=1', '--format=%(trailers:key=Vibgrate-Session,valueonly)').trim()).toBe('');
+    expect(git('log', '-1', '--format=%B')).toContain('Vibgrate-Session: sess_touch1');
   });
 
   it('reports a session the trailer names but this machine does not have', () => {

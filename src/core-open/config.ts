@@ -8,7 +8,7 @@ import type * as TsModule from 'typescript';
 import { parseDocument } from 'yaml';
 import type { ScanExclusion, ScanExclusionSource, VibgrateConfig } from './types.js';
 import { parseDriftBudget } from './drift-budget.js';
-import { codedWarning, WARNING_CODES, type CodedWarning } from './warnings.js';
+import { codedWarning, formatWarningLine, WARNING_CODES, type CodedWarning } from './warnings.js';
 import { pathExists, readTextFile } from './utils/fs.js';
 import { redactSecrets } from './utils/redact.js';
 
@@ -274,6 +274,11 @@ function isNonNegativeNumber(value: unknown): boolean {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
 
+/** EPSS probability. 0 and 1 are real scores, not sentinels. */
+function isUnitInterval(value: unknown): boolean {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
+}
+
 const SHAPE_CHECKS: readonly ShapeCheck[] = [
   { key: 'include', ok: isStringList, expect: 'a list of strings, for example include: ["src/**"]' },
   { key: 'exclude', ok: isStringList, expect: 'a list of strings, for example exclude: ["legacy/**"]' },
@@ -283,6 +288,7 @@ const SHAPE_CHECKS: readonly ShapeCheck[] = [
   { key: 'scanners', ok: (value) => value === false || isRecord(value), expect: 'a mapping of scanner settings, or false' },
   { key: 'thresholds', ok: isRecord, expect: 'a mapping of threshold settings' },
   { key: 'driftBudget', ok: isRecord, expect: 'a mapping of budget settings' },
+  { key: 'failOnEpss', ok: isUnitInterval, expect: 'a number from 0 to 1, for example failOnEpss: 0.1' },
   { key: 'review', ok: isRecord, expect: 'a mapping of review settings' },
 ];
 
@@ -667,6 +673,78 @@ const DEFAULT_MAX_FILE_SIZE = 5_242_880;
 /** 3 minutes — default per-project scan timeout (seconds) */
 const DEFAULT_PROJECT_SCAN_TIMEOUT = 180;
 
+/** One warning per root and message, so a scan that loads config twice prints it once. */
+const emittedDriftBudgetConflicts = new Set<string>();
+
+function stableJson(value: unknown): string {
+  return JSON.stringify(canonicalize(value));
+}
+
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (!isRecord(value)) return value;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(value).sort()) out[key] = canonicalize(value[key]);
+  return out;
+}
+
+/**
+ * When more than one YAML or JSON config sets `driftBudget` and the values
+ * differ, name every file, the value in that file, and which config is in
+ * use. The first file in {@link CONFIG_FILES} wins. Later files are not read.
+ * Identical values, including the same settings in a different key order, do
+ * not warn. Only the `driftBudget` value is included — never the rest of the
+ * file. A file that does not parse is skipped here; the config load reports
+ * that failure on its own.
+ */
+export function driftBudgetConflictWarning(rootDir: string): CodedWarning | null {
+  const present = CONFIG_FILES.filter((file) => existsSync(path.join(rootDir, file)));
+  const winner = present[0];
+  if (!winner) return null;
+
+  const budgets: { file: ConfigFile; value: unknown }[] = [];
+  for (const file of present) {
+    if (!isDataConfigFile(file)) continue;
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = parseDataConfig(readFileSync(path.join(rootDir, file), 'utf8'), file);
+    } catch {
+      continue;
+    }
+    if (!Object.prototype.hasOwnProperty.call(parsed, 'driftBudget')) continue;
+    budgets.push({ file, value: parsed.driftBudget });
+  }
+  if (budgets.length < 2) return null;
+  const encoded = budgets.map((entry) => stableJson(entry.value));
+  if (encoded.every((value) => value === encoded[0])) return null;
+
+  const sentences: string[] = [];
+  const winnerBudget = budgets.find((entry) => entry.file === winner);
+  if (winnerBudget) {
+    sentences.push(`${winner} is the config in use and sets driftBudget to ${stableJson(winnerBudget.value)}`);
+  } else {
+    sentences.push(`${winner} is the config in use`);
+  }
+  for (const entry of budgets) {
+    if (entry.file === winner) continue;
+    sentences.push(`${entry.file} sets driftBudget to ${stableJson(entry.value)} and is not read`);
+  }
+  return codedWarning(
+    WARNING_CODES.CONFIG_DRIFT_BUDGET_CONFLICT,
+    `driftBudget disagrees across config files. ${sentences.join('. ')}.`,
+  );
+}
+
+/** Write {@link driftBudgetConflictWarning} to stderr. No-op when budgets agree. */
+export function emitDriftBudgetConflict(rootDir: string): void {
+  const warning = driftBudgetConflictWarning(rootDir);
+  if (!warning) return;
+  const key = `${rootDir}\0${warning.message}`;
+  if (emittedDriftBudgetConflicts.has(key)) return;
+  emittedDriftBudgetConflicts.add(key);
+  process.stderr.write(`${formatWarningLine(warning)}\n`);
+}
+
 const DEFAULT_CONFIG: VibgrateConfig = {
   exclude: [],
   maxFileSizeToScan: DEFAULT_MAX_FILE_SIZE,
@@ -741,6 +819,7 @@ export function excludedPathsWarning(exclusions: readonly ScanExclusion[]): Code
 }
 
 export async function loadConfig(rootDir: string): Promise<VibgrateConfig> {
+  emitDriftBudgetConflict(rootDir);
   let config = DEFAULT_CONFIG;
 
   for (const file of CONFIG_FILES) {

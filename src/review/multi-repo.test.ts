@@ -7,7 +7,8 @@ import { buildDocument, resolveScope, scopeResolver } from './doc-build.js';
 import { checkAgainstChange } from './doc-store.js';
 import { parsePinLink, pinLink, renderReviewDocMarkdown, validateReviewDoc, type DocBlock, type ReviewDoc } from './doc.js';
 import { repoKey } from './git.js';
-import { mergeDocuments, multiResolver, parseAlso, repoId, tagBlock } from './multi-repo.js';
+import { CliError, ExitCode } from '../util/exit.js';
+import { mergeDocuments, multiResolver, parseAlso, repoId, requireAlsoCheckout, tagBlock } from './multi-repo.js';
 
 /**
  * Multi-repo review documents (`vg review doc --also`): each repository is
@@ -35,6 +36,32 @@ describe('pins that name a repository', () => {
     const named = { ...doc, repos: [{ id: 'ghost', name: null, repo_key: 'k', base_sha: 'a', head_sha: 'b', merge_base: null, dirty_tree_hash: null }] };
     expect(validateReviewDoc(named)).toEqual([]);
     expect(validateReviewDoc({ ...named, repos: [named.repos[0], named.repos[0]] }).map((i) => i.code)).toContain('duplicate_id');
+  });
+});
+
+describe('--also checkout', () => {
+  const roots: string[] = [];
+  afterEach(() => {
+    for (const r of roots.splice(0)) fs.rmSync(r, { recursive: true, force: true });
+  });
+
+  it('names a missing path and a directory that is not a git repository', () => {
+    const main = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'vg-also-main-')));
+    roots.push(main);
+    expect(() => requireAlsoCheckout(main, parseAlso('../no-such-client'))).toThrow(
+      '--also ../no-such-client: no such directory — pass a git checkout of the other repository',
+    );
+    try {
+      requireAlsoCheckout(main, parseAlso('../no-such-client'));
+    } catch (err) {
+      expect((err as CliError).code).toBe(ExitCode.USAGE_ERROR);
+    }
+
+    const plain = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'vg-also-plain-')));
+    roots.push(plain);
+    expect(() => requireAlsoCheckout(main, parseAlso(plain))).toThrow(
+      `--also ${plain}: ${plain} is not a git repository — pass a git checkout of the other repository (git must be on PATH)`,
+    );
   });
 });
 

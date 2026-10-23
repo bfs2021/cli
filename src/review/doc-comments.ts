@@ -45,6 +45,26 @@ export function targetOf(doc: Pick<ReviewDoc, 'target'>): DocTarget {
   return { repo_key: doc.target.repo_key ?? '', head_sha: doc.target.head_sha, base_sha: doc.target.base_sha };
 }
 
+const REVIEW_DOC_CLOUD = {
+  '--push': 'upload the review document',
+  '--comments': 'read comments',
+  '--reply': 'post the reply',
+} as const;
+
+export type ReviewDocCloudFlag = keyof typeof REVIEW_DOC_CLOUD;
+
+/**
+ * `--offline` / `--local` forbids a review-document call to Vibgrate Cloud.
+ * The document stays on this machine.
+ */
+export function refuseReviewDocCloudWhenOffline(flag: ReviewDocCloudFlag, offline: boolean | undefined): void {
+  if (!offline) return;
+  throw new CliError(
+    `\`${flag}\` needs the network — drop \`--offline\` (or \`--local\`) to ${REVIEW_DOC_CLOUD[flag]}, or drop \`${flag}\` to stay on this machine`,
+    ExitCode.USAGE_ERROR,
+  );
+}
+
 /** The DSN for Cloud calls, or a CliError saying how to provide one. */
 export function cloudDsn(explicit?: string): ParsedDsn {
   const dsn = resolveDsn(explicit);

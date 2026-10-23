@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import { Command } from 'commander';
 import { gitTopLevel, isGitRepo } from '../review/git.js';
 import { lineProvenance, sessionTitle, TRAILER, turnsTouching } from '../review/provenance.js';
-import { lookupProvenance, repoIdentity, type CloudLookup } from '../review/provenance-cloud.js';
+import { cloudSessionAbsentLine, lookupProvenance, refuseCloudLookupWhenOffline, repoIdentity, type CloudLookup } from '../review/provenance-cloud.js';
 import { cloudDsn } from '../review/doc-comments.js';
 import { buildVersionTimelines, findPackageAnyEcosystem, gitHistoryAvailable } from '../core-open/index.js';
 import { fixAvailableHint } from '../core-open/formatters/fix-hint.js';
@@ -31,7 +31,7 @@ export function registerWhy(program: Command): void {
 
       const at = /^(.+):(\d+)$/.exec(pkg);
       if (at && fs.existsSync(path.resolve(root, at[1]))) {
-        await whyLine(root, at[1], Number(at[2]), Boolean(global.json), opts);
+        await whyLine(root, at[1], Number(at[2]), Boolean(global.json), { ...opts, offline: global.offline });
         return;
       }
 
@@ -123,7 +123,7 @@ function severityTag(severity: string): string {
  * `--cloud`, a session that is not on this machine is read from Vibgrate
  * Cloud, where `vg review trailer push` shared it.
  */
-async function whyLine(root: string, file: string, line: number, asJson: boolean, opts: { cloud?: boolean; dsn?: string }): Promise<void> {
+async function whyLine(root: string, file: string, line: number, asJson: boolean, opts: { cloud?: boolean; dsn?: string; offline?: boolean }): Promise<void> {
   if (!isGitRepo(root)) throw new CliError('`vg why <file:line>` needs a git repository', ExitCode.USAGE_ERROR);
   const top = gitTopLevel(root);
   const rel = path.relative(top, path.resolve(root, file)).split(path.sep).join('/');
@@ -131,6 +131,7 @@ async function whyLine(root: string, file: string, line: number, asJson: boolean
   const absent = p.sessions.filter((s) => !s.found).map((s) => s.id);
   const fromCloud = new Map<string, CloudLookup>();
   if (opts.cloud && absent.length > 0) {
+    refuseCloudLookupWhenOffline(opts.offline);
     for (const s of await lookupProvenance(cloudDsn(opts.dsn), repoIdentity(top), absent)) fromCloud.set(s.id, s);
   }
   const sessions = p.sessions.map((s) => {
@@ -163,7 +164,7 @@ async function whyLine(root: string, file: string, line: number, asJson: boolean
       info(
         c.dim(
           opts.cloud
-            ? `  VG Code session ${s.id} is not on this machine and was not shared to Vibgrate Cloud (\`vg review trailer push\` where it ran)`
+            ? `  ${cloudSessionAbsentLine(s.id)}`
             : `  VG Code session ${s.id} is not on this machine — add --cloud to read it from Vibgrate Cloud if it was shared`,
         ),
       );
