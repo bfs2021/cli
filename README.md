@@ -513,7 +513,7 @@ vg evidence exposure CVE-2025-12345 --bundle ./ev   # signed answer, exit code f
 | 4. Ask | `vg evidence exposure <vuln>` | Which shipped products contain it, at which versions, in which markets, still in support |
 | 5. Prove | `vg evidence verify <bundle>` | Re-check the signed answer offline, on any machine |
 
-Between those: `vg evidence readiness` is a deterministic gap report against the regime's obligations, `vg evidence regimes` lists the regimes and their clocks, `vg evidence drill` runs a timed rehearsal against a simulated advisory, `vg evidence watch` joins the CISA KEV catalog to your frozen manifests, `vg evidence pack` builds the submission pack a human pastes into the reporting platform, and `vg evidence export` writes an air-gapped bundle of everything.
+Between those: `vg evidence readiness` is a deterministic gap report against the regime's obligations, `vg evidence regimes` lists the regimes and their clocks, `vg evidence drill` runs a timed rehearsal against a simulated advisory, `vg evidence watch` joins the CISA KEV catalog to your frozen manifests, `vg evidence pack` builds the submission pack a human pastes into the reporting platform, and `vg evidence export` writes an air-gapped bundle of everything. What `regimes`, `readiness`, and `drill` read, and a local dry-run that finishes before any upload, is in [DOCS.md](./DOCS.md#readiness-regimes-and-a-local-drill).
 
 ### Freeze a container release from what the build wrote
 
@@ -709,7 +709,7 @@ when you want that change set explicitly. It writes nothing unless you pass
 - `--max-privacy` suppresses local artifact writes and high-context scanners; `--no-local-artifacts` skips writing `.vibgrate/*.json` to disk.
 - `vg code --local` keeps model inference on-device: a local model, the local graph, no hosted call and no model-catalog fetch. The agent's own web tools stay available and, like every network step, are approved by you before they run.
 - `vg code` never reads a secrets file into a prompt, and redacts credential shapes from files it does read.
-- `vg evidence` runs locally: `--offline` with a local advisory file needs no network, and `vg evidence verify` checks a bundle on a machine with no account and no connection. Nothing reaches Vibgrate Cloud until you run `vg evidence push`.
+- `vg evidence` runs locally: `--offline` with a local advisory file needs no network, and `vg evidence verify` checks a bundle on a machine with no account and no connection. Nothing reaches Vibgrate Cloud until you run `vg evidence push`. `vg evidence regimes`, `vg evidence readiness`, and `vg evidence drill` stay on that local path — profiles shipped in the CLI, and `.vibgrate/evidence/` for the gap report and the drill. The dry-run is in [DOCS.md](./DOCS.md#readiness-regimes-and-a-local-drill).
 
 ```bash
 vg scan --offline --package-manifest ./package-versions.zip --max-privacy --format json --out scan.json
@@ -745,6 +745,8 @@ Under each set, commands are listed A–Z. A short **typical path** (usual order
 ### Code graph
 
 **Typical path:** `vg build` → `vg status` → `vg ask` → `vg impact` → `vg share`
+
+`vg ask` answers from the local map. The question and your code stay on this machine. `--offline` skips the optional module fetches and this process's embedding-model download. See [What stays local / when the network is used](./DOCS.md#what-stays-local--when-the-network-is-used).
 
 | Command | Description |
 | --- | --- |

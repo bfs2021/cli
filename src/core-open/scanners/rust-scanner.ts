@@ -10,7 +10,7 @@ import { CargoCache } from './cargo-cache.js';
 import { rethrowLockfileParseError } from '../utils/lockfile-parse.js';
 import { loadCargoLockIndex, type CargoLockIndex } from './cargo-lockfile.js';
 import type { LockfileIo } from './npm-lockfile.js';
-import type { ProjectScan, DependencyRow, DetectedFramework } from '../types.js';
+import type { ProjectScan, DependencyRow, DetectedFramework, DepSection } from '../types.js';
 import { compareCodeUnits } from '../utils/code-unit.js';
 
 /** Well-known Rust frameworks / libraries to track */
@@ -321,7 +321,13 @@ async function scanOneRustProject(
       buckets.unknown++;
     }
 
-    const section = dep.isDev ? 'devDependencies' as const : 'dependencies' as const;
+    // A normal dependency with `optional = true` is an optional row. A
+    // `[dev-dependencies]` entry stays a dev row even when it also sets
+    // `optional = true` (those rows are still omitted above, with the rest
+    // of that table).
+    let section: DepSection = 'dependencies';
+    if (dep.isDev) section = 'devDependencies';
+    else if (dep.optional) section = 'optionalDependencies';
 
     dependencies.push({
       package: dep.name,
