@@ -391,7 +391,9 @@ When available, the request also includes the repository name and commit. Your
 source stays on your machine. `--no-apply` and `--dry-run` still call the
 planner. They do not run the package manager. Applying does: it runs the
 project's own package manager, which reaches the registries that manager is
-configured to use.
+configured to use. An advisory stays open when its upgrade does not land:
+blocked by policy, blocked by a peer conflict, no fixed version is published,
+or the install fails. A failed install restores the manifest and lockfile.
 
 ```bash
 vg login                     # once; stores the DSN locally
@@ -567,7 +569,7 @@ vg report [--in <file>] [--format md|text|json|html]
 `html` writes one self-contained page from that same artifact. It does not call the network and does not load external files. The page opens with a summary:
 
 - DriftScore and the four component scores. A missing score is `n/a`. A measured `0` stays `0`.
-- Counts by severity for vulnerability findings and for security findings. A check that did not run stays "Not scanned" rather than a row of zeros. A check that finished with nothing to report shows zeros.
+- Counts by severity for vulnerability findings and for security findings. A check that did not run stays "Not scanned" rather than a row of zeros. That includes a security section whose packs are all `unavailable` and which has no findings. A check that finished with nothing to report shows zeros.
 - When a finding carries `details.fixedVersions`, how many of those findings name a fix.
 - A **Fix available only** checkbox. It starts unchecked, so the tables show every finding. Checking it hides findings that do not name a fix version. The page file still contains every finding, and the checkbox does not call the network.
 - Links to the full tables under the summary: vulnerabilities, security findings, and the other findings.
@@ -729,6 +731,29 @@ vg review doc --base origin/main --base-graph   # also map the base commit: befo
 vg review doc --format json -o review.json
 vg review doc --check review.json        # validate an edited document
 vg review doc --session latest           # what the last VG Code chat did
+```
+
+**On this machine, or in Vibgrate Cloud.** Building the document does not call the network. `--push`, `--comments`, and `--reply` do. Those three need a signed-in account (`vg login`, `VIBGRATE_DSN`, or `--dsn`). `--offline` and `--local` refuse them before any request. The process exits 5.
+
+| Flag | Where it runs |
+| --- | --- |
+| default | On this machine. Reads the change and writes the document here. |
+| `--also` | On this machine. Reads each other checkout here. |
+| `--session` | On this machine. Reads the VG Code chat from `.vibgrate/code-sessions/`. |
+| `--save` | On this machine. Writes the document under `.vibgrate/review-docs/`. |
+| `--saved` | On this machine. Shows the saved document, or builds one here when the saved copy no longer matches. |
+| `--push` | Vibgrate Cloud. Uploads the document. Needs a signed-in account. |
+| `--comments` | Vibgrate Cloud. Reads comments on the pushed document. Needs a signed-in account. |
+| `--reply` | Vibgrate Cloud. Posts a reply. Needs a signed-in account and `--text`. |
+
+`--base`, `--in-place`, `--format`, `--out`, `--check`, `--doc`, `--patch`, `--history`, `--restore`, `--no-findings`, `--no-diagrams`, and `--base-graph` stay on this machine. `--dsn` supplies the account for the three cloud flags. It does not call the network by itself.
+
+With `--offline` or `--local`, stderr is one of these lines:
+
+```text
+error: `--push` needs the network — drop `--offline` (or `--local`) to upload the review document, or drop `--push` to stay on this machine
+error: `--comments` needs the network — drop `--offline` (or `--local`) to read comments, or drop `--comments` to stay on this machine
+error: `--reply` needs the network — drop `--offline` (or `--local`) to post the reply, or drop `--reply` to stay on this machine
 ```
 
 **Groups.** Every changed file lands in exactly one group. Files that are not
@@ -949,6 +974,15 @@ vg review doc --base origin/main --check doc.json --also ../web-client
   `--saved` or `--session`. With `--push`, the GitHub App shows it on the
   first repository's pull request, and its pins link to each repository on
   GitHub.
+- A path that is not a checkout exits 5 before anything is built. Stderr names
+  the path you passed and says what to pass instead:
+
+```text
+error: --also ../web-client: no such directory — pass a git checkout of the other repository
+error: --also ../web-client: /abs/checkout is not a git repository — pass a git checkout of the other repository (git must be on PATH)
+```
+
+`/abs/checkout` stands in for the path `--also` resolved. `git` has to be on `PATH`.
 
 **Show the document on the pull request.** `vg review doc --push` uploads the
 whole document to Vibgrate Cloud. The GitHub App then shows it in its Review
@@ -1605,33 +1639,45 @@ review:
     validatedTaint: true
 ```
 
-Read from the **trusted base branch** when `--base` is given, so a pull request
-cannot weaken the policy applied to itself. It is read as data: a `review` block
-in a `.ts`/`.js` config is never run, so keep it in YAML or JSON.
+#### Where `--base` reads the policy
 
-A key `vg` does not recognise, or a value of the wrong type, stops the command.
-The error names the file and, when the file makes it clear, the line and the
-key. The value is not printed. `.vibgrate/review.toml` still skips keys it does
-not recognise.
+`vg review --base <ref>` reviews the commits from the merge-base of `HEAD` and `<ref>` through `HEAD`. The review policy and the team packs are read from `<ref>`. They are not read from the commits under review, and they are not read from the working tree. `vg review explain`, `vg review findings-from-diff`, `vg review doc`, and `vg review propose` use this same load when they are given `--base`.
 
-The first `vg review` in a repository with no policy writes an advisory starter
-policy: a new `.vibgrate/config.yml` when there is no config, or a `review` block
-added to an existing `.vibgrate/config.yml` / `vibgrate.config.json`. A `.ts` or
-`.js` config is never rewritten, so those repositories get `.vibgrate/review.toml`.
+The policy is loaded with `git show <ref>:<file>`. These files are tried in order. The first one that exists at `<ref>` is the config, and later files are not read:
 
-`.vibgrate/review.toml` keeps working wherever the config has no `review` block.
-Its keys are the snake_case forms of the ones above (`fail_on`, `target_pattern`,
-`[review.protected]`). `vg doctor` says when a `review` block makes it redundant.
+1. `.vibgrate/config.yml`
+2. `.vibgrate/config.yaml`
+3. `vibgrate.config.ts`
+4. `vibgrate.config.js`
+5. `vibgrate.config.json`
 
-Team markdown packs live under `.vibgrate/review/` — the same tree the GitHub
-App reads. With `--base` they are read from the base branch, like the `review`
-policy, so a change cannot add an `ignore.md` glob over the files it breaks or
-delete a check to clear its own review; its edits apply after it merges.
-Without `--base`, the files on disk are used. `ignore.md` drops matching finding paths; `policy.md` is attached to
-the human report; `merge.md` is evaluated locally (docs-only may approve; a
-change to `merge.md` itself is refused); `checks/*.md` each produce one CLI
-pass or a skipped-with-reason line. Custom checks have no extra correctness
-engine on the CLI either.
+YAML and JSON are data. When the file that exists is one of those, its `review` block is the policy. A key `vg` does not recognise, or a value of the wrong type, stops the command. The error names the file and, when the parser can say, the line and the key. The value is not printed. A file that is present at `<ref>` but is not valid YAML or JSON stops the command the same way. It does not fall through to a later file, to `.vibgrate/review.toml`, or to the defaults.
+
+A `.ts` or `.js` file is code and is never executed, so a `review` block in it is not used. Because that file is the config, a `review` block in a later YAML or JSON file is not used either. Put review settings in `.vibgrate/config.yml` or `vibgrate.config.json`.
+
+When the config file has no `review` key, or the only config is `.ts` or `.js`, the fallback is `git show <ref>:.vibgrate/review.toml`. Unknown keys in that file are ignored. A value that is not one of the allowed ones keeps the default for that key.
+
+When `<ref>` has neither a usable `review` block nor a `.vibgrate/review.toml`, the standard defaults apply: `enforcement` is `advisory`, `failOn` is `fail`, every protected rule is on, `highConfidenceThreshold` is `0.8`, `highSeverityDecision` is `fail`, and there is no `targetPattern`. `HEAD` and the working tree are not consulted. A pull request that adds a policy to a repository whose base has none does not get that policy applied to itself.
+
+Without `--base`, the same lookup runs against the committed copy at `HEAD`. The working tree is used only when git has no committed copy to show, which is a repository with no commits. In that case the data config on disk is read, then `.vibgrate/review.toml` on disk, then the same defaults. A local review of uncommitted work uses the files on disk. It does not use a policy that exists only on another branch.
+
+The first `vg review` in a repository with no policy writes an advisory starter policy: a new `.vibgrate/config.yml` when there is no config, or a `review` block added to an existing `.vibgrate/config.yml` / `vibgrate.config.json`. A `.ts` or `.js` config is never rewritten, so those repositories get `.vibgrate/review.toml`. That write happens after the review, so the file this run creates is not part of the change set this run reviews. It is skipped for a `--base` run.
+
+`.vibgrate/review.toml` keeps working wherever the config has no `review` block. Its keys are the snake_case forms of the ones above (`fail_on`, `target_pattern`, `[review.protected]`). `vg doctor` says when a `review` block makes it redundant.
+
+**Team packs.** With `--base`, `.vibgrate/review/ignore.md`, `policy.md`, `merge.md`, and `checks/*.md` are read from `<ref>` (`git show` for each file, `git ls-tree` for the checks directory). A file the base does not have is absent. There is no fallback to the working tree, so a change cannot add an `ignore.md` glob over the files it breaks, or delete a check, to clear its own review. Those edits apply after it merges. Without `--base`, the files on disk are used. `ignore.md` drops matching finding paths. `policy.md` is attached to the human report. `merge.md` is evaluated locally: a docs-only change may be approved, and a change that edits `merge.md` itself is refused. Each `checks/*.md` produces one CLI pass or a skipped-with-reason line. A check larger than 64 KiB is skipped in both modes. Custom checks have no extra correctness engine on the CLI.
+
+**When `<ref>` cannot be read.** `vg review` needs a git repository. If this directory is not one, or git is not on `PATH`, the command stops with `` `vg review` needs a git repository — <dir> is not one (or git is not on PATH) ``. If `<ref>` does not resolve, `git merge-base HEAD <ref>` fails and `git rev-parse <ref>` fails. The diff against that name produces no files, so the change set is empty. Every `git show <ref>:<file>` fails, so the policy is the standard defaults, the same as a base that has no policy. The command does not switch to `HEAD` or to the working tree, and it does not add its own "unknown revision" line: confirm the name with git before you trust an empty review. Fetch the ref and check it, then run the review again:
+
+```bash
+git fetch origin
+git rev-parse origin/main
+vg review --base origin/main
+```
+
+A config file that is present at `<ref>` but is not valid YAML or JSON stops the command and names the file. Fix that file on the base branch.
+
+`--base-graph` is a separate checkout of the merge-base commit, used only to build a second code map. If git cannot check that commit out, the document notes `git could not check out the base commit` and continues without the before side. It does not change which policy was loaded.
 
 `--loop` applies only deterministic `package.json` version bumps it can compute
 (from a known current → latest pair). It does not rewrite lockfiles, does not
@@ -1680,6 +1726,8 @@ vg sbom vex [--from <file>] [--statement <json>...] [--product <ref>] [--out <fi
 
 Use this to treat SBOMs as operational intelligence instead of static compliance output.
 
+How `direct` and `transitive` differ from production, development, optional, and peer, and which of those signals CycloneDX and SPDX record or leave out, is in [Dependency scope](./docs/sbom-dependency-scope.md).
+
 #### Choosing CycloneDX or SPDX
 
 `vg sbom export` writes one JSON document. `--format` accepts `cyclonedx` or `spdx`, compared without regard to case. The default is `cyclonedx`. Any other value prints `Invalid SBOM format. Use cyclonedx or spdx.` and the process exits 1.
@@ -1702,14 +1750,14 @@ vg sbom export --format spdx --out sbom.spdx.json
 | Created | `metadata.timestamp` is the artifact's `timestamp` | `creationInfo.created` is that same timestamp |
 | Scan root | `metadata.component` has `type` `application`, `bom-ref` `vibgrate-root`, and `name` set to the scan root. That component is not copied into `components` | There is no package for the scan root |
 | Package identity | `components[].purl`. When a purl is written, `bom-ref` is that purl | `packages[].externalRefs[]` with `referenceCategory` `PACKAGE-MANAGER`, `referenceType` `purl`, and `referenceLocator` set to the purl. `SPDXID` is `SPDXRef-Package-N` |
-| Dependency graph | `dependencies` is an array of `{ ref, dependsOn }`. `ref` is a `bom-ref`. The first entry is `vibgrate-root`. Every component is an entry after that, in the component order above. `dependsOn` lists child `bom-ref` values, or is `[]` when none were recorded for that component | `relationships` is an array of `{ spdxElementId, relatedSpdxElementId, relationshipType }`. `relationshipType` is `DEPENDS_ON`. Edges from the document use `SPDXRef-DOCUMENT`. A row is written only for a recorded edge. `SPDXID` values follow the component order above |
+| Dependency graph | `dependencies` is an array of `{ ref, dependsOn }`. `ref` is a `bom-ref`. The first entry is `vibgrate-root`. Every component is an entry after that, in the component order above. `dependsOn` lists child `bom-ref` values, or is `[]` when none were recorded for that component. Component `scope` is separate from this graph | `relationships` is an array of `{ spdxElementId, relatedSpdxElementId, relationshipType }`. A resolved edge is `DEPENDS_ON`. A scanned development dependency is `DEV_DEPENDENCY_OF`. A scanned optional dependency is `OPTIONAL_DEPENDENCY_OF`. `SPDXID` values follow the component order above |
 | Licenses | `licenses` is present when the declared license can be written, and absent when it cannot | `licenseDeclared` is set on every package. `licenseConcluded` is `NOASSERTION` on every package. `hasExtractedLicensingInfos` is present when a `LicenseRef-…` is used. Every package has `downloadLocation` `NOASSERTION` and `filesAnalyzed` `false` |
 
 `dataLicense` `CC0-1.0` is the SPDX license for the document data. Package licenses stay on `licenseDeclared`.
 
 The UUID inside `serialNumber` and the UUID inside `documentNamespace` are different values. The hash seed starts with the format name, so the two ids differ for the same artifact. The same artifact and the same lockfiles produce the same id for that format on every run. A later scan records a new timestamp, so both ids change. The rest of the seed is under [Several versions of one package](#several-versions-of-one-package).
 
-When the lockfile records no edges, both documents leave the graph member out. CycloneDX omits `dependencies`. SPDX omits `relationships`. npm `package-lock.json` v2/v3 records edges. pnpm and yarn list the components and leave the graph member out.
+When the lockfile records no edges, CycloneDX omits `dependencies`. SPDX omits `DEPENDS_ON`. A scanned development or optional dependency still produces `DEV_DEPENDENCY_OF` or `OPTIONAL_DEPENDENCY_OF`. npm `package-lock.json` v2/v3 records edges. pnpm and yarn list the components and leave those edges out.
 
 Purl rules, the fallback `bom-ref`, and how a scan artifact joins to these fields are in [Component identity](#component-identity).
 
@@ -1791,6 +1839,8 @@ For `com.google.code.gson:gson` at `2.11.0` in a Java project, read these fields
 ```
 
 Key the join on `pkg:maven/com.google.code.gson/gson@2.11.0`, or on `maven` + `com.google.code.gson:gson` + `2.11.0`. The group `com.google.code.gson` is the purl namespace. SPDX stores the same purl on `externalRefs[].referenceLocator`.
+
+A Maven name with no group (`gson`, not `com.google.code.gson:gson`) still gets a package URL, and the namespace is left off (`pkg:maven/gson@2.11.0`). The component stays in the document. `vg sbom export` prints `warning [VG_WARN_SBOM_MAVEN_NO_GROUP]` for that row. Record the dependency as `group:artifact` so the group is the namespace.
 
 #### Reading an SBOM that has no package URL and no CPE
 
@@ -1960,10 +2010,12 @@ manifest declared stays in the document as `transitive`. On a transitive row,
 first sorted project path that listed it). `vibgrate:projects` still lists
 every project whose lockfile listed that identity.
 
-That value is `direct` or `transitive`. Production, development, and optional
-are recorded or dropped before export, and the CycloneDX `scope` member is
-omitted. The mapping, a worked example, and the gaps are in
-[Dependency scope](./docs/sbom-dependency-scope.md).
+That value is `direct` or `transitive`. A scanned `devDependencies` row also
+sets CycloneDX component `scope` to `excluded` and writes SPDX
+`DEV_DEPENDENCY_OF`. A scanned `optionalDependencies` row sets `scope` to
+`optional` and writes `OPTIONAL_DEPENDENCY_OF`. Production, peer, and
+lockfile-only rows omit component `scope`. The mapping, a worked example,
+and the gaps are in [Dependency scope](./docs/sbom-dependency-scope.md).
 
 ```bash
 vg sbom export --format cyclonedx --out sbom.cdx.json
@@ -1971,9 +2023,10 @@ vg sbom export --no-transitive --format cyclonedx --out sbom-direct.cdx.json
 ```
 
 `--no-transitive` keeps manifest-declared rows only. Lockfile-only versions are
-absent, and so is the dependency graph. A consumer that filters to
-`vibgrate:scope=direct` sees the same gap: other installed versions of that
-package are still in the full document, marked `transitive`.
+absent, and so is the CycloneDX dependency graph. SPDX still writes
+`DEV_DEPENDENCY_OF` and `OPTIONAL_DEPENDENCY_OF` for those rows. A consumer
+that filters to `vibgrate:scope=direct` sees the same gap: other installed
+versions of that package are still in the full document, marked `transitive`.
 
 **Order.** CycloneDX `components`, SPDX `packages`, and the package entries in
 CycloneDX `dependencies` share one order. A component with a Package URL sorts
@@ -1998,9 +2051,9 @@ repeat one identity.
 CycloneDX `serialNumber` and the SPDX `documentNamespace`. Those values are
 document identifiers. Each one is derived from the scan artifact — timestamp
 included — and from the ordered component list, contributing projects, merge
-warnings, declared licenses, license-parse notes, edges, and the ordered
-digests. A lockfile edit that changes only a digest changes the hash arrays
-and the document id. It does not reorder components. A later scan of the same
+warnings, declared licenses, license-parse notes, the development or optional
+mark, edges, and the ordered digests. A lockfile edit that changes only a
+digest changes the hash arrays and the document id. It does not reorder components. A later scan of the same
 tree records a new timestamp, so the document id changes. Purls and CycloneDX
 `bom-ref` values do not. Field shapes are in [Package digests](#package-digests).
 
@@ -2031,7 +2084,10 @@ tree records a new timestamp, so the document id changes. Purls and CycloneDX
   later list is dropped and `vibgrate:mergeWarning` names the drop. The
   CycloneDX root `dependsOn` and the SPDX document `DEPENDS_ON` relationships
   are the scan-root lockfile's direct dependencies, or the first project path
-  that has a lockfile when the root has none. A version that exists only in
+  that has a lockfile when the root has none. A scanned development or optional
+  dependency adds `DEV_DEPENDENCY_OF` or `OPTIONAL_DEPENDENCY_OF` from that
+  package to `SPDXRef-DOCUMENT`, including when the lockfile left it off the
+  root edge list. A version that exists only in
   another lockfile is still a component. Its `dependsOn` comes from that
   lockfile when the format records edges. When the document already has edges
   from another lockfile and this format does not record them, `dependsOn` is
@@ -2222,7 +2278,7 @@ document root's edges are the scan-root lockfile's direct dependencies.
 The primary command. Scans your project for upgrade drift.
 
 ```bash
-vg scan [path] [--vulns] [--full] [--iac] [--format text|json|sarif|md] [--out <file>] [--junit <file>] [--fail-on warn|error|architecture-finding|architecture-warning] [--offline] [--package-manifest <file>] [--no-local-artifacts] [--max-privacy] [--baseline <file>] [--drift-budget <score>] [--drift-worsening <percent>] [--changed-only] [--concurrency <n>]
+vg scan [path] [--vulns] [--full] [--iac] [--format text|json|sarif|md] [--out <file>] [--junit <file>] [--fail-on warn|error|architecture-finding|architecture-warning] [--fail-on-epss <threshold>] [--offline] [--package-manifest <file>] [--no-local-artifacts] [--max-privacy] [--baseline <file>] [--drift-budget <score>] [--drift-worsening <percent>] [--changed-only] [--concurrency <n>]
 ```
 
 | Flag | Default | Description |
@@ -2239,6 +2295,7 @@ vg scan [path] [--vulns] [--full] [--iac] [--format text|json|sarif|md] [--out <
 | `--concurrency <n>` | `8` | Max concurrent npm registry calls |
 | `--drift-budget <score>` | — | Fitness gate: fail if drift score is above this budget |
 | `--drift-worsening <percent>` | — | Fitness gate: fail if drift worsens by more than % vs baseline |
+| `--fail-on-epss <threshold>` | — | Exit 2 when any advisory EPSS score is at or above this probability (0–1). A missing score is not compared and is not treated as 0. Overrides `failOnEpss` in the project config. See [EPSS gate](#epss-gate) |
 | `--summary-out <file>` | — | Also write a small JSON summary for CI steps: `driftScore`, `riskLevel`, `components`, `delta` / `baselineScore` when `--baseline` is set, and `driftBudget`. `driftBudget` is the verdict (`source`, `mode`, `withinBudget`, `blocking`, `rules`), or `null` when no budget is set. A budget from `--drift-budget` or `--drift-worsening` has `source` `flags` and replaces the project config. An unmeasured score is `null`, never `0`, and is not compared. Written before any gate can fail the run |
 | `--push` | — | Upload scan artifact to Vibgrate Cloud after a successful scan |
 | `--dsn <dsn>` | `VIBGRATE_DSN` env | DSN used for `--push` authentication |
@@ -2412,6 +2469,29 @@ Machine-readable JSON (`vg scan --format json`, and the `.vibgrate/scan_result.j
 | `kev` | boolean | Whether that advisory data marks the CVE in the CISA Known Exploited Vulnerabilities catalog |
 
 A value that is not in the source is omitted. It is never written as `0` or `false` to mean "unknown". A present `0` is a real EPSS score, and a present `false` means the data explicitly says the CVE is not in the catalog. Text and SARIF findings are unchanged.
+
+#### EPSS gate
+
+`--fail-on-epss <threshold>` exits `2` when any advisory on this scan has an EPSS score at or above the threshold. The threshold is a probability from 0 to 1. A score equal to the threshold fails. A score below it does not.
+
+A missing score is not compared, and it is not treated as 0. An advisory with no `epss` field stays out of the gate. A present `0` is a real score: `--fail-on-epss 0` fails on it, and `--fail-on-epss 0.01` does not.
+
+The gate reads the advisories `vg scan --vulns` (or `vg scan --full`) already recorded. It does not contact an EPSS service. Offline and `--package-manifest` scans use the scores in that bundle. When there is no score to compare — vulnerability detection was not requested, the advisory feed could not be reached, or every advisory omitted `epss` — the command prints `EPSS is absent; --fail-on-epss <threshold> was not compared.` and exits `0`. A vulnerability pass that ran and found no advisories passes: nothing is at or above the threshold.
+
+A value that is not a number, or a number outside 0 to 1, stops the command before the scan. The exit code is `1`. The error line is `error: --fail-on-epss must be a number from 0 to 1.`
+
+`failOnEpss` in `.vibgrate/config.yml` or `vibgrate.config.json` is the same threshold. Passing `--fail-on-epss` replaces that setting for the run. The config value is a number from 0 to 1. A wrong type stops the scan and names the key. The failure line does not include the config value that was rejected.
+
+The failure line is `Failing: 1 advisory at or above EPSS <threshold>.` (or `N advisories`). Each matching advisory is listed on stderr as `ecosystem package@version  id  EPSS score`. `--fail-on` runs first, then this gate, then `--drift-budget` and `--drift-worsening`. The first failure exits `2`. With `--junit`, the `gates` suite includes a `fail-on-epss` case: a `<failure>` on a breach, a `<skipped>` case when no score was compared, and a passing case when every compared score is below the threshold. The XML is written, then the process exits `2`.
+
+```bash
+vg scan --vulns --fail-on-epss 0.1
+```
+
+```yaml
+# .vibgrate/config.yml
+failOnEpss: 0.1
+```
 
 `vg scan --vulns --offline` and `--package-manifest` read these fields from the local bundle only. They do not contact an EPSS or KEV service. An online scan reads them from the OSV advisory document when that document already includes them, and does not make a separate exploitability request.
 
@@ -2700,6 +2780,30 @@ vg why src/orders.ts:42
 - **The hook never blocks a commit.** If anything fails, the commit goes ahead without a trailer. Merge and squash messages are left alone.
 - **An existing hook is never replaced.** If another tool already owns `prepare-commit-msg`, `vg review trailer on` changes nothing and prints the one line to add to that hook.
 
+The trailer is one line in the commit message. `git log` prints it in the body:
+
+```text
+Vibgrate-Session: <id>
+```
+
+To print only the id:
+
+```bash
+git log -1 --format='%(trailers:key=Vibgrate-Session,valueonly)'
+```
+
+When the commit has no trailer, that format prints nothing. `vg why <file:line>` then prints:
+
+```text
+  no Vibgrate-Session trailer on this commit — turn it on for future commits with `vg review trailer on`
+```
+
+A line that is not committed yet prints:
+
+```text
+  not committed yet, or git could not blame this line
+```
+
 `vg why <file:line>` blames the line, reads the commit's trailers and shows each session's title and model. It then lists the requests in that session that touched the file. The agent's own answer is shown as its account, unverified. A session that ran on another machine is named, but its contents are not shown. `vg review trailer off` removes the hook, and `vg review trailer status` shows whether it is on. Both take `--json`.
 
 **Sessions that ran on another machine.** A session stays where it ran, so a teammate's `vg why` shows only its id. To share the sessions behind your commits with your Vibgrate Cloud workspace:
@@ -2712,11 +2816,38 @@ vg why src/orders.ts:42 --cloud      # a teammate reads them back
 ```
 
 - **Opt-in on both sides.** Sessions are sent only when you run `push`. Vibgrate Cloud stores them only when a workspace admin has turned on Agent provenance under Source control. It is off by default.
-- **What is sent:** per turn, the request, the agent's summary, the repo-relative files it changed and a timestamp. File contents, diffs and attachments are never sent.
+- **Nothing leaves this machine** unless you run `vg review trailer push` or `vg why <file:line> --cloud`. `vg why <file:line>` without `--cloud` stays here. `--offline` and `--local` refuse both network commands before a request. The process exits 5. A dry run, and a push that has nothing to send, stay on this machine even with `--offline`.
+- **What is sent, and what is not.** The commit stores only the session id. `vg review trailer push` sends session content: the title, the provider, the model, and for each turn the request, the agent's summary, the repo-relative paths it changed, and a timestamp. It does not send file contents, diffs, or attachments. `vg why <file:line> --cloud` sends the repository key and the session ids, and receives that stored content. It does not upload the session from this machine.
 - **Credentials:** they are masked before sending. A session that still carries one is not sent, and `push` says which.
 - **Retention:** 365 days from the first upload. Turning the setting off deletes every stored session at once.
 
 Both commands use your DSN (`vg login`, `VIBGRATE_DSN` or `--dsn`).
+
+With `--offline` or `--local`, stderr is:
+
+```text
+error: `--cloud` needs the network — drop `--offline` (or `--local`) to read a shared session, or drop `--cloud` to read only sessions on this machine
+error: `vg review trailer push` needs the network — drop `--offline` (or `--local`) to share sessions, or leave the push off to keep them on this machine
+```
+
+When no commit in the range carries a trailer, `vg review trailer push` prints this and sends nothing. With `--base origin/main` the range in that sentence is `origin/main..HEAD`.
+
+```text
+  no Vibgrate-Session trailer on commits no remote branch contains yet — nothing was sent. `vg review trailer on` adds the trailer to commits made after you turn it on.
+```
+
+When `--cloud` reaches Vibgrate Cloud and the session was not shared, stderr is:
+
+```text
+  VG Code session <id> is not on this machine and was not shared to Vibgrate Cloud (`vg review trailer push` where it ran)
+```
+
+When the workspace has not turned on Agent provenance, a lookup says nothing was read. A push says nothing was uploaded.
+
+```text
+error: this workspace does not accept agent provenance — a workspace admin can turn on Agent provenance in Vibgrate Cloud settings; nothing was read
+error: this workspace does not accept agent provenance — a workspace admin can turn on Agent provenance in Vibgrate Cloud settings; nothing was uploaded
+```
 
 ---
 
@@ -4898,8 +5029,11 @@ Passing either flag ignores [`driftBudget`](#drift-budget) in the project config
 | `--drift-worsening 5`, rise of 5% or less, or the score did not rise | `0` |
 | `--fail-on error`, at least one error-level finding | `2` |
 | `--fail-on warn`, at least one warning or error finding | `2` |
+| `--fail-on-epss 0.1`, an advisory EPSS score at or above 0.1 | `2` |
+| `--fail-on-epss 0.1`, every compared score below 0.1 | `0` |
+| `--fail-on-epss`, no EPSS score to compare | `0` |
 
-Exit `2` is `GATE_FAILED`. See [Exit Codes](#exit-codes).
+Exit `2` is `GATE_FAILED`. See [Exit Codes](#exit-codes). `--fail-on-epss` uses the same code. A missing EPSS score is not compared and is not treated as 0. See [EPSS gate](#epss-gate).
 
 An unmeasured score is absent. It is not compared, and it is not treated as 0. The command prints `DriftScore is absent; --drift-budget <n> was not compared.` or `DriftScore is absent; --drift-worsening was not compared.` and exits `0`. A measured 0 is a real score and is compared. `vg baseline` prints `Baseline score: n/a` when the snapshot's score is null. In JSON the score is `null`; in text it is `n/a`.
 
@@ -5197,7 +5331,7 @@ The same findings and gates always produce the same bytes. Case order is fixed, 
 | `findings` | Always | One case per drift finding. `classname` is `vg.findings`. `name` is `{ruleId} {location}` (` #2`, ` #3`, … on ties). No findings → one passing case, `no findings`. |
 | `architecture` | `--fail-on architecture-finding` or `architecture-warning` | One failure per boundary row (`classname` `vg.architecture`), a passing `architecture` case when the gate is clean, or one failure when the gate could not run. |
 | `security` | `--fail-on iac-finding` or `security-finding` | One case per security finding when the packs ran (`classname` `vg.security`). Findings below the severity are `<skipped>`. A passing `security` case when there are none. One failure when the gate could not run. |
-| `gates` | A drift budget was judged | `drift-budget` / `drift-worsening` for the flags, or `drift-budget maxScore` and `drift-budget maxWorseningPercent` for [`driftBudget`](#drift-budget) in project config. |
+| `gates` | A drift budget or an EPSS threshold was judged | `drift-budget` / `drift-worsening` for the DriftScore flags. For [`driftBudget`](#drift-budget) in project config: `drift-budget maxScore`, `drift-budget maxWorseningPercent`, `drift-budget maxRiskScore`, and `drift-budget maxRiskWorseningPercent`, in that order when configured. The two RiskScore cases are `<skipped>` on a local scan because `vg scan` does not compute RiskScore. `agents.maxWorseningPercent` never appears here; the GitHub App check evaluates it. `fail-on-epss` for [`--fail-on-epss`](#epss-gate) or `failOnEpss`. |
 
 A finding is a `<failure>` only when its level fails the drift gate you set. Anything else is `<skipped>` (present, not gating):
 
@@ -5207,7 +5341,7 @@ A finding is a `<failure>` only when its level fails the drift gate you set. Any
 | `warning` | skipped | failure | skipped |
 | `note` | skipped | skipped | skipped |
 
-Budget cases follow the same exit rules as the CLI. `--drift-budget` / an enforced `driftBudget` breach is a `<failure>`. A score that was not measured, a worsening limit with no `--baseline`, and a warn-mode or shadow breach are `<skipped>` — they do not fail the scan. Every requested gate is included, including gates after the one that stopped the process. The confirmation line goes to stderr, so `--format json` on stdout stays intact. See [Exit Codes](#exit-codes): the XML is written, then the process exits `2` when a gate fails. SARIF stays the code-scanning artifact; see [SARIF](#sarif).
+Budget cases follow the same exit rules as the CLI. `--drift-budget` / an enforced `driftBudget` breach is a `<failure>`. A score that was not measured, a worsening limit with no `--baseline`, and a warn-mode or shadow breach are `<skipped>` — they do not fail the scan. `fail-on-epss` is a `<failure>` when an advisory score is at or above the threshold, a `<skipped>` case when no EPSS score was compared, and a passing case when every compared score is below it. A missing score is skipped, not compared as 0. Every requested gate is included, including gates after the one that stopped the process. The confirmation line goes to stderr, so `--format json` on stdout stays intact. See [Exit Codes](#exit-codes): the XML is written, then the process exits `2` when a gate fails. SARIF stays the code-scanning artifact; see [SARIF](#sarif).
 
 ```bash
 vg scan --format sarif --out vibgrate.sarif --junit vibgrate.junit.xml --fail-on error --drift-budget 40
@@ -5276,6 +5410,12 @@ Vibgrate reads the first it finds in the order `.vibgrate/config.yml`,
 `.vibgrate/config.yaml`, `vibgrate.config.ts`, `vibgrate.config.js`,
 `vibgrate.config.json`, and never merges two. YAML and JSON take exactly the
 same settings; `vg doctor` names any config file that is present but ignored.
+When more than one of those YAML or JSON files sets `driftBudget` and the
+values differ, `vg` prints one warning on stderr and `vg doctor` repeats it.
+The warning names each file, the `driftBudget` value in that file, and which
+file is the config in use (the first one in the lookup order). The other
+files are not read. The same settings in a different key order do not warn.
+Only the `driftBudget` value is printed, not the rest of the file.
 
 ### Drift budget
 
@@ -5438,7 +5578,7 @@ The one exception where code truly leaves your machine is the **remediation
 agent**: when you ask it to write a fix, it clones your repository into an
 isolated virtual machine Vibgrate controls, makes the change, and hands you a
 pull request. That only happens when you ask for it. See
-[vibgrate.com/subprocessors](https://vibgrate.com/subprocessors) for who processes what.
+[vibgrate.com/trust/subprocessors](https://vibgrate.com/trust/subprocessors) for who processes what.
 
 ### Platform Matrix
 
@@ -5995,7 +6135,7 @@ CI and agents branch on these, so they are a stable contract.
 | ---- | --------------------- | ---------------------------------------------------------------------------------------- |
 | `0`  | `OK`                  | Success                                                                                    |
 | `1`  | `ERROR`               | Runtime error                                                                              |
-| `2`  | `GATE_FAILED`         | A gate failed: `--fail-on` threshold exceeded, a drift budget breached, `vg hcs gate` regression, `vg bisect --assert` unsatisfied, or `vg build --verify` rejected the attestation |
+| `2`  | `GATE_FAILED`         | A gate failed: `--fail-on` threshold exceeded, `--fail-on-epss` matched an advisory, a drift budget breached, `vg hcs gate` regression, `vg bisect --assert` unsatisfied, or `vg build --verify` rejected the attestation |
 | `3`  | `NOT_FOUND`           | The thing asked for does not exist (unknown symbol, no version history, an attestation path you named, …) |
 | `4`  | `NON_DETERMINISTIC`   | A verification found output that is not reproducible, including the `vg build --verify` self-check |
 | `5`  | `USAGE_ERROR`         | Bad invocation: unknown command, invalid flag value, missing argument, a signing key that is missing or not Ed25519, or a retired name such as `vg attest` |
@@ -6055,6 +6195,7 @@ A truncated or invalid lockfile stops the command. Warning codes cover condition
 | `VG_WARN_ROOT_PACKAGE_IDENTITY` | `vg build`, `vg scan`, `vg sbom` | The root `package.json` omitted `name`, `version`, or both. The root component uses the directory name when `name` is missing, and omits `version` when that field is missing. Dependencies are still resolved. |
 | `VG_WARN_SBOM_LOSSY_EDGES` | `vg sbom` | Merge dropped a different dependency list for one package. |
 | `VG_WARN_SBOM_LOSSY_MANIFEST` | `vg sbom` | Merge dropped differing manifest metadata for one package. |
+| `VG_WARN_SBOM_MAVEN_NO_GROUP` | `vg sbom` | A Maven component name has no groupId. The package URL is written without a namespace. The component stays in the document. |
 | `VG_WARN_SBOM_UNKNOWN_ECOSYSTEM` | `vg sbom` | Merge recorded an unknown ecosystem as npm. |
 | `VG_WARN_SBOM_UNTRACKED_EDGES` | `vg sbom` | A lockfile format does not record dependency edges. |
 
