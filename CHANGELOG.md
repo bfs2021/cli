@@ -80,9 +80,9 @@ backward compatible.
 - **`vg sbom export` marks an optional Poetry dependency.** A
   `[tool.poetry.dependencies]` inline table with `optional = true` is stored
   as section `optionalDependencies`. CycloneDX component `scope` is
-  `optional`, and SPDX writes `OPTIONAL_DEPENDENCY_OF`. A required Poetry
-  dependency still omits component `scope`. `vibgrate:scope` stays `direct`.
-  The `python` key is still skipped.
+  `optional`, and SPDX writes `OPTIONAL_DEPENDENCY_OF`. A required dependency
+  in the same table still omits component `scope`. `vibgrate:scope` stays
+  `direct`. The `python` key is still not a dependency.
 
 - **`vg sbom export` marks an optional Cargo crate.** A `[dependencies]`
   entry with `optional = true` is stored as section `optionalDependencies`.

@@ -1,13 +1,14 @@
 /**
  * Poetry `[tool.poetry.dependencies]` inline `optional = true` is an optional
- * manifest row. A string requirement, and the `python` key, are not.
+ * manifest row. A quoted spec in the same table stays required. The `python`
+ * key is the runtime, not a package.
  */
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { scanPythonProjects } from '../src/core-open/scanners/python-scanner.js';
 import { PyPICache } from '../src/core-open/scanners/pypi-cache.js';
+import { scanPythonProjects } from '../src/core-open/scanners/python-scanner.js';
 import { Semaphore } from '../src/core-open/utils/semaphore.js';
 import { collectLockfileGraph, toCycloneDx, toSpdx } from '../src/reporting/commands/sbom.js';
 import type { ProjectScan, ScanArtifact } from '../src/reporting/types.js';
@@ -15,10 +16,17 @@ import type { ProjectScan, ScanArtifact } from '../src/reporting/types.js';
 const LOCKFILE = `[[package]]
 name = "psycopg"
 version = "3.1.18"
+category = "main"
 
 [[package]]
 name = "requests"
 version = "2.31.0"
+category = "main"
+
+[metadata]
+lock-version = "2.0"
+python-versions = "^3.11"
+content-hash = "abc"
 `;
 
 function manifest(order: 'required-first' | 'optional-first'): string {
@@ -32,7 +40,7 @@ name = "app"
 version = "0.1.0"
 
 [tool.poetry.dependencies]
-python = "^3.11"
+python = { version = "^3.11", optional = true }
 ${deps}
 `;
 }
@@ -86,11 +94,11 @@ describe('sbom export: Poetry optional dependencies', () => {
     expect(JSON.stringify(second.spdx)).toBe(JSON.stringify(first.spdx));
 
     const project = first.projects[0]!;
+    expect(project.runtime).toBe('^3.11');
     expect(project.dependencies.map((dep) => [dep.package, dep.section])).toEqual([
       ['psycopg', 'optionalDependencies'],
       ['requests', 'dependencies'],
     ]);
-    expect(project.dependencies.some((dep) => dep.package === 'python')).toBe(false);
 
     const cdx = first.cdx as {
       components: Array<{ name: string; scope?: string; properties: Array<{ name: string; value: string }> }>;
@@ -102,16 +110,16 @@ describe('sbom export: Poetry optional dependencies', () => {
 
     expect(byName.get('psycopg')?.scope).toBe('optional');
     expect(byName.get('requests')?.scope).toBeUndefined();
+    expect(byName.has('python')).toBe(false);
     expect(vibScope('psycopg')).toBe('direct');
     expect(vibScope('requests')).toBe('direct');
     expect(cdx.dependencies).toBeUndefined();
 
     const spdx = first.spdx as {
-      packages: Array<{ name: string; annotations?: Array<{ comment: string }> }>;
+      packages: Array<{ name: string }>;
       relationships: Array<{ spdxElementId: string; relatedSpdxElementId: string; relationshipType: string }>;
     };
     const id = (name: string): string => `SPDXRef-Package-${spdx.packages.findIndex((pkg) => pkg.name === name) + 1}`;
-    const annotation = (name: string): string => spdx.packages.find((pkg) => pkg.name === name)?.annotations?.[0]?.comment ?? '';
     expect(spdx.relationships).toEqual([
       {
         spdxElementId: id('psycopg'),
@@ -119,8 +127,8 @@ describe('sbom export: Poetry optional dependencies', () => {
         relationshipType: 'OPTIONAL_DEPENDENCY_OF',
       },
     ]);
-    expect(annotation('psycopg')).toContain('scope=direct');
-    expect(annotation('requests')).toContain('scope=direct');
+    expect(spdx.relationships.some((rel) => rel.relationshipType === 'DEV_DEPENDENCY_OF')).toBe(false);
+    expect(spdx.relationships.some((rel) => rel.spdxElementId === id('requests'))).toBe(false);
     expect(spdx.packages.map((pkg) => pkg.name)).toEqual(['psycopg', 'requests']);
   });
 });

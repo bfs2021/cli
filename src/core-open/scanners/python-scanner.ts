@@ -13,7 +13,7 @@ import { PyPICache } from './pypi-cache.js';
 import { latestStable, runtimeEolStatus, extractCycle, eolDate } from '../runtimes/catalog.js';
 import { BUNDLED_RUNTIME_CATALOG } from '../runtimes/snapshot.js';
 import type { RuntimeCatalog } from '../runtimes/types.js';
-import type { DepSection, ProjectScan, DependencyRow, DetectedFramework } from '../types.js';
+import type { ProjectScan, DependencyRow, DetectedFramework } from '../types.js';
 import { compareCodeUnits } from '../utils/code-unit.js';
 
 /** Well-known Python frameworks / libraries to track */
@@ -141,10 +141,10 @@ interface PythonDependency {
   /** Normalised name for PyPI lookup (lowercase, hyphens) */
   normalisedName: string;
   /**
-   * Manifest section for the scan row. Omitted means `dependencies`.
-   * A Poetry inline table with `optional = true` sets `optionalDependencies`.
+   * Manifest section. Absent means `dependencies`. A Poetry inline table
+   * with `optional = true` sets `optionalDependencies`.
    */
-  section?: DepSection;
+  section?: 'dependencies' | 'optionalDependencies';
 }
 
 /**
@@ -217,9 +217,19 @@ interface PyProjectToml {
 }
 
 /**
+ * True when a Poetry inline table sets `optional = true`.
+ * `optional = false` and a quoted version spec stay required.
+ */
+function poetryInlineOptional(line: string): boolean {
+  const table = /\{([^}]*)\}/.exec(line);
+  if (!table?.[1]) return false;
+  return /(?:^|[,{\s])optional\s*=\s*true\b/.test(table[1]);
+}
+
+/**
  * Very lightweight TOML parser — handles the subset we care about:
  * [project] name, requires-python, dependencies array,
- * [tool.poetry.dependencies] table, including inline `optional = true`.
+ * [tool.poetry.dependencies] table.
  *
  * We don't pull in a full TOML parser to keep deps minimal.
  */
@@ -261,11 +271,10 @@ function parsePyprojectToml(content: string): PyProjectToml {
         }
         const ver = kv[2] ?? kv[3] ?? '';
         const normalisedName = name.toLowerCase().replace(/[_.]+/g, '-');
-        // `optional = true` lives only on an inline table. A plain string
-        // requirement, and `optional = false`, stay a production row. The
-        // `python` key is skipped above and never reaches this push.
-        const inline = /\{.*\}/.exec(kv[0])?.[0];
-        const optional = inline !== undefined && /optional\s*=\s*true/.test(inline);
+        // Quoted specs stay required. `optional = true` is read only from an
+        // inline table (`psycopg = { version = "^3.1", optional = true }`).
+        // The `python` key continued above and is not a package row.
+        const optional = kv[3] !== undefined && poetryInlineOptional(line);
         result.dependencies.push({
           name,
           spec: ver ? `==${ver}` : '',
