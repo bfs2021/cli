@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import ignore, { type Ignore } from 'ignore';
+import { readDirectory, type DirectoryReader } from './dir-reader.js';
 import { langForExtension, langById, type LanguageDef } from './languages.js';
 import { requireDataConfig } from '../core-open/config.js';
 import { dropBlankPatterns, gitignoreWithoutBlankLines } from '../core-open/utils/glob.js';
@@ -182,6 +183,11 @@ export interface DiscoverOptions {
    * and not written to stderr. The caller prints it with the other warnings.
    */
   warnings?: string[];
+  /**
+   * Directory listing. Defaults to one filesystem `readdir`. `vg build`
+   * passes a shared reader so each directory is listed once.
+   */
+  readDir?: DirectoryReader;
 }
 
 export interface DiscoveredFile {
@@ -257,6 +263,7 @@ export function discover(options: DiscoverOptions): DiscoveredFile[] {
     }
   }
 
+  const readDir = options.readDir ?? readDirectory;
   const rootIg = loadRootIgnore(root, options.exclude ?? []);
 
   // Scope roots: explicit paths, or the whole repo.
@@ -290,7 +297,7 @@ export function discover(options: DiscoverOptions): DiscoveredFile[] {
   const walk = (dir: string): void => {
     let entries: fs.Dirent[];
     try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
+      entries = readDir(dir);
     } catch {
       return; // unreadable dir — skip rather than crash the build
     }

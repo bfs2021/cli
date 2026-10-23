@@ -612,10 +612,12 @@ Gate on drift budgets and regression relative to a baseline:
 ```bash
 vg baseline
 vg scan --baseline .vibgrate/baseline.json --drift-budget 40 --drift-worsening 5
+vg scan --vulns --fail-on-epss 0.1
 ```
 
 - `--drift-budget <score>` fails the build if drift exceeds your budget.
 - `--drift-worsening <percent>` fails the build if drift worsens by more than X% vs baseline.
+- `--fail-on-epss <threshold>` fails the build when any advisory EPSS score is at or above the threshold, a probability from 0 to 1. A score equal to the threshold fails. A missing score is not compared and is not treated as 0. The flag replaces `failOnEpss` in `.vibgrate/config.yml` or `vibgrate.config.json`. It reads advisories from `vg scan --vulns` or `vg scan --full`. See [DOCS.md](./DOCS.md#epss-gate).
 - `--summary-out <file>` writes a small JSON summary (`driftScore`, `riskLevel`, change since `--baseline`, and the `driftBudget` verdict) that a CI step can read, even when a gate fails the run. `driftBudget` is `null` when no budget is set. `--drift-budget` and `--drift-worsening` are recorded with `source` `flags`. An unmeasured score is `null`, never `0`. The full artifact carries the same `drift.*` fields plus the per-component scores: [DOCS.md](./DOCS.md#score-fields-in-the-json-artifact).
 - `--junit <file>` writes a deterministic JUnit XML summary of findings and those gates, next to `--format` (JSON or SARIF). The exit code is unchanged; see [DOCS.md](./DOCS.md#junit).
 
@@ -658,7 +660,7 @@ vg vex                          # generate an OpenVEX document for attestation
 
 `vg sbom export` writes an inventory, not a compliance determination. CycloneDX component `type` is `application` on the metadata component and `library` on every dependency row, including a container image. SPDX `primaryPackagePurpose` is omitted. The mapping, the gaps (OS packages, image contents, Terraform resources), and short fixture examples are in [DOCS.md](./DOCS.md#cyclonedx-type-and-spdx-primarypackagepurpose).
 
-`vibgrate:scope` on each component is `direct` or `transitive`. How production, development, and optional dependencies are written in CycloneDX and SPDX, including fields the export omits, is in [Dependency scope](./docs/sbom-dependency-scope.md).
+`vibgrate:scope` on each component is `direct` or `transitive`. A development dependency sets CycloneDX component `scope` to `excluded` and an SPDX `DEV_DEPENDENCY_OF` relationship. An optional dependency sets `scope` to `optional` and `OPTIONAL_DEPENDENCY_OF`. The mapping, including fields the export omits, is in [Dependency scope](./docs/sbom-dependency-scope.md).
 
 Match a component on its package URL (`purl` in CycloneDX, the `purl` externalRef in SPDX). Scan JSON uses the same coordinates (`projects[].type`, `dependencies[].package`, `resolvedVersion`, and `extended.vulnerabilities.packages[]`) and does not repeat the purl string. These files have no CPE field. The CLI does not invent one, and a CPE from another cataloger does not replace the purl. Fields and a local example: [DOCS.md](./DOCS.md#component-identity).
 
@@ -715,7 +717,7 @@ vg scan --offline --package-manifest ./package-versions.zip --max-privacy --form
 
 Add `.vibgrate/` to your `.gitignore` — those are regenerated local outputs.
 
-More on how Vibgrate handles code and data: [vibgrate.com/security](https://vibgrate.com/security), and the [subprocessor register](https://vibgrate.com/subprocessors).
+More on how Vibgrate handles code and data: [vibgrate.com/security](https://vibgrate.com/security), and the [subprocessor register](https://vibgrate.com/trust/subprocessors).
 
 ---
 
@@ -885,7 +887,7 @@ Local scoring does not require this — nothing leaves your machine until you pu
 | `vg push` | Upload scan results to Vibgrate Cloud |
 
 ```bash
-vg scan [path] [--vulns] [--full] [--format text|json|sarif|md] [--out <file>] [--fail-on warn|error|architecture-finding|architecture-warning] \
+vg scan [path] [--vulns] [--full] [--format text|json|sarif|md] [--out <file>] [--fail-on warn|error|architecture-finding|architecture-warning] [--fail-on-epss <threshold>] \
   [--offline] [--package-manifest <file>] [--no-local-artifacts] [--max-privacy] \
   [--drift-budget <score>] [--drift-worsening <percent>] [--baseline <file>] [--summary-out <file>]
 ```

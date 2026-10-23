@@ -4,6 +4,7 @@ import ignore from 'ignore';
 import { parse as parseToml } from 'smol-toml';
 import { parse as parseYaml } from 'yaml';
 import { assertSafeWalkRoot } from '../core-open/utils/root-safety.js';
+import { readDirectory, type DirectoryReader } from './dir-reader.js';
 import { isSkippedDirName, SKIP_FILES } from './discover.js';
 
 /**
@@ -69,14 +70,14 @@ export class LockfileSyntaxError extends Error {
 }
 
 /** Throw {@link LockfileSyntaxError} when any lockfile under `root` is unusable. */
-export function assertLockfilesValid(root: string): void {
+export function assertLockfilesValid(root: string, readDir: DirectoryReader = readDirectory): void {
   const abs = path.resolve(root);
   assertSafeWalkRoot(abs);
-  const bad = findLockfiles(abs).filter((rel) => !lockfileFileValid(abs, rel));
+  const bad = findLockfiles(abs, readDir).filter((rel) => !lockfileFileValid(abs, rel));
   if (bad.length) throw new LockfileSyntaxError(bad);
 }
 
-function findLockfiles(root: string): string[] {
+function findLockfiles(root: string, readDir: DirectoryReader): string[] {
   const ig = ignore();
   const gitignorePath = path.join(root, '.gitignore');
   if (fs.existsSync(gitignorePath)) {
@@ -91,7 +92,7 @@ function findLockfiles(root: string): string[] {
   const walk = (dir: string): void => {
     let entries: fs.Dirent[];
     try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
+      entries = readDir(dir);
     } catch {
       return;
     }

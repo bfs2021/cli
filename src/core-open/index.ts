@@ -21,6 +21,8 @@ export {
   parseDataConfig,
   readDataConfigSync,
   requireDataConfig,
+  driftBudgetConflictWarning,
+  emitDriftBudgetConflict,
   ConfigFileError,
   isConfigFileError,
   type ConfigFile,

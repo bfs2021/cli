@@ -120,14 +120,49 @@ export function preparePush(topLevel: string, ids: string[], run: GitRunner = de
   return out;
 }
 
-function failure(res: { status: number; code?: string; detail?: string }): CliError {
+function failure(res: { status: number; code?: string; detail?: string }, sent: 'uploaded' | 'read'): CliError {
   if (res.code === 'provenance_upload_disabled') {
     return new CliError(
-      'this workspace does not accept agent provenance — a workspace admin can turn on Agent provenance in Vibgrate Cloud settings; nothing was uploaded',
+      `this workspace does not accept agent provenance — a workspace admin can turn on Agent provenance in Vibgrate Cloud settings; nothing was ${sent}`,
       ExitCode.ERROR,
     );
   }
   return new CliError(`Vibgrate Cloud answered ${res.status} — ${res.detail ?? ''}`, ExitCode.ERROR);
+}
+
+/**
+ * `--offline` / `--local` forbids `vg why <file:line> --cloud`. Sessions
+ * already on this machine can still be read without `--cloud`.
+ */
+export function refuseCloudLookupWhenOffline(offline: boolean | undefined): void {
+  if (!offline) return;
+  throw new CliError(
+    '`--cloud` needs the network — drop `--offline` (or `--local`) to read a shared session, or drop `--cloud` to read only sessions on this machine',
+    ExitCode.USAGE_ERROR,
+  );
+}
+
+/**
+ * `--offline` / `--local` forbids `vg review trailer push` once there is
+ * something to send. A dry run, and a push with nothing to send, stay local.
+ */
+export function refuseProvenancePushWhenOffline(offline: boolean | undefined): void {
+  if (!offline) return;
+  throw new CliError(
+    '`vg review trailer push` needs the network — drop `--offline` (or `--local`) to share sessions, or leave the push off to keep them on this machine',
+    ExitCode.USAGE_ERROR,
+  );
+}
+
+/** Stderr sentence when the commits being shared name no session trailer. */
+export function nothingToPushLine(base: string | undefined): string {
+  const range = base ? `${base}..HEAD` : 'commits no remote branch contains yet';
+  return `no ${TRAILER} trailer on ${range} — nothing was sent. \`vg review trailer on\` adds the trailer to commits made after you turn it on.`;
+}
+
+/** Stderr sentence when `--cloud` found no stored copy of this session. */
+export function cloudSessionAbsentLine(id: string): string {
+  return `VG Code session ${id} is not on this machine and was not shared to Vibgrate Cloud (\`vg review trailer push\` where it ran)`;
 }
 
 /** Upload sessions, 50 at a time. Returns how many Cloud stored. */
@@ -136,7 +171,7 @@ export async function pushProvenance(dsn: ParsedDsn, prepared: PreparedPush, fet
   for (let i = 0; i < prepared.sessions.length; i += MAX_SESSIONS_PER_PUSH) {
     const body = { kind: 'code_session_provenance', cli_version: VERSION, repo: prepared.repo, sessions: prepared.sessions.slice(i, i + MAX_SESSIONS_PER_PUSH) };
     const res = await postIngest(dsn, '/v1/ingest/provenance', body, fetchImpl);
-    if (!res.ok) throw failure(res);
+    if (!res.ok) throw failure(res, 'uploaded');
     stored += Number((res.json as { stored?: unknown } | undefined)?.stored ?? 0);
   }
   return stored;
@@ -150,7 +185,7 @@ export interface CloudLookup extends CloudSession {
 export async function lookupProvenance(dsn: ParsedDsn, repo: RepoIdentity, ids: string[], fetchImpl: typeof fetch = fetch): Promise<CloudLookup[]> {
   if (ids.length === 0) return [];
   const res = await postIngest(dsn, '/v1/ingest/provenance/lookup', { repo_key: repo.repo_key, session_ids: ids.slice(0, MAX_SESSIONS_PER_PUSH) }, fetchImpl);
-  if (!res.ok) throw failure(res);
+  if (!res.ok) throw failure(res, 'read');
   const sessions = (res.json as { sessions?: unknown } | undefined)?.sessions;
   return Array.isArray(sessions) ? (sessions as CloudLookup[]) : [];
 }
