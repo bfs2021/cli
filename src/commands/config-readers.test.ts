@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { driftBudgetConflictWarning, loadConfig } from '../core-open/config.js';
+import { formatWarningLine } from '../core-open/warnings.js';
 import { readConfigExcludes } from '../engine/discover.js';
 import { areaSkillsEnabled } from '../install/area-skills.js';
 import { configNotes } from './doctor.js';
@@ -69,5 +71,44 @@ describe('vg doctor config notes', () => {
   it('surfaces a config that does not parse', () => {
     const root = project({ '.vibgrate/config.yml': 'exclude: [unclosed\n' });
     expect(configNotes(root)[0]).toMatch(/\.vibgrate\/config\.yml is not valid YAML/);
+  });
+
+  it('names disagreeing driftBudget values and which file wins', async () => {
+    const root = project({
+      '.vibgrate/config.yml': 'driftBudget:\n  mode: warn\n  maxScore: 40\n',
+      'vibgrate.config.json': '{"driftBudget":{"maxScore":70}}\n',
+    });
+    const warning = driftBudgetConflictWarning(root);
+    expect(warning?.message).toBe(
+      'driftBudget disagrees across config files. .vibgrate/config.yml is the config in use and sets driftBudget to {"maxScore":40,"mode":"warn"}. vibgrate.config.json sets driftBudget to {"maxScore":70} and is not read.',
+    );
+    expect(configNotes(root)).toEqual([
+      'vibgrate.config.json is ignored: .vibgrate/config.yml is the config in use',
+      formatWarningLine(warning!),
+    ]);
+    const lines: string[] = [];
+    const write = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      lines.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      expect((await loadConfig(root)).driftBudget).toEqual({ mode: 'warn', maxScore: 40 });
+      await loadConfig(root);
+    } finally {
+      process.stderr.write = write;
+    }
+    expect(lines).toEqual([`${formatWarningLine(warning!)}\n`]);
+  });
+
+  it('stays quiet when both files set the same driftBudget', () => {
+    const root = project({
+      '.vibgrate/config.yaml': 'driftBudget:\n  maxScore: 40\n  mode: enforce\n',
+      'vibgrate.config.json': '{"driftBudget":{"mode":"enforce","maxScore":40}}\n',
+    });
+    expect(driftBudgetConflictWarning(root)).toBeNull();
+    expect(configNotes(root)).toEqual([
+      'vibgrate.config.json is ignored: .vibgrate/config.yaml is the config in use',
+    ]);
   });
 });

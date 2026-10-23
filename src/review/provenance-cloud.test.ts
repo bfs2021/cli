@@ -4,7 +4,19 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { newSession, saveSession, type StoredSession } from '../code/session-store.js';
-import { cloudSession, lookupProvenance, preparePush, pushProvenance, repoIdentity, trailerSessionIds } from './provenance-cloud.js';
+import { CliError, ExitCode } from '../util/exit.js';
+import {
+  cloudSession,
+  cloudSessionAbsentLine,
+  lookupProvenance,
+  nothingToPushLine,
+  preparePush,
+  pushProvenance,
+  refuseCloudLookupWhenOffline,
+  refuseProvenancePushWhenOffline,
+  repoIdentity,
+  trailerSessionIds,
+} from './provenance-cloud.js';
 import type { ParsedDsn } from './push.js';
 
 const dsn: ParsedDsn = { keyId: 'k', secret: 's', host: 'h.test', workspaceId: 'ws', scheme: 'https' };
@@ -93,7 +105,45 @@ describe('Cloud calls', () => {
 
   it('says how to turn it on when the workspace has not opted in', async () => {
     const fetchImpl = (async () => new Response(JSON.stringify({ code: 'provenance_upload_disabled', error: 'off' }), { status: 403 })) as unknown as typeof fetch;
-    await expect(lookupProvenance(dsn, repoIdentity(dir), ['sess_aaa111'], fetchImpl)).rejects.toThrow(/Agent provenance in Vibgrate Cloud settings/);
+    await expect(lookupProvenance(dsn, repoIdentity(dir), ['sess_aaa111'], fetchImpl)).rejects.toThrow(
+      'this workspace does not accept agent provenance — a workspace admin can turn on Agent provenance in Vibgrate Cloud settings; nothing was read',
+    );
+    const one = cloudSession(session('sess_aaa111', [{}]), dir);
+    if ('refused' in one) throw new Error(one.refused);
+    await expect(pushProvenance(dsn, { repo: repoIdentity(dir), sessions: [one], missing: [], refused: [] }, fetchImpl)).rejects.toThrow(
+      'this workspace does not accept agent provenance — a workspace admin can turn on Agent provenance in Vibgrate Cloud settings; nothing was uploaded',
+    );
     expect(await lookupProvenance(dsn, repoIdentity(dir), [], fetchImpl)).toEqual([]);
+  });
+});
+
+describe('lines the commands print', () => {
+  it('says nothing was sent when no trailer is in range, and names a session Cloud does not have', () => {
+    expect(nothingToPushLine(undefined)).toBe(
+      'no Vibgrate-Session trailer on commits no remote branch contains yet — nothing was sent. `vg review trailer on` adds the trailer to commits made after you turn it on.',
+    );
+    expect(nothingToPushLine('origin/main')).toBe(
+      'no Vibgrate-Session trailer on origin/main..HEAD — nothing was sent. `vg review trailer on` adds the trailer to commits made after you turn it on.',
+    );
+    expect(cloudSessionAbsentLine('sess_elsewhere')).toBe(
+      'VG Code session sess_elsewhere is not on this machine and was not shared to Vibgrate Cloud (`vg review trailer push` where it ran)',
+    );
+  });
+
+  it('refuses --cloud and trailer push under --offline before any request', () => {
+    expect(() => refuseCloudLookupWhenOffline(false)).not.toThrow();
+    expect(() => refuseProvenancePushWhenOffline(undefined)).not.toThrow();
+    expect(() => refuseCloudLookupWhenOffline(true)).toThrow(CliError);
+    try {
+      refuseCloudLookupWhenOffline(true);
+    } catch (err) {
+      expect((err as CliError).code).toBe(ExitCode.USAGE_ERROR);
+      expect((err as CliError).message).toBe(
+        '`--cloud` needs the network — drop `--offline` (or `--local`) to read a shared session, or drop `--cloud` to read only sessions on this machine',
+      );
+    }
+    expect(() => refuseProvenancePushWhenOffline(true)).toThrow(
+      '`vg review trailer push` needs the network — drop `--offline` (or `--local`) to share sessions, or leave the push off to keep them on this machine',
+    );
   });
 });
