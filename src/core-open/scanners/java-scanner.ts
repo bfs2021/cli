@@ -14,7 +14,7 @@ import type { LockfileIo } from './npm-lockfile.js';
 import { latestLts, runtimeEolStatus, extractCycle, eolDate } from '../runtimes/catalog.js';
 import { BUNDLED_RUNTIME_CATALOG } from '../runtimes/snapshot.js';
 import type { RuntimeCatalog } from '../runtimes/types.js';
-import type { ProjectScan, DependencyRow, DetectedFramework, ProjectReference } from '../types.js';
+import type { ProjectScan, DependencyRow, DetectedFramework, DepSection, ProjectReference } from '../types.js';
 import { compareCodeUnits } from '../utils/code-unit.js';
 
 const parser = new XMLParser({
@@ -141,6 +141,14 @@ interface PomDependency {
   artifactId: string;
   version: string;
   scope?: string;
+  /** True when `<optional>` is the boolean or string `true` (trim, case-insensitive). */
+  optional?: boolean;
+  /**
+   * True for a `<dependencyManagement>` entry. Those rows are version pins.
+   * `<scope>` still selects the section. `<optional>` does not: it is a default
+   * children inherit, not an optional dependency of this POM.
+   */
+  managed?: boolean;
 }
 
 interface PomData {
@@ -153,6 +161,30 @@ interface PomData {
   modules: string[];
   parent?: { groupId: string; artifactId: string; version: string };
   properties: Record<string, string>;
+}
+
+/** `<optional>true</optional>` may arrive as a boolean or a string from the XML parser. */
+function mavenOptionalFlag(value: unknown): boolean {
+  return String(value ?? '').trim().toLowerCase() === 'true';
+}
+
+/**
+ * `<scope>test</scope>` (trim, case-insensitive) is a development row.
+ * A direct `<optional>true</optional>` is an optional row. Test wins over
+ * optional, matching the Rust scanner: a dev entry with `optional = true`
+ * stays dev. `compile`, `runtime`, `provided`, `system`, a missing scope,
+ * and `<optional>false</optional>` stay `dependencies`.
+ *
+ * `<dependencyManagement>` entries are version pins the scanner already emits
+ * when they carry a version. Their `<scope>` uses the same rule, so a managed
+ * `test` scope is `devDependencies`. Their `<optional>` does not change the
+ * section: that flag is a default a child inherits, not a statement that this
+ * POM optionally depends on the artifact.
+ */
+function mavenDependencySection(dep: Pick<PomDependency, 'scope' | 'optional' | 'managed'>): DepSection {
+  if (dep.scope?.trim().toLowerCase() === 'test') return 'devDependencies';
+  if (dep.optional && !dep.managed) return 'optionalDependencies';
+  return 'dependencies';
 }
 
 function parsePom(xml: string, filePath: string): PomData {
@@ -202,6 +234,7 @@ function parsePom(xml: string, filePath: string): PomData {
       artifactId: resolveProperty(String(d.artifactId ?? ''), properties),
       version: resolveProperty(String(d.version ?? ''), properties),
       scope: d.scope ? String(d.scope) : undefined,
+      optional: mavenOptionalFlag(d.optional),
     }));
 
   // Also get dependencyManagement dependencies
@@ -210,6 +243,10 @@ function parsePom(xml: string, filePath: string): PomData {
     ? (Array.isArray(mgmt.dependency) ? mgmt.dependency : [mgmt.dependency])
     : [];
 
+  // Same `<scope>` / `<optional>` read as a direct dependency. The section
+  // helper keeps a managed `<optional>true</optional>` on `dependencies`
+  // (it is not this POM's optional dependency) and still sends managed
+  // `<scope>test</scope>` to `devDependencies`.
   for (const d of mgmtDeps) {
     if (d.groupId && d.artifactId && d.version) {
       dependencies.push({
@@ -217,6 +254,8 @@ function parsePom(xml: string, filePath: string): PomData {
         artifactId: resolveProperty(String(d.artifactId), properties),
         version: resolveProperty(String(d.version), properties),
         scope: d.scope ? String(d.scope) : undefined,
+        optional: mavenOptionalFlag(d.optional),
+        managed: true,
       });
     }
   }
@@ -424,7 +463,14 @@ async function scanOneJavaProject(
   const relDir = path.relative(rootDir, dir) || '.';
   let projectName = path.basename(dir === rootDir ? rootDir : dir);
   let javaVersion: string | undefined;
-  const allDeps = new Map<string, { groupId: string; artifactId: string; version: string }>();
+  const allDeps = new Map<string, {
+    groupId: string;
+    artifactId: string;
+    version: string;
+    scope?: string;
+    optional?: boolean;
+    managed?: boolean;
+  }>();
   const projectReferences: ProjectReference[] = [];
 
   // Parse manifests — prefer pom.xml over Gradle
@@ -542,7 +588,7 @@ async function scanOneJavaProject(
 
     dependencies.push({
       package: key,
-      section: 'dependencies',
+      section: mavenDependencySection(dep),
       currentSpec: dep.version,
       resolvedVersion,
       latestStable,
