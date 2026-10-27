@@ -77,6 +77,16 @@ backward compatible.
 
 ### Fixed
 
+- **`vg sbom export` marks Maven test and optional dependencies.** A `pom.xml`
+  dependency with `<scope>test</scope>` is stored as section `devDependencies`.
+  CycloneDX component `scope` is `excluded`, and SPDX writes
+  `DEV_DEPENDENCY_OF`. `<optional>true</optional>` is stored as section
+  `optionalDependencies`. CycloneDX component `scope` is `optional`, and SPDX
+  writes `OPTIONAL_DEPENDENCY_OF`. Test scope wins when the same dependency is
+  also optional. `compile`, `runtime`, `provided`, `system`, a missing scope,
+  and `<optional>false</optional>` stay section `dependencies`.
+  `vibgrate:scope` stays `direct`.
+
 - **`vg sbom export` marks a PEP 621 optional extra.** A package under
   `pyproject.toml` `[project.optional-dependencies]` is stored as section
   `optionalDependencies`. CycloneDX component `scope` is `optional`, and SPDX
