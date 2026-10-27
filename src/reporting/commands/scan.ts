@@ -20,7 +20,13 @@ import {
 } from '../../core-open/index.js';
 import { compareCodeUnits } from '../../core-open/utils/code-unit.js';
 import { writeScanSummary } from '../scan-summary.js';
-import { compareDriftBudget, evaluateConfigDriftBudget } from '../drift-budget-gate.js';
+import {
+  compareDriftBudget,
+  DRIFT_WORSENING_BASELINE_UNUSABLE,
+  DRIFT_WORSENING_NO_BASELINE,
+  evaluateConfigDriftBudget,
+} from '../drift-budget-gate.js';
+import { advisoriesForEpssGate, epssAdvisoryRow, evaluateEpssGate, parseEpssThreshold } from '../epss-gate.js';
 import {
   ARCHITECTURE_NEEDS_GRAPH,
   ARCHITECTURE_NOT_CLASSIFIED,
@@ -30,6 +36,7 @@ import {
   configDriftBudgetCases,
   driftBudgetFlagCase,
   driftWorseningFlagCase,
+  epssGateCase,
   securityGateSuite,
   securityNotEvaluatedMessage,
   securityUnavailableMessage,
@@ -426,6 +433,10 @@ export const scanCommand = new Command('scan')
   .option('--project-scan-timeout <seconds>', 'Per-project scan timeout in seconds (default: 180)')
   .option('--drift-budget <score>', 'Fail if DriftScore is above budget (0-100); overrides driftBudget in the project config')
   .option('--drift-worsening <percent>', 'Fail if drift worsens by more than % since baseline; overrides driftBudget in the project config')
+  .option(
+    '--fail-on-epss <threshold>',
+    'Exit 2 if any advisory EPSS score is at or above this probability (0-1). A missing score is not compared and is not treated as 0. Overrides failOnEpss in the project config. Reads advisories from --vulns or --full',
+  )
   .option('--repository-name <name>', 'Override the repository name recorded for this scan (defaults to the directory or package.json name)')
   .option('--force', 'Always create a fresh scan ingest, even if the repository is unchanged since the last scan (skips the unchanged/reuse optimization). Used by scheduled and dashboard-triggered scans.')
   .option('--no-graph', 'Skip building the local code map (the AI/docs index) that scan produces after scoring drift')
@@ -458,6 +469,7 @@ export const scanCommand = new Command('scan')
     projectScanTimeout?: string;
     driftBudget?: string;
     driftWorsening?: string;
+    failOnEpss?: string;
     summaryOut?: string;
     repositoryName?: string;
     force?: boolean;
@@ -509,6 +521,9 @@ export const scanCommand = new Command('scan')
     // security gates are evaluated after the scan against `extended.security`.
     const failOn = parseFailOn(opts.failOn);
     if (failOn.invalid) throw usageError(failOn.invalid);
+    // A value outside 0 to 1 stops the command before the scan (exit 1).
+    // 0 and 1 are real thresholds. A blank value is not a threshold.
+    const epssFlag = parseEpssThreshold(opts.failOnEpss);
     if (opts.format === 'junit') {
       throw usageError('JUnit XML is written with --junit <file>, alongside --format text, json, sarif, or md.');
     }
@@ -845,6 +860,24 @@ export const scanCommand = new Command('scan')
     let junitWritten = false;
     const measuredDrift = artifact.drift.score;
 
+    // The flag replaces failOnEpss. A missing advisory score is judged inside
+    // evaluateEpssGate and is never read as 0.
+    const epssRequest = epssFlag !== undefined
+      ? { threshold: epssFlag, from: 'flag' as const }
+      : await (async () => {
+          const projectConfig = await loadConfig(rootDir);
+          return typeof projectConfig.failOnEpss === 'number'
+            ? { threshold: projectConfig.failOnEpss, from: 'config' as const }
+            : null;
+        })();
+    const epssResult = epssRequest
+      ? evaluateEpssGate({
+          ...advisoriesForEpssGate(artifact.extended?.vulnerabilities),
+          threshold: epssRequest.threshold,
+          from: epssRequest.from,
+        })
+      : null;
+
     // Evaluate the pure budget first, then write the summary, then run gates.
     // A CI step can read the verdict from a run that failed its budget.
     // An unmeasured score is left null and is not compared as 0.
@@ -865,6 +898,7 @@ export const scanCommand = new Command('scan')
           flagBudget: scanOpts.driftBudget,
           flagWorseningPercent: scanOpts.driftWorseningPercent,
           configRaw,
+          baseline: scanOpts.baseline,
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -935,11 +969,17 @@ export const scanCommand = new Command('scan')
         }
       }
 
+      if (epssResult) gateCases.push(epssGateCase(epssResult));
       if (scanOpts.driftBudget !== undefined) {
         gateCases.push(driftBudgetFlagCase(measuredDrift, scanOpts.driftBudget));
       }
       if (scanOpts.driftWorseningPercent !== undefined) {
-        gateCases.push(driftWorseningFlagCase(measuredDrift, artifact.delta, scanOpts.driftWorseningPercent));
+        gateCases.push(driftWorseningFlagCase(
+          measuredDrift,
+          artifact.delta,
+          scanOpts.driftWorseningPercent,
+          scanOpts.baseline,
+        ));
       }
       if (scanOpts.driftBudget === undefined && scanOpts.driftWorseningPercent === undefined) {
         // A config read failure must not run ahead of the finding gates below.
@@ -1101,6 +1141,22 @@ export const scanCommand = new Command('scan')
       if (!opts.quiet) console.error(chalk.dim(`\niac gate: no findings at or above ${threshold} (${securityPacksLabel(section)}).`));
     }
 
+    // EPSS gate: after finding-level --fail-on, before the DriftScore flags.
+    // The first failure exits 2. JUnit already recorded this case and the
+    // later budget cases.
+    if (epssResult && epssRequest) {
+      if (epssResult.message) {
+        console.error(epssResult.exitCode === 2 ? chalk.red(`\n${epssResult.message}`) : chalk.yellow(`\n${epssResult.message}`));
+        if (epssResult.exitCode === 2) {
+          for (const row of epssResult.breached.slice(0, 50)) console.error(chalk.dim(`  ${epssAdvisoryRow(row)}`));
+          if (epssResult.breached.length > 50) console.error(chalk.dim(`  … ${epssResult.breached.length - 50} more`));
+          return failGate();
+        }
+      } else if (!opts.quiet) {
+        console.error(chalk.dim(`\nepss gate: no advisory at or above ${epssRequest.threshold}.`));
+      }
+    }
+
     if (scanOpts.driftBudget !== undefined) {
       const budget = compareDriftBudget(measuredDrift, scanOpts.driftBudget);
       if (budget.message) {
@@ -1113,8 +1169,11 @@ export const scanCommand = new Command('scan')
       if (measuredDrift === null) {
         console.error(chalk.yellow('\nDriftScore is absent; --drift-worsening was not compared.'));
       } else if (artifact.delta === undefined) {
-        console.error(chalk.red('\nFailing fitness function: --drift-worsening requires --baseline to compare against previous drift.'));
-        return failGate();
+        if (scanOpts.baseline) {
+          console.error(chalk.red(`\n${DRIFT_WORSENING_BASELINE_UNUSABLE}`));
+          return failGate();
+        }
+        console.error(chalk.yellow(`\n${DRIFT_WORSENING_NO_BASELINE}`));
       } else if (artifact.delta > 0) {
         const baselineScore = measuredDrift - artifact.delta;
         const denominator = Math.max(Math.abs(baselineScore), 0.0001);

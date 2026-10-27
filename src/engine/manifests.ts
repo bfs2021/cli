@@ -22,6 +22,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { Ignore } from 'ignore';
 import { XMLParser } from 'fast-xml-parser';
+import { readDirectory, type DirectoryReader } from './dir-reader.js';
 import { nodeId, edgeId } from './ids.js';
 import { isSkippedDirName, loadRootIgnore } from './discover.js';
 import { inspectUtf8 } from '../core-open/utils/text-bytes.js';
@@ -66,9 +67,10 @@ const emptyNode = (
  */
 export function extractManifests(
   root: string,
-  opts: { exclude?: string[]; paths?: string[] } = {},
+  opts: { exclude?: string[]; paths?: string[]; readDir?: DirectoryReader } = {},
 ): ManifestExtract {
   const absRoot = path.resolve(root);
+  const readDir = opts.readDir ?? readDirectory;
   const ig = loadRootIgnore(absRoot, opts.exclude ?? []);
   const scopes = (opts.paths?.length ? opts.paths : ['.'])
     .map((p) => path.resolve(absRoot, p))
@@ -76,7 +78,7 @@ export function extractManifests(
 
   const found = new Map<string, string>(); // rel → abs
   for (const scope of scopes) {
-    walkManifests(absRoot, scope, ig, found);
+    walkManifests(absRoot, scope, ig, found, readDir);
   }
 
   const nodes = new Map<string, GraphNode>();
@@ -524,10 +526,11 @@ function walkManifests(
   dir: string,
   ig: Ignore,
   found: Map<string, string>,
+  readDir: DirectoryReader,
 ): void {
   let entries: fs.Dirent[];
   try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
+    entries = readDir(dir);
   } catch {
     return;
   }
@@ -537,7 +540,7 @@ function walkManifests(
     if (entry.isDirectory()) {
       if (isSkippedDirName(entry.name)) continue;
       if (rel && ig.ignores(`${rel}/`)) continue;
-      walkManifests(root, abs, ig, found);
+      walkManifests(root, abs, ig, found, readDir);
     } else if (entry.isFile()) {
       const base = entry.name;
       if (!isRecognizedManifest(base)) continue;

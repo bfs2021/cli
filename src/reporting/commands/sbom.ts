@@ -2,7 +2,7 @@ import * as path from 'node:path';
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { pathExists, readJsonFile, writeTextFile } from '../utils/fs.js';
-import type { DependencyRow, Finding, ProjectScan, ScanArtifact } from '../types.js';
+import type { DependencyRow, DepSection, Finding, ProjectScan, ScanArtifact } from '../types.js';
 import { LICENSE_PARSE_FAILED } from '../../core-open/licenses/diagnostic.js';
 import { digestIdentity, orderComponentDigests, toCycloneHashes, toSpdxChecksums, type ComponentDigest } from '../../engine/component-digests.js';
 import { fullDependencyGraph, type LockfileComponent, type LockfileGraph } from '../../engine/lockfile.js';
@@ -36,6 +36,11 @@ interface FlattenedDependency {
   majorsBehind: number | null;
   /** 'direct' comes from a scanned manifest; 'transitive' is lockfile-only. */
   scope: 'direct' | 'transitive';
+  /**
+   * Manifest sections that declared this direct identity, sorted.
+   * Empty on a lockfile-only row. Not written as `vibgrate:scope`.
+   */
+  manifestSections: DepSection[];
   /** Which package registry this dependency resolves against — picks the purl scheme. */
   ecosystem: Ecosystem;
   /** Declared license from the kept scan row. Lockfile-only rows have none. */
@@ -155,6 +160,8 @@ const KNOWN_ECOSYSTEMS = new Set<string>(ECOSYSTEMS);
 const PURL_STATUS_PROPERTY = 'vibgrate:purlStatus';
 const PURL_WARNING_PROPERTY = 'vibgrate:purlWarning';
 const PURL_STATUS_UNAVAILABLE = 'unavailable';
+/** CycloneDX property for a Maven purl written with no groupId namespace. */
+const MAVEN_GROUP_WARNING_PROPERTY = 'vibgrate:mavenGroupWarning';
 
 /** CycloneDX properties that say why a declared license was not copied onto the component. */
 const LICENSE_STATUS_PROPERTY = 'vibgrate:licenseStatus';
@@ -180,7 +187,9 @@ function purlPath(ecosystem: Ecosystem, name: string): string | null {
     case 'go':
       return `pkg:golang/${name.split('/').map(encodeURIComponent).join('/')}`;
     case 'java': {
-      const [group, artifact] = name.includes(':') ? name.split(':') : [undefined, name];
+      // A name with no group still produces a purl. The missing namespace is
+      // warned about in `mavenGroupWarning`, not dropped here.
+      const { group, artifact } = mavenCoordinates(name);
       return group ? `pkg:maven/${encodeURIComponent(group)}/${encodeURIComponent(artifact)}` : `pkg:maven/${encodeURIComponent(artifact)}`;
     }
     case 'ruby':
@@ -301,6 +310,33 @@ export function resolvePurl(ecosystem: Ecosystem, name: string, version: string)
   const purl = purlFor(ecosystem, name, version);
   if (purl) return { purl, warning: null };
   return { purl: null, warning: describeUnavailablePurl(ecosystem, name, version) };
+}
+
+/**
+ * Maven coordinates are `group:artifact`. The group is the purl namespace.
+ * A name with no colon, or an empty group before the colon, has no group.
+ * Extra colon-separated segments after the artifact are ignored, matching
+ * the purl builder.
+ */
+function mavenCoordinates(name: string): { group: string | undefined; artifact: string } {
+  if (!name.includes(':')) return { group: undefined, artifact: name };
+  const [group, artifact] = name.split(':');
+  return { group: group ? group : undefined, artifact: artifact ?? '' };
+}
+
+/**
+ * A Maven component whose purl was written without a namespace. Null when
+ * the ecosystem is not Maven, a group is present, or no purl was written
+ * (that case is `VG_WARN_PURL_UNAVAILABLE`).
+ */
+export function describeMavenGroupMissing(name: string, version: string): string {
+  return `Maven component "${name}@${version}" has no groupId. The package URL omits the namespace. Record the dependency as group:artifact.`;
+}
+
+export function mavenGroupWarning(ecosystem: Ecosystem, name: string, version: string): string | null {
+  if (ecosystem !== 'java' || mavenCoordinates(name).group) return null;
+  if (!purlFor(ecosystem, name, version)) return null;
+  return describeMavenGroupMissing(name, version);
 }
 
 /** Stable CycloneDX bom-ref. A valid purl when we have one; never a rejected purl string. */
@@ -425,6 +461,7 @@ function describeUntrackedEdges(ecosystem: string, packageName: string, version:
 /** Map a known SBOM warning sentence to its code. Unknown prose stays uncoded. */
 function sbomWarningCode(message: string): WarningCode | undefined {
   if (message.startsWith('Package URL unavailable')) return WARNING_CODES.PURL_UNAVAILABLE;
+  if (message.startsWith('Maven component')) return WARNING_CODES.SBOM_MAVEN_NO_GROUP;
   if (message.startsWith('Declared license')) return WARNING_CODES.LICENSE_UNREPRESENTABLE;
   if (message.startsWith('Dropped a different dependency list')) return WARNING_CODES.SBOM_LOSSY_EDGES;
   if (message.startsWith('Dropped differing manifest metadata')) return WARNING_CODES.SBOM_LOSSY_MANIFEST;
@@ -457,6 +494,42 @@ function manifestMetadataDiffers(row: FlattenedDependency, dep: DependencyRow): 
   return `${row.license?.raw ?? ''}|${row.license?.spdxId ?? ''}` !== `${dep.license?.raw ?? ''}|${dep.license?.spdxId ?? ''}`;
 }
 
+function addManifestSection(row: FlattenedDependency, section: DepSection): void {
+  if (row.manifestSections.includes(section)) return;
+  row.manifestSections.push(section);
+  row.manifestSections.sort(compareCodeUnits);
+}
+
+/**
+ * One CycloneDX / SPDX mark per component, from the scanned sections.
+ * Development wins when the package is not also in `dependencies`, including
+ * a dev-only optional package. Optional wins over a production listing,
+ * because an optional package is often recorded in both sections. Production
+ * outranks development. Peer alone is unmarked. A lockfile-only row has no
+ * section and stays unmarked.
+ */
+function dependencyMark(sections: readonly DepSection[]): 'dev' | 'optional' | undefined {
+  const has = (section: DepSection): boolean => sections.includes(section);
+  if (has('devDependencies') && !has('dependencies')) return 'dev';
+  if (has('optionalDependencies')) return 'optional';
+  return undefined;
+}
+
+/** CycloneDX has no development value. `excluded` is the spec's non-runtime scope. */
+function cycloneComponentScope(sections: readonly DepSection[]): 'excluded' | 'optional' | undefined {
+  const mark = dependencyMark(sections);
+  if (mark === 'dev') return 'excluded';
+  if (mark === 'optional') return 'optional';
+  return undefined;
+}
+
+function spdxManifestRelationship(sections: readonly DepSection[]): 'DEV_DEPENDENCY_OF' | 'OPTIONAL_DEPENDENCY_OF' | undefined {
+  const mark = dependencyMark(sections);
+  if (mark === 'dev') return 'DEV_DEPENDENCY_OF';
+  if (mark === 'optional') return 'OPTIONAL_DEPENDENCY_OF';
+  return undefined;
+}
+
 /** Stable seed for the document id: format + root + the ordered dependency set + any dependency graph. */
 function sbomSerialSeed(format: string, artifact: ScanArtifact, deps: FlattenedDependency[], graph?: LockfileGraph): string {
   const edgeLines = graph?.edges
@@ -471,7 +544,7 @@ function sbomSerialSeed(format: string, artifact: ScanArtifact, deps: FlattenedD
     artifact.vibgrateVersion ?? '',
     ...deps.map(
       (d) =>
-        `${d.ecosystem}|${d.package}|${d.version}|${d.currentSpec}|${d.project}|${d.projects.join(',')}|${d.drift}|${d.majorsBehind ?? ''}|${d.scope}|${d.license?.raw ?? ''}|${d.license?.spdxId ?? ''}|${d.mergeWarnings.join(',')}|${digestIdentity(d.digests)}`,
+        `${d.ecosystem}|${d.package}|${d.version}|${d.currentSpec}|${d.project}|${d.projects.join(',')}|${d.drift}|${d.majorsBehind ?? ''}|${d.scope}|${dependencyMark(d.manifestSections) ?? ''}|${d.license?.raw ?? ''}|${d.license?.spdxId ?? ''}|${d.mergeWarnings.join(',')}|${digestIdentity(d.digests)}`,
     ),
     ...(graph?.rootDependsOn.length ? [`root>${uniqSorted(graph.rootDependsOn).join(',')}`] : []),
     ...edgeLines,
@@ -502,34 +575,72 @@ function cycloneDxDependencyGraph(
   return nodes;
 }
 
-/** Same graph as `cycloneDxDependencyGraph`, expressed as SPDX `DEPENDS_ON` relationships. */
+/**
+ * SPDX relationships for the resolved graph, plus manifest dev and optional
+ * marks. `DEPENDS_ON` keeps its direction (document or package depends on the
+ * child). `DEV_DEPENDENCY_OF` and `OPTIONAL_DEPENDENCY_OF` point the other
+ * way: the package is that kind of dependency of `SPDXRef-DOCUMENT`.
+ * A marked package that the lockfile already lists from the root replaces
+ * that `DEPENDS_ON`. A development dependency the lockfile left off the root
+ * is still written. Package-to-package edges stay `DEPENDS_ON`.
+ */
 function spdxRelationships(
   dependencies: FlattenedDependency[],
   graph: LockfileGraph | undefined,
 ): Array<{ spdxElementId: string; relatedSpdxElementId: string; relationshipType: string }> | undefined {
-  if (!graph?.edges) return undefined;
-  const fallback = graph.ecosystem ?? 'npm';
+  const rels: Array<{ spdxElementId: string; relatedSpdxElementId: string; relationshipType: string }> = [];
   const spdxIdOf = new Map<string, string>();
-  dependencies.forEach((dep, i) => spdxIdOf.set(componentIdentity(dep.ecosystem, dep.package, dep.version), `SPDXRef-Package-${i + 1}`));
+  const kindOf = new Map<string, 'DEV_DEPENDENCY_OF' | 'OPTIONAL_DEPENDENCY_OF'>();
+  dependencies.forEach((dep, i) => {
+    const identity = componentIdentity(dep.ecosystem, dep.package, dep.version);
+    spdxIdOf.set(identity, `SPDXRef-Package-${i + 1}`);
+    const kind = spdxManifestRelationship(dep.manifestSections);
+    if (kind) kindOf.set(identity, kind);
+  });
   const spdxIdFor = (key: string, ecosystem: Ecosystem): string | undefined => {
     const parsed = parseEdgeKey(key, ecosystem);
     return spdxIdOf.get(componentIdentity(parsed.ecosystem, parsed.name, parsed.version));
   };
 
-  const rels: Array<{ spdxElementId: string; relatedSpdxElementId: string; relationshipType: string }> = [];
-  for (const key of uniqSorted(graph.rootDependsOn)) {
-    const id = spdxIdFor(key, fallback);
-    if (id) rels.push({ spdxElementId: 'SPDXRef-DOCUMENT', relatedSpdxElementId: id, relationshipType: 'DEPENDS_ON' });
-  }
-  for (const dep of dependencies) {
-    const fromId = spdxIdOf.get(componentIdentity(dep.ecosystem, dep.package, dep.version));
-    if (!fromId) continue;
-    for (const childKey of uniqSorted(edgesOf(graph, dep))) {
-      const toId = spdxIdFor(childKey, dep.ecosystem);
-      if (toId) rels.push({ spdxElementId: fromId, relatedSpdxElementId: toId, relationshipType: 'DEPENDS_ON' });
+  const emitted = new Set<string>();
+  if (graph?.edges) {
+    const fallback = graph.ecosystem ?? 'npm';
+    for (const key of uniqSorted(graph.rootDependsOn)) {
+      const id = spdxIdFor(key, fallback);
+      if (!id) continue;
+      const parsed = parseEdgeKey(key, fallback);
+      const identity = componentIdentity(parsed.ecosystem, parsed.name, parsed.version);
+      const kind = kindOf.get(identity);
+      if (kind) {
+        rels.push({ spdxElementId: id, relatedSpdxElementId: 'SPDXRef-DOCUMENT', relationshipType: kind });
+        emitted.add(identity);
+      } else {
+        rels.push({ spdxElementId: 'SPDXRef-DOCUMENT', relatedSpdxElementId: id, relationshipType: 'DEPENDS_ON' });
+      }
     }
   }
-  return rels;
+
+  for (const dep of dependencies) {
+    const identity = componentIdentity(dep.ecosystem, dep.package, dep.version);
+    if (emitted.has(identity)) continue;
+    const kind = kindOf.get(identity);
+    const id = spdxIdOf.get(identity);
+    if (!kind || !id) continue;
+    rels.push({ spdxElementId: id, relatedSpdxElementId: 'SPDXRef-DOCUMENT', relationshipType: kind });
+    emitted.add(identity);
+  }
+
+  if (graph?.edges) {
+    for (const dep of dependencies) {
+      const fromId = spdxIdOf.get(componentIdentity(dep.ecosystem, dep.package, dep.version));
+      if (!fromId) continue;
+      for (const childKey of uniqSorted(edgesOf(graph, dep))) {
+        const toId = spdxIdFor(childKey, dep.ecosystem);
+        if (toId) rels.push({ spdxElementId: fromId, relatedSpdxElementId: toId, relationshipType: 'DEPENDS_ON' });
+      }
+    }
+  }
+  return rels.length ? rels : undefined;
 }
 
 /** A lockfile component plus the merge facts `collectLockfileGraph` records. */
@@ -588,6 +699,7 @@ export function flattenDependencies(
           addMergeWarnings(existing, [describeLossyManifest(ecosystem, dep.package, version, project.name, existing.project)]);
         }
         addProjects(existing, [project.name]);
+        addManifestSection(existing, dep.section);
         continue;
       }
       const row: FlattenedDependency = {
@@ -599,6 +711,7 @@ export function flattenDependencies(
         drift: dep.drift,
         majorsBehind: dep.majorsBehind,
         scope: 'direct',
+        manifestSections: [dep.section],
         ecosystem,
         license: dep.license,
         mergeWarnings: [],
@@ -632,6 +745,7 @@ export function flattenDependencies(
       drift: 'unknown',
       majorsBehind: null,
       scope: 'transitive',
+      manifestSections: [],
       ecosystem,
       mergeWarnings: [],
       digests: orderComponentDigests(dep.digests ?? []),
@@ -894,11 +1008,18 @@ export function toCycloneDx(artifact: ScanArtifact, graph?: LockfileGraph): Reco
         properties.push({ name: 'vibgrate:mergeWarning', value: mergeWarning });
         pushWarningCode(properties, mergeWarning);
       }
+      const groupWarning = mavenGroupWarning(dep.ecosystem, dep.package, dep.version);
+      if (groupWarning) {
+        properties.push({ name: MAVEN_GROUP_WARNING_PROPERTY, value: groupWarning });
+        pushWarningCode(properties, groupWarning);
+      }
+      const componentScope = cycloneComponentScope(dep.manifestSections);
       return {
         type: 'library',
         'bom-ref': purl ?? componentBomRef(dep.ecosystem, dep.package, dep.version),
         name: dep.package,
         version: dep.version,
+        ...(componentScope ? { scope: componentScope } : {}),
         ...(purl ? { purl } : {}),
         ...cycloneDigestField(dep.digests),
         ...(license.cycloneLicenses ? { licenses: license.cycloneLicenses } : {}),
@@ -958,6 +1079,8 @@ export function toSpdx(artifact: ScanArtifact, graph?: LockfileGraph): Record<st
       if (warning) pushSpdxWarning(warning);
       if (license.warning) pushSpdxWarning(license.warning);
       for (const mergeWarning of dep.mergeWarnings) pushSpdxWarning(mergeWarning);
+      const groupWarning = mavenGroupWarning(dep.ecosystem, dep.package, dep.version);
+      if (groupWarning) pushSpdxWarning(groupWarning);
       return {
         name: dep.package,
         SPDXID: `SPDXRef-Package-${i + 1}`,
@@ -1002,6 +1125,14 @@ export function toSpdx(artifact: ScanArtifact, graph?: LockfileGraph): Record<st
         }
       : {}),
   };
+}
+
+/** Warnings for Maven components whose purl has no group namespace. Same order as the SBOM rows. */
+export function collectMavenGroupWarnings(artifact: ScanArtifact, graph?: LockfileGraph): string[] {
+  return flattenDependencies(artifact, graph?.components ?? [], graph?.ecosystem).flatMap((dep) => {
+    const warning = mavenGroupWarning(dep.ecosystem, dep.package, dep.version);
+    return warning ? [warning] : [];
+  });
 }
 
 /** Warnings for components whose purl was omitted. Same order as the SBOM rows; stable for a given artifact. */
@@ -1134,6 +1265,7 @@ const exportCommand = new Command('export')
       ...collectPurlWarnings(artifact, lockfileGraph),
       ...collectLicenseWarnings(artifact, lockfileGraph),
       ...collectMergeWarnings(artifact, lockfileGraph),
+      ...collectMavenGroupWarnings(artifact, lockfileGraph),
     ]) {
       const code = sbomWarningCode(warning);
       if (code) coded.push(codedWarning(code, warning));

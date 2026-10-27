@@ -8,6 +8,7 @@ import {
   type DriftBudgetMode,
   type DriftBudgetRuleResult,
 } from '../core-open/index.js';
+import { DRIFT_WORSENING_BASELINE_UNUSABLE, DRIFT_WORSENING_NO_BASELINE } from './drift-budget-gate.js';
 import { ensureDir, writeJsonFile } from './utils/fs.js';
 import type { ScanArtifact } from '../core-open/types.js';
 
@@ -54,11 +55,14 @@ export interface DriftBudgetSummaryInput {
   flagWorseningPercent?: number;
   /** Unvalidated `driftBudget` from the project config. Ignored when a flag is set. */
   configRaw?: unknown;
+  /**
+   * Set when `--baseline` was passed. A worsening flag with no numeric delta
+   * then fails. Without it, the same gap is not evaluated.
+   */
+  baseline?: string;
 }
 
 const ABSENT_CONFIG = 'DriftScore is absent; the project drift budget was not compared.';
-const FLAG_WORSENING_NEEDS_BASELINE =
-  'Failing fitness function: --drift-worsening requires --baseline to compare against previous drift.';
 
 function fromRules(
   source: ScanSummaryDriftBudget['source'],
@@ -115,6 +119,7 @@ function flagRule(
   delta: number | undefined,
   flagBudget: number | undefined,
   flagWorseningPercent: number | undefined,
+  baseline: string | undefined,
 ): DriftBudgetRuleResult {
   if (rule.id === 'maxScore' && flagBudget !== undefined) {
     return {
@@ -126,10 +131,14 @@ function flagRule(
     };
   }
   if (rule.id === 'maxWorseningPercent' && flagWorseningPercent !== undefined) {
-    // The flag fails when a measured score has no baseline. The config key
-    // does not: there the same gap is "not evaluated".
+    // No `--baseline`: the flag is not compared. A baseline that was passed
+    // but produced no numeric delta fails — the comparison was requested.
+    // A config `maxWorseningPercent` stays "not evaluated" in that gap.
     if (delta === undefined) {
-      return { id: 'maxWorseningPercent', status: 'breach', message: FLAG_WORSENING_NEEDS_BASELINE };
+      if (!baseline) {
+        return { id: 'maxWorseningPercent', status: 'not_evaluated', message: DRIFT_WORSENING_NO_BASELINE };
+      }
+      return { id: 'maxWorseningPercent', status: 'breach', message: DRIFT_WORSENING_BASELINE_UNUSABLE };
     }
     const actual = worseningPercent(score, score - delta);
     if (rule.status === 'breach') {
@@ -155,6 +164,7 @@ function summarizeFlags(
   delta: number | undefined,
   flagBudget: number | undefined,
   flagWorseningPercent: number | undefined,
+  baseline: string | undefined,
 ): ScanSummaryDriftBudget {
   if (score === null) {
     const rules: DriftBudgetRuleResult[] = [];
@@ -184,7 +194,7 @@ function summarizeFlags(
     maxRiskWorseningPercent: null,
   };
   const rules = evaluateMeasured(score, delta, budget).map((rule) =>
-    flagRule(rule, score, delta, flagBudget, flagWorseningPercent),
+    flagRule(rule, score, delta, flagBudget, flagWorseningPercent, baseline),
   );
   return fromRules('flags', 'enforce', rules);
 }
@@ -214,7 +224,7 @@ export function summarizeDriftBudget(
   input: DriftBudgetSummaryInput = {},
 ): ScanSummaryDriftBudget | null {
   if (input.flagBudget !== undefined || input.flagWorseningPercent !== undefined) {
-    return summarizeFlags(score, delta, input.flagBudget, input.flagWorseningPercent);
+    return summarizeFlags(score, delta, input.flagBudget, input.flagWorseningPercent, input.baseline);
   }
   if (input.configRaw === undefined || input.configRaw === null) return null;
   return summarizeConfig(score, delta, input.configRaw);

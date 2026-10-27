@@ -65,6 +65,22 @@ export interface UpgradePlaybookRef {
   codemod?: string;
 }
 
+/**
+ * Why a planned upgrade cannot be applied. `install-failed` is an apply
+ * outcome, not a planner annotation — it is not part of this set.
+ */
+export type PlannedUpgradeBlock = 'policy' | 'peer' | 'no-fixed-version';
+
+/** One advisory an upgrade would clear, when the planner names it. */
+export interface PlannedAdvisoryRef {
+  id: string;
+  /**
+   * Published version that clears this advisory. Null when none is published —
+   * installing a newer release does not resolve it.
+   */
+  fixedVersion: string | null;
+}
+
 export interface PlannedUpgrade {
   package: string;
   ecosystem: string;
@@ -76,6 +92,13 @@ export interface PlannedUpgrade {
   fixes: VulnDelta;
   reason: string;
   playbook?: UpgradePlaybookRef;
+  /** Advisories this upgrade would clear, when the planner names them. */
+  advisories?: PlannedAdvisoryRef[];
+  /**
+   * Set when the planner already knows the upgrade cannot be applied.
+   * `vg fix` does not run the package manager for a blocked upgrade.
+   */
+  block?: PlannedUpgradeBlock;
 }
 
 export interface ExcludedUpgrade {

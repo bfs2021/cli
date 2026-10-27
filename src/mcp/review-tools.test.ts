@@ -4,8 +4,9 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { VgGraph } from '../schema.js';
+import { COMPRESS_TOOLS } from './compress-tools.js';
 import { REVIEW_TOOLS } from './review-tools.js';
-import { extraToolsFor } from './server.js';
+import { advertisedAnnotations, extraToolsFor } from './server.js';
 import { HOT_TOOLS, TOOLS } from './tools.js';
 
 /**
@@ -33,10 +34,41 @@ describe('what `vg serve` advertises', () => {
 
   it('declares that it writes, that what it writes is never destroyed, and that comments reach Cloud', () => {
     expect(tool.annotations).toEqual({ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true });
+    expect(advertisedAnnotations(tool)).toEqual(tool.annotations);
     expect(tool.description).toMatch(/op "reply" answers a thread/);
     expect(tool.graphless).toBe(true);
     expect(tool.description).toMatch(/write what and why first/);
     expect(tool.description).toMatch(/recorded as origin "agent"/);
+  });
+
+  it('keeps write tools off unless that mode is requested, and keeps read-only annotations on the rest', () => {
+    expect(extraToolsFor({}, '/repo')).toEqual([]);
+    expect(extraToolsFor({ compressTools: true, memory: true }, '/repo').map((t) => t.name)).not.toContain('review_doc');
+    expect(TOOLS.map((t) => t.name)).not.toContain('review_doc');
+    for (const listed of TOOLS) {
+      const annotations = advertisedAnnotations(listed);
+      expect(annotations.readOnlyHint, listed.name).toBe(true);
+      expect(annotations.destructiveHint, listed.name).not.toBe(true);
+    }
+    const review = extraToolsFor({ review: true }, '/repo');
+    expect(review.map((t) => t.name)).toEqual(['review_doc']);
+    expect(advertisedAnnotations(review[0]!)).toEqual({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    });
+    // Compression and memory writes stay unlisted on a review-only server.
+    const reviewNames = new Set(review.map((t) => t.name));
+    for (const write of ['compress_content', 'memory_save']) {
+      expect(reviewNames.has(write)).toBe(false);
+    }
+    const compressWrite = COMPRESS_TOOLS.find((t) => t.name === 'compress_content');
+    expect(advertisedAnnotations(compressWrite!)).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+    });
   });
 });
 
@@ -49,8 +81,8 @@ describe('review_doc, as an agent uses it', () => {
     const res = spawnSync('git', args, { cwd, encoding: 'utf8' });
     if (res.status !== 0) throw new Error(`git ${args.join(' ')}: ${res.stderr}`);
   };
-  function repo(): string {
-    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'vg-review-tool-')));
+  function repo(parentDir?: string): string {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(parentDir ?? os.tmpdir(), 'vg-review-tool-')));
     roots.push(root);
     git(root, 'init', '-q', '-b', 'main');
     git(root, 'config', 'user.email', 'test@example.com');
@@ -140,6 +172,67 @@ describe('review_doc, as an agent uses it', () => {
     expect(await call(root, { op: 'rewrite', doc_id })).toMatchObject({ error: 'bad_request' });
     expect(await call(root, { op: 'get' })).toMatchObject({ error: 'bad_request', message: 'op "get" needs doc_id — call op "open" first' });
     expect(await call(root, { op: 'get', doc_id: 'rd_000000000000' })).toMatchObject({ error: 'review_doc_failed' });
+  });
+
+  it('rejects a document id or pin that leaves the repository, and a text over the size limit', async () => {
+    // The parent of a repo in os.tmpdir() is the shared temp dir. Other tests
+    // create and delete entries there, so the "nothing escaped" listing has to
+    // use a private parent.
+    const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'vg-review-confine-')));
+    roots.push(sandbox);
+    const root = repo(sandbox);
+    const parent = path.dirname(root);
+    const before = fs.readdirSync(parent).sort();
+    const outside = path.join(parent, 'outside.json');
+
+    const badId = await call(root, {
+      op: 'patch',
+      doc_id: '../outside',
+      version: 1,
+      ops: [{ op: 'set_title', title: 'escaped' }],
+    });
+    expect(badId).toMatchObject({ error: 'review_doc_failed' });
+    expect(String(badId.message)).toMatch(/not a review document id/);
+    expect(fs.existsSync(outside)).toBe(false);
+
+    const opened = await call(root, { op: 'open' });
+    const id = opened.doc_id as string;
+    const outline = opened.outline as { sections: { blocks: { id: string }[] }[] };
+    const blockId = outline.sections[0]?.blocks[0]?.id;
+    expect(blockId).toBeTruthy();
+    expect(id).toMatch(/^rd_[0-9a-f]{12}$/);
+    const store = path.join(root, '.vibgrate', 'review-docs', id);
+    expect(fs.existsSync(store)).toBe(true);
+
+    for (const pinPath of ['../secret.txt', '../../etc/passwd', '/etc/passwd', 'C:/secret.txt']) {
+      const escaped = await call(root, {
+        op: 'patch',
+        doc_id: id,
+        version: 1,
+        ops: [{
+          op: 'insert',
+          section: 'design',
+          at: 'start',
+          block: { type: 'code_peek', pin: { side: 'head', path: pinPath, start: 1, end: 1 } },
+        }],
+      });
+      expect(escaped, pinPath).toMatchObject({ saved: false });
+      expect(JSON.stringify(escaped), pinPath).toMatch(/repository-relative/);
+    }
+
+    const huge = await call(root, {
+      op: 'patch',
+      doc_id: id,
+      version: 1,
+      ops: [{ op: 'set_text', block: blockId, text: 'x'.repeat(20_001) }],
+    });
+    expect(huge).toMatchObject({ saved: false });
+    expect(JSON.stringify(huge)).toMatch(/exceeds 20000 characters/);
+
+    const names = fs.readdirSync(path.join(root, '.vibgrate', 'review-docs')).sort();
+    expect(names.every((name) => name === 'scratchpad.json' || /^rd_[0-9a-f]{12}$/.test(name))).toBe(true);
+    expect(fs.readdirSync(parent).sort()).toEqual(before);
+    expect(fs.existsSync(outside)).toBe(false);
   });
 
   it('works outside a git repository only to say so', async () => {

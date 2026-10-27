@@ -31,6 +31,21 @@ export interface DriftBudgetGateResult {
 }
 
 /**
+ * `--drift-worsening` with a measured score and no `--baseline`.
+ * The flag is not compared. It does not fail the scan.
+ */
+export const DRIFT_WORSENING_NO_BASELINE =
+  '--drift-worsening was not compared. Pass --baseline to compare against previous drift.';
+
+/**
+ * `--drift-worsening` when `--baseline` was passed but the scan has no numeric
+ * delta (missing file, unreadable file, or a baseline score that is not a number).
+ * The comparison was requested and could not run, so the flag fails.
+ */
+export const DRIFT_WORSENING_BASELINE_UNUSABLE =
+  'Failing fitness function: --drift-worsening requires --baseline to compare against previous drift.';
+
+/**
  * Compare a DriftScore to `--drift-budget`.
  *
  * A null score is unmeasured. It does not fail the budget, and it is not

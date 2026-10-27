@@ -155,6 +155,20 @@ export function extraToolsFor(opts: ServeOptions, root: string): VgTool[] {
   ];
 }
 
+/**
+ * Annotations `tools/list` returns. Read-only and closed-world unless the
+ * tool says otherwise. A write tool must set `readOnlyHint: false` itself;
+ * this default does not override that.
+ */
+export function advertisedAnnotations(tool: Pick<VgTool, 'annotations'>): {
+  readOnlyHint: boolean;
+  openWorldHint: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+} {
+  return { readOnlyHint: true, openWorldHint: false, ...(tool.annotations ?? {}) };
+}
+
 /** Placeholder handed to graph-less tools; they never read it. */
 const NO_GRAPH = { nodes: [], edges: [] } as unknown as VgGraph;
 
@@ -537,7 +551,7 @@ export function createServer(source: GraphSource, opts: ServeOptions = {}): Serv
         name: t.name,
         description: t.name === 'orient' && budget ? `${t.description}${budget}` : t.description,
         inputSchema: t.inputSchema,
-        annotations: { readOnlyHint: true, openWorldHint: false, ...(t.annotations ?? {}) },
+        annotations: advertisedAnnotations(t),
       })),
     };
   });

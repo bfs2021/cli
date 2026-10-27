@@ -193,8 +193,22 @@ describe('summarizeDriftBudget', () => {
     });
   });
 
-  it('blocks on --drift-worsening when a measured score has no baseline', () => {
+  it('does not compare --drift-worsening when no --baseline was passed', () => {
     expect(summarizeDriftBudget(60, undefined, { flagWorseningPercent: 5 })).toEqual({
+      source: 'flags',
+      mode: 'enforce',
+      withinBudget: true,
+      blocking: false,
+      rules: [{
+        id: 'maxWorseningPercent',
+        status: 'not_evaluated',
+        message: '--drift-worsening was not compared. Pass --baseline to compare against previous drift.',
+      }],
+    });
+  });
+
+  it('blocks on --drift-worsening when --baseline was passed but produced no delta', () => {
+    expect(summarizeDriftBudget(60, undefined, { flagWorseningPercent: 5, baseline: '.vibgrate/baseline.json' })).toEqual({
       source: 'flags',
       mode: 'enforce',
       withinBudget: false,
