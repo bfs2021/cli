@@ -22,6 +22,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { redactSecrets } from '../core-open/utils/redact.js';
 import { inspectUtf8 } from '../core-open/utils/text-bytes.js';
+import { readDirectory, type DirectoryReader } from './dir-reader.js';
 import { nodeId } from './ids.js';
 import { isSkippedDirName, loadRootIgnore, SKIP_FILES } from './discover.js';
 import { assertSafeWalkRoot, createWalkBudget, noteWalkEntry, UnsafeRootError } from '../core-open/utils/root-safety.js';
@@ -58,6 +59,8 @@ export interface DiscoverDocsOptions {
   maxFiles?: number;
   /** Walk-entry ceiling. `0` disables. Default: `VG_MAX_FILES`, else 100000. */
   maxEntries?: number;
+  /** Directory listing. Defaults to one filesystem `readdir`. */
+  readDir?: DirectoryReader;
 }
 
 export interface DiscoveredDoc {
@@ -370,6 +373,7 @@ function isEnvExampleName(baseLower: string): boolean {
 export function discoverDocs(options: DiscoverDocsOptions): DiscoveredDoc[] {
   const root = path.resolve(options.root);
   const maxFiles = options.maxFiles ?? DOC_MAX_FILES;
+  const readDir = options.readDir ?? readDirectory;
   const rootIg = loadRootIgnore(root, options.exclude ?? []);
   const scopeAbs = (options.paths?.length ? options.paths.map((p) => path.resolve(root, p)) : [root]).filter((p) =>
     fs.existsSync(p),
@@ -401,7 +405,7 @@ export function discoverDocs(options: DiscoverDocsOptions): DiscoveredDoc[] {
     if (found.size >= maxFiles || depth > 12) return;
     let entries: fs.Dirent[];
     try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
+      entries = readDir(dir);
     } catch {
       return;
     }

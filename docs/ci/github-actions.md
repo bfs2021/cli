@@ -30,6 +30,25 @@ scan runs.
     max-score: 40
 ```
 
+`fail-on-epss` is the same kind of input for advisory EPSS scores. It takes a
+probability from 0 to 1 and maps to `--fail-on-epss`. Leave it empty to never
+fail on EPSS. It needs `vulns: true`; without that the step fails before the
+scan and tells you to set it. A value that is not a number from 0 to 1 fails
+the step before the scan. A scanner image that does not list `--fail-on-epss`
+in `scan --help` prints a notice and runs the scan without that flag. A missing
+EPSS score is never treated as 0; without the vulnerability pass there is
+nothing to compare.
+
+```yaml
+- uses: actions/checkout@v4
+- uses: vibgrate/cli@v1
+  with:
+    vulns: true
+    fail-on: error
+    max-score: 40
+    fail-on-epss: '0.1'
+```
+
 ## Read the score in a later step
 
 The Action exposes the result as step outputs, and adds a line to the job
@@ -105,17 +124,17 @@ steps:
     with:
       vulns: true
       fail-on: error        # critical/high block the merge
+      fail-on-epss: '0.1'   # advisory EPSS at or above 0.1
       upload-sarif: true
       category: vibgrate-vulns
 ```
 
 The Action inputs map to scan flags: `vulns: true` adds `--vulns`, `fail-on` adds
-`--fail-on`, and `upload-sarif: true` runs `github/codeql-action/upload-sarif`
-after the scan (with `always()`, so findings still surface when the gate fails).
+`--fail-on`, `fail-on-epss` adds `--fail-on-epss` (and needs `vulns: true`), and
+`upload-sarif: true` runs `github/codeql-action/upload-sarif` after the scan
+(with `always()`, so findings still surface when the gate fails).
 Prefer raw CLI steps? `npx @vibgrate/cli scan --vulns --format sarif --out
 vibgrate-vulns.sarif --fail-on error`, then upload the file yourself.
-How advisory severity maps onto that gate, and what a local scan does with
-RiskScore and EPSS: [Gating CI on vulnerability severity, RiskScore and EPSS](../../DOCS.md#gating-ci-on-vulnerability-severity-riskscore-and-epss).
 
 ## Infrastructure misconfiguration gate (`--iac`)
 
@@ -169,6 +188,7 @@ Other scan-time gates on the same command:
 - `--fail-on error` fails on error-level findings. Warnings do not fail this gate.
 - `--fail-on architecture-finding` fails on a hard boundary finding from the architecture module (an HTTP handler that writes the store, domain code that does I/O); `architecture-warning` also fails on warnings. Needs the code map the scan builds and the Architecture module (`vg module install arch`); the rules come from `.vibgrate/architecture.toml` (`policy = "hexagonal-v1"`, `"layered-v1"` or `"vertical-v1"`, plus any `[[overlay]]` rules of your own; a `deny` overlay with `severity = "hard"` fails the gate like a baked violation). Each failing line is `file:line  symbol  violation: … (rule)`. A gate that cannot be evaluated exits 2.
 - `--drift-budget <score>` fails when DriftScore is above the budget.
+- `--fail-on-epss <threshold>` fails when any advisory EPSS score is at or above the threshold (0–1). A score equal to the threshold fails. A missing score is not compared and is not treated as 0. The flag replaces `failOnEpss` in the project config. It reads advisories from `--vulns` or `--full` and does not contact an EPSS service. When there is no score to compare, the job exits 0.
 
 ## SARIF upload behavior
 
@@ -204,7 +224,7 @@ A public GitHub repository Vibgrate has not scanned shows `scanning…` on the f
 
 `vg build` reads a workflow file that sits directly in `.github/workflows/` and whose name ends in `.yml` or `.yaml`. A file in a subdirectory of that folder is not extracted here. Only the first YAML document in the file is read.
 
-Each step with a `uses:` string becomes a step node and an external node, joined by a `depends_on` edge. The string is copied as it is written. The map has no field that labels the pin a commit SHA, a tag, a branch, a local path, or a `docker://` image.
+Each step with a `uses:` string becomes a step node and an external node, joined by a `depends_on` edge. The string is copied as it is written. A YAML alias is the same string: `uses: *checkout_ref` records the pin written on `&checkout_ref`, and a step written `- *checkout` records that step on every job that aliases it. The line stored for an aliased node is the anchored node's line, where the value is written, not the `*alias` token. A step that only aliases its `uses:` value keeps the step line on the step written in that job; the action line is the anchored scalar. Two steps that share an anchored `with:` block each keep the `uses:` pin written on that step. An alias expansion past the parser's cap of 100 is not expanded. That document is skipped, the file contributes no nodes, and the build warning is `VG_WARN_YAML_DOCUMENT_UNMATERIALISED`. The map has no field that labels the pin a commit SHA, a tag, a branch, a local path, or a `docker://` image.
 
 | Node | Kind | Signature | Qualified name | What holds the pin |
 | --- | --- | --- | --- | --- |

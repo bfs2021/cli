@@ -18,7 +18,8 @@ import { parseDsn } from '../reporting/commands/push.js';
 import { gatherSystemMemory } from '../code/local-runtime.js';
 import { buildLocalInferenceStatus, type LocalInferenceStatus } from '../runtime/local-inference-status.js';
 import { VERSION } from '../version.js';
-import { findConfigFile, readDataConfigSync, shadowedConfigFiles } from '../core-open/config.js';
+import { driftBudgetConflictWarning, findConfigFile, readDataConfigSync, shadowedConfigFiles } from '../core-open/config.js';
+import { formatWarningLine } from '../core-open/warnings.js';
 import { c, info, json } from '../util/output.js';
 import { applyGlobalOptions, readGlobal, type GlobalOpts } from '../cli-options.js';
 import { rootOf } from './util.js';
@@ -76,6 +77,8 @@ export function configNotes(root: string): string[] {
       }
     }
   }
+  const conflict = driftBudgetConflictWarning(root);
+  if (conflict) notes.push(formatWarningLine(conflict));
   return notes;
 }
 

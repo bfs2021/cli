@@ -3,8 +3,10 @@
   "driftBudget": 30,
   "currency": "major",
   "//allow": "typescript lags a major DELIBERATELY: the CLI consumes the TypeScript compiler API (src/reporting/config.ts — createSourceFile, ScriptKind, isPropertyAssignment, …), which the TS 7 native port removes/reshapes, and @typescript-eslint peers still cap at typescript <6.1.0. Revisit when both our API usage and the lint toolchain support TS 7, then delete this allowance.",
+  "//allow-tsup": "TEMPORARY (approved 2026-10-20, review by 2026-11-19): tsup lags a major. tsup 9.0.0 (14 Oct 2026) changes the published dist/index.d.ts (the DutyCandidate type loses its public export), so the upgrade lands separately as a reviewed change. Delete this allowance when the CLI builds on tsup 9.",
   "allow": {
-    "typescript": "major"
+    "typescript": "major",
+    "tsup": "major"
   },
   "worseningPercent": 0,
   "baseline": "gate/drift-baseline.json",

@@ -14,6 +14,30 @@ backward compatible.
 
 ### Changed
 
+- **`vg sbom export` marks development and optional dependencies.** A scanned
+  `devDependencies` row sets CycloneDX component `scope` to `excluded` and
+  writes an SPDX `DEV_DEPENDENCY_OF` relationship. A scanned
+  `optionalDependencies` row sets `scope` to `optional` and writes
+  `OPTIONAL_DEPENDENCY_OF`. `vibgrate:scope` stays `direct` or `transitive`.
+  Production, peer, and lockfile-only rows omit component `scope`.
+
+- **The SBOM export section links the dependency-scope page.** The `vg sbom`
+  discussion in `DOCS.md` points at `docs/sbom-dependency-scope.md` for how
+  `direct` and `transitive` differ from production, development, optional, and
+  peer, and for the CycloneDX and SPDX fields the export leaves out.
+
+- **`vg review --base` documents where the policy is loaded from.** The docs
+  and the `--base` help text say the review policy and `.vibgrate/review`
+  packs are read from that ref, that a base with no policy uses the standard
+  defaults, and that a local review without `--base` uses the committed `HEAD`
+  copy (or the files on disk when git has no committed copy).
+
+- **Disagreeing `driftBudget` values are named.** When more than one YAML or
+  JSON config file sets `driftBudget` and the values differ, `vg` prints one
+  stderr warning and `vg doctor` repeats it. The warning names each file, the
+  `driftBudget` value in that file, and which file is the config in use. The
+  first file in the lookup order wins. The others are not read.
+
 - **`vg build` and `vg scan` do not follow symlinks, and they say so.** A
   directory symlink is not entered, so a link to its parent cannot hang the
   walk, and a file symlink is not read. When any are skipped, one stderr
@@ -52,6 +76,40 @@ backward compatible.
   are retired names for those flags.
 
 ### Fixed
+
+- **`vg sbom export` marks a PEP 621 optional extra.** A package under
+  `pyproject.toml` `[project.optional-dependencies]` is stored as section
+  `optionalDependencies`. CycloneDX component `scope` is `optional`, and SPDX
+  writes `OPTIONAL_DEPENDENCY_OF`. A `[project] dependencies` package still
+  omits component `scope`. A name listed in both is stored once, as
+  `optionalDependencies`. `[dependency-groups]` and Poetry dependency groups
+  stay out of the scan artifact.
+
+- **`vg sbom export` marks an optional Poetry dependency.** A
+  `[tool.poetry.dependencies]` inline table with `optional = true` is stored
+  as section `optionalDependencies`. CycloneDX component `scope` is
+  `optional`, and SPDX writes `OPTIONAL_DEPENDENCY_OF`. A required dependency
+  in the same table still omits component `scope`. `vibgrate:scope` stays
+  `direct`. The `python` key is still not a dependency.
+
+- **`vg sbom export` marks an optional Cargo crate.** A `[dependencies]`
+  entry with `optional = true` is stored as section `optionalDependencies`.
+  CycloneDX component `scope` is `optional`, and SPDX writes
+  `OPTIONAL_DEPENDENCY_OF`. A required crate still omits component `scope`.
+  `vibgrate:scope` stays `direct`. An `optional = true` entry under
+  `[dev-dependencies]` is still left out of the scan artifact with the other
+  dev-dependencies.
+
+- **`vg report --format html` does not turn a skipped security pack into a
+  row of zeros.** A DriftScore that was not measured stays `n/a`. A security
+  section whose packs are all `unavailable`, and which has no findings, stays
+  "Not scanned". A measured `0`, and a pack that ran and found nothing, still
+  show `0`.
+
+- **`vg serve --review` rejects a document id that is not `rd_` plus 12 hex
+  digits before it opens a file.** The error says `not a review document id`.
+  A pin whose path is absolute or contains `..` is still refused, and nothing
+  is saved.
 
 - **`vg evidence release` keeps SBOM components that have no package URL and no CPE.**
   Vendored code, a file, firmware, and a machine-learning model stay in the
