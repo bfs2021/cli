@@ -460,7 +460,7 @@ One scan gives you:
 
 SARIF writes one result per package and advisory (`vg scan --vulns --format sarif`). Every result includes `partialFingerprints["vg/finding-id/v1"]`, so an unchanged finding keeps the same code-scanning alert. The advisory's own id is the primary id. CVE and other aliases stay on that result. A second code-scanning alert is expected when the scan kept two advisory ids, including when those ids list each other as aliases. Field layout, result order, and what the fingerprint is made from: [DOCS.md](./DOCS.md#advisories-with-several-ids) and [DOCS.md](./DOCS.md#result-fingerprints).
 
-JSON writes one finding when those advisories alias each other, including through a third id. The primary id is the lowest `CVE-` id in the group when one is present, otherwise the lowest id, in code-unit order. The other ids are `aliases`, sorted the same way. An advisory that no other advisory on that package links to keeps its own id. The rule is in [DOCS.md](./DOCS.md#vulnerabilities-and-exposure-attribution).
+JSON (`vg scan --vulns --format json`, and `.vibgrate/scan_result.json`) writes one finding for a package and version when those ids alias each other, including through a third id. The finding id is the lowest CVE in the group when any linked id is a CVE, and the lowest advisory id when none is. One advisory keeps its own id. `aliases` lists the other ids, sorted. `--offline --package-manifest` groups the same way. The id rule is in [DOCS.md](./DOCS.md#advisory-alias-groups-in-json).
 
 ```bash
 vg scan --vulns                 # drift score + known vulnerabilities
@@ -515,7 +515,7 @@ vg evidence exposure CVE-2025-12345 --bundle ./ev   # signed answer, exit code f
 | 4. Ask | `vg evidence exposure <vuln>` | Which shipped products contain it, at which versions, in which markets, still in support |
 | 5. Prove | `vg evidence verify <bundle>` | Re-check the signed answer offline, on any machine |
 
-Between those: `vg evidence readiness` is a deterministic gap report against the regime's obligations, `vg evidence regimes` lists the regimes and their clocks, `vg evidence drill` runs a timed rehearsal against a simulated advisory, `vg evidence watch` joins the CISA KEV catalog to your frozen manifests, `vg evidence pack` builds the submission pack a human pastes into the reporting platform, and `vg evidence export` writes an air-gapped bundle of everything.
+Between those: `vg evidence readiness` is a deterministic gap report against the regime's obligations, `vg evidence regimes` lists the regimes and their clocks, `vg evidence drill` runs a timed rehearsal against a simulated advisory, `vg evidence watch` joins the CISA KEV catalog to your frozen manifests, `vg evidence pack` builds the submission pack a human pastes into the reporting platform, and `vg evidence export` writes an air-gapped bundle of everything. What `regimes`, `readiness`, and `drill` read, and a local dry-run that finishes before any upload, is in [DOCS.md](./DOCS.md#readiness-regimes-and-a-local-drill).
 
 ### Freeze a container release from what the build wrote
 
@@ -614,10 +614,12 @@ Gate on drift budgets and regression relative to a baseline:
 ```bash
 vg baseline
 vg scan --baseline .vibgrate/baseline.json --drift-budget 40 --drift-worsening 5
+vg scan --vulns --fail-on-epss 0.1
 ```
 
 - `--drift-budget <score>` fails the build if drift exceeds your budget.
 - `--drift-worsening <percent>` fails the build if drift worsens by more than X% vs baseline.
+- `--fail-on-epss <threshold>` fails the build when any advisory EPSS score is at or above the threshold, a probability from 0 to 1. A score equal to the threshold fails. A missing score is not compared and is not treated as 0. The flag replaces `failOnEpss` in `.vibgrate/config.yml` or `vibgrate.config.json`. It reads advisories from `vg scan --vulns` or `vg scan --full`. See [DOCS.md](./DOCS.md#epss-gate).
 - `--summary-out <file>` writes a small JSON summary (`driftScore`, `riskLevel`, change since `--baseline`, and the `driftBudget` verdict) that a CI step can read, even when a gate fails the run. `driftBudget` is `null` when no budget is set. `--drift-budget` and `--drift-worsening` are recorded with `source` `flags`. An unmeasured score is `null`, never `0`. The full artifact carries the same `drift.*` fields plus the per-component scores: [DOCS.md](./DOCS.md#score-fields-in-the-json-artifact).
 - `--junit <file>` writes a deterministic JUnit XML summary of findings and those gates, next to `--format` (JSON or SARIF). The exit code is unchanged; see [DOCS.md](./DOCS.md#junit).
 
@@ -660,7 +662,7 @@ vg vex                          # generate an OpenVEX document for attestation
 
 `vg sbom export` writes an inventory, not a compliance determination. CycloneDX component `type` is `application` on the metadata component and `library` on every dependency row, including a container image. SPDX `primaryPackagePurpose` is omitted. The mapping, the gaps (OS packages, image contents, Terraform resources), and short fixture examples are in [DOCS.md](./DOCS.md#cyclonedx-type-and-spdx-primarypackagepurpose).
 
-`vibgrate:scope` on each component is `direct` or `transitive`. How production, development, and optional dependencies are written in CycloneDX and SPDX, including fields the export omits, is in [Dependency scope](./docs/sbom-dependency-scope.md).
+`vibgrate:scope` on each component is `direct` or `transitive`. A development dependency sets CycloneDX component `scope` to `excluded` and an SPDX `DEV_DEPENDENCY_OF` relationship. An optional dependency sets `scope` to `optional` and `OPTIONAL_DEPENDENCY_OF`. The mapping, including fields the export omits, is in [Dependency scope](./docs/sbom-dependency-scope.md).
 
 Match a component on its package URL (`purl` in CycloneDX, the `purl` externalRef in SPDX). Scan JSON uses the same coordinates (`projects[].type`, `dependencies[].package`, `resolvedVersion`, and `extended.vulnerabilities.packages[]`) and does not repeat the purl string. These files have no CPE field. The CLI does not invent one, and a CPE from another cataloger does not replace the purl. Fields and a local example: [DOCS.md](./DOCS.md#component-identity).
 
@@ -709,7 +711,7 @@ when you want that change set explicitly. It writes nothing unless you pass
 - `--max-privacy` suppresses local artifact writes and high-context scanners; `--no-local-artifacts` skips writing `.vibgrate/*.json` to disk.
 - `vg code --local` keeps model inference on-device: a local model, the local graph, no hosted call and no model-catalog fetch. The agent's own web tools stay available and, like every network step, are approved by you before they run.
 - `vg code` never reads a secrets file into a prompt, and redacts credential shapes from files it does read.
-- `vg evidence` runs locally: `--offline` with a local advisory file needs no network, and `vg evidence verify` checks a bundle on a machine with no account and no connection. Nothing reaches Vibgrate Cloud until you run `vg evidence push`.
+- `vg evidence` runs locally: `--offline` with a local advisory file needs no network, and `vg evidence verify` checks a bundle on a machine with no account and no connection. Nothing reaches Vibgrate Cloud until you run `vg evidence push`. `vg evidence regimes`, `vg evidence readiness`, and `vg evidence drill` stay on that local path — profiles shipped in the CLI, and `.vibgrate/evidence/` for the gap report and the drill. The dry-run is in [DOCS.md](./DOCS.md#readiness-regimes-and-a-local-drill).
 
 ```bash
 vg scan --offline --package-manifest ./package-versions.zip --max-privacy --format json --out scan.json
@@ -717,7 +719,7 @@ vg scan --offline --package-manifest ./package-versions.zip --max-privacy --form
 
 Add `.vibgrate/` to your `.gitignore` — those are regenerated local outputs.
 
-More on how Vibgrate handles code and data: [vibgrate.com/security](https://vibgrate.com/security), and the [subprocessor register](https://vibgrate.com/subprocessors).
+More on how Vibgrate handles code and data: [vibgrate.com/security](https://vibgrate.com/security), and the [subprocessor register](https://vibgrate.com/trust/subprocessors).
 
 ---
 
@@ -745,6 +747,8 @@ Under each set, commands are listed A–Z. A short **typical path** (usual order
 ### Code graph
 
 **Typical path:** `vg build` → `vg status` → `vg ask` → `vg impact` → `vg share`
+
+`vg ask` answers from the local map. The question and your code stay on this machine. `--offline` skips the optional module fetches and this process's embedding-model download. See [What stays local / when the network is used](./DOCS.md#what-stays-local--when-the-network-is-used).
 
 | Command | Description |
 | --- | --- |
@@ -887,7 +891,7 @@ Local scoring does not require this — nothing leaves your machine until you pu
 | `vg push` | Upload scan results to Vibgrate Cloud |
 
 ```bash
-vg scan [path] [--vulns] [--full] [--format text|json|sarif|md] [--out <file>] [--fail-on warn|error|architecture-finding|architecture-warning] \
+vg scan [path] [--vulns] [--full] [--format text|json|sarif|md] [--out <file>] [--fail-on warn|error|architecture-finding|architecture-warning] [--fail-on-epss <threshold>] \
   [--offline] [--package-manifest <file>] [--no-local-artifacts] [--max-privacy] \
   [--drift-budget <score>] [--drift-worsening <percent>] [--baseline <file>] [--summary-out <file>]
 ```

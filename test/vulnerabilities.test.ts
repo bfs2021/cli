@@ -79,6 +79,19 @@ describe('vuln-data + list_vulnerabilities MCP tool', () => {
     expect(res.totalAdvisories).toBe(2);
     expect(res.affectedPackages).toBe(2);
     expect(res.packages.find((p) => p.package === 'lodash')?.advisories[0].cve).toBe('CVE-2021-1');
+    writeArtifact(dir, {
+      ...VULNS,
+      packages: [
+        {
+          ...VULNS.packages[0],
+          advisories: [{ ...VULNS.packages[0].advisories[0], id: 'CVE-2021-1', aliases: ['GHSA-crit'] }],
+        },
+      ],
+    });
+    const grouped = listVulns.handler(stubGraph, {}, { root: dir }) as {
+      packages: Array<{ advisories: Array<{ id: string; cve: string | null }> }>;
+    };
+    expect(grouped.packages[0].advisories[0]).toMatchObject({ id: 'CVE-2021-1', cve: 'CVE-2021-1' });
     const lodash = res.packages.find((p) => p.package === 'lodash')?.advisories[0] as Record<string, unknown>;
     expect(lodash).toMatchObject({ epss: 0.42, epssPercentile: 0.91, kev: true });
     const minimist = res.packages.find((p) => p.package === 'minimist')?.advisories[0] as Record<string, unknown>;

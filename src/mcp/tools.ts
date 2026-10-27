@@ -16,7 +16,7 @@ import { loadOrDiscoverFederation } from '../runtime/federation.js';
 import { highConfidenceBridges } from '../runtime/bridge-edges.js';
 import { repositoryIdFromRoot } from '../runtime/paths.js';
 import { GraphLoadError, parseGraph } from '../engine/serialize.js';
-import { loadVulnerabilities, filterBySeverity, resolvePackageTarget, openFixableAdvisories } from './vuln-data.js';
+import { loadVulnerabilities, filterBySeverity, resolvePackageTarget, openFixableAdvisories, advisoryCve } from './vuln-data.js';
 import { attributedInventory } from './attribution.js';
 import { computeUpgradeImpact, getChangelogSignals, type VulnSeverity } from '../core-open/index.js';
 import { discoverModels } from '../engine/models.js';
@@ -793,7 +793,7 @@ export const TOOLS: VgTool[] = [
         installedVersion: p.version,
         advisories: p.advisories.map((a) => ({
           id: a.id,
-          cve: a.aliases.find((x) => x.startsWith('CVE-')) ?? null,
+          cve: advisoryCve(a),
           severity: a.severity,
           cvss: a.cvss,
           ...(a.cvssDiagnostic ? { cvssDiagnostic: a.cvssDiagnostic } : {}),
@@ -833,7 +833,7 @@ export const TOOLS: VgTool[] = [
           installedVersion: p.version,
           advisories: p.advisories.map((a) => ({
             id: a.id,
-            cve: a.aliases.find((x) => x.startsWith('CVE-')) ?? null,
+            cve: advisoryCve(a),
             severity: a.severity,
             cvss: a.cvss,
             ...(a.cvssDiagnostic ? { cvssDiagnostic: a.cvssDiagnostic } : {}),

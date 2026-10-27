@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { inspectUtf8 } from '../core-open/utils/text-bytes.js';
+import { readDirectory, type DirectoryReader } from './dir-reader.js';
 
 /**
  * Module resolution for import edges. Resolves an import specifier (relative,
@@ -80,11 +81,15 @@ Object.assign(EXT_GROUPS, {
   '.ejs': JS_TS_EXT,
 });
 
-export function buildModuleResolver(root: string, relSet: Set<string>): ModuleResolver {
+export function buildModuleResolver(
+  root: string,
+  relSet: Set<string>,
+  readDir: DirectoryReader = readDirectory,
+): ModuleResolver {
   const probe = makeProbe(relSet);
   const suffixIndex = buildSuffixIndex(relSet);
   const tsPaths = loadTsconfigPaths(root); // {baseUrlRel, paths}
-  const workspaces = loadWorkspacePackages(root);
+  const workspaces = loadWorkspacePackages(root, readDir);
 
   function resolveAlias(source: string): string | null {
     if (!tsPaths) return null;
@@ -407,7 +412,7 @@ function cmpText(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-function loadWorkspacePackages(root: string): WorkspacePackage[] {
+function loadWorkspacePackages(root: string, readDir: DirectoryReader): WorkspacePackage[] {
   const globs: string[] = [];
 
   const rootPkg = path.join(root, 'package.json');
@@ -440,7 +445,7 @@ function loadWorkspacePackages(root: string): WorkspacePackage[] {
 
   const packages: WorkspacePackage[] = [];
   const seen = new Set<string>();
-  for (const dir of expandWorkspaceGlobs(root, globs)) {
+  for (const dir of expandWorkspaceGlobs(root, globs, readDir)) {
     const pj = path.join(dir, 'package.json');
     try {
       const parsed = JSON.parse(fs.readFileSync(pj, 'utf8')) as { name?: unknown; version?: unknown };
@@ -460,7 +465,7 @@ function loadWorkspacePackages(root: string): WorkspacePackage[] {
 }
 
 /** Resolve simple workspace globs (`packages/*`, `apps/*`, `libs/**`) to dirs containing package.json. */
-function expandWorkspaceGlobs(root: string, globs: string[]): string[] {
+function expandWorkspaceGlobs(root: string, globs: string[], readDir: DirectoryReader): string[] {
   const out = new Set<string>();
   for (const glob of globs) {
     const clean = glob.replace(/\/\*\*$/, '').replace(/\/\*$/, '');
@@ -471,16 +476,16 @@ function expandWorkspaceGlobs(root: string, globs: string[]): string[] {
       if (fs.existsSync(path.join(baseDir, 'package.json'))) out.add(baseDir);
       continue;
     }
-    collectPackageDirs(baseDir, recurse ? 4 : 1, out);
+    collectPackageDirs(baseDir, recurse ? 4 : 1, out, readDir);
   }
   return [...out].sort(cmpText);
 }
 
-function collectPackageDirs(dir: string, depth: number, out: Set<string>): void {
+function collectPackageDirs(dir: string, depth: number, out: Set<string>, readDir: DirectoryReader): void {
   if (depth < 0) return;
   let entries: fs.Dirent[];
   try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
+    entries = readDir(dir);
   } catch {
     return;
   }
@@ -489,7 +494,7 @@ function collectPackageDirs(dir: string, depth: number, out: Set<string>): void 
     if (!e.isDirectory() || e.name === 'node_modules' || e.name.startsWith('.')) continue;
     const child = path.join(dir, e.name);
     if (fs.existsSync(path.join(child, 'package.json'))) out.add(child);
-    else collectPackageDirs(child, depth - 1, out);
+    else collectPackageDirs(child, depth - 1, out, readDir);
   }
 }
 

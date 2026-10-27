@@ -26,6 +26,15 @@ export function loadVulnerabilities(root: string): VulnerabilityScanResult | nul
   return readScanArtifact(root)?.extended?.vulnerabilities ?? null;
 }
 
+/**
+ * CVE id for an advisory. The group id is used when that id is itself a CVE;
+ * otherwise the first CVE alias is used. Absent stays null.
+ */
+export function advisoryCve(advisory: { id: string; aliases?: readonly string[] }): string | null {
+  if (advisory.id.startsWith('CVE-')) return advisory.id;
+  return advisory.aliases?.find((id) => id.startsWith('CVE-')) ?? null;
+}
+
 /** The drift target for a package: ecosystem + installed/latest versions. */
 export interface PackageTarget {
   ecosystem: VulnEcosystem | 'unknown';

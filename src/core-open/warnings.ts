@@ -71,10 +71,17 @@ export const WARNING_CODES = {
   SBOM_LOSSY_EDGES: 'VG_WARN_SBOM_LOSSY_EDGES',
   /** SBOM merge dropped differing manifest metadata for one package. */
   SBOM_LOSSY_MANIFEST: 'VG_WARN_SBOM_LOSSY_MANIFEST',
+  /** A Maven component name has no groupId. The purl is written without a namespace. */
+  SBOM_MAVEN_NO_GROUP: 'VG_WARN_SBOM_MAVEN_NO_GROUP',
   /** SBOM merge recorded an unknown ecosystem as npm. */
   SBOM_UNKNOWN_ECOSYSTEM: 'VG_WARN_SBOM_UNKNOWN_ECOSYSTEM',
   /** A lockfile format does not record dependency edges. */
   SBOM_UNTRACKED_EDGES: 'VG_WARN_SBOM_UNTRACKED_EDGES',
+  /**
+   * More than one YAML or JSON config file sets `driftBudget`, and the values
+   * differ. The first config file in lookup order is the one in use.
+   */
+  CONFIG_DRIFT_BUDGET_CONFLICT: 'VG_WARN_CONFIG_DRIFT_BUDGET_CONFLICT',
 } as const;
 
 export type WarningCode = (typeof WARNING_CODES)[keyof typeof WARNING_CODES];

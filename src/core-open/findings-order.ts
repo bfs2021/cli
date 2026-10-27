@@ -1,6 +1,7 @@
 // VENDORED from @vibgrate/core-open (packages/vibgrate-core-open) by
 // scripts/vendor-core-open.mjs. Do not edit here — change the source package
 // and re-run the vendor script. Apache-2.0.
+import { generateVulnerabilityFindings, groupVulnerabilityScanResult, VULN_RULE_ID } from './scanners/vulnerability-scanner.js';
 import type { Finding, ScanArtifact, SecurityFinding, VulnerabilityAdvisory } from './types.js';
 
 /**
@@ -121,25 +122,29 @@ function orderSecurityFinding(finding: SecurityFinding): SecurityFinding {
 
 /**
  * Sort findings, and the identifier lists nested on them, before JSON emit.
+ * Vulnerability findings that share an id through aliases — including a chain
+ * A → B → C — become one finding. The group id rule lives on
+ * {@link groupVulnerabilityScanResult}. SARIF keeps the pre-group findings.
  * Security findings keep their path/line/rule order; only their set-like
  * identifier lists are sorted. Dependency paths (`via`) are left alone.
  */
 export function orderScanArtifactForEmit(artifact: ScanArtifact): ScanArtifact {
-  const findings = orderScanFindings(artifact.findings ?? []);
   const extended = artifact.extended;
   let nextExtended = extended;
+  let findingsInput = artifact.findings ?? [];
   if (extended?.vulnerabilities) {
-    nextExtended = {
-      ...extended,
-      vulnerabilities: {
-        ...extended.vulnerabilities,
-        packages: extended.vulnerabilities.packages.map((pkg) => ({
-          ...pkg,
-          advisories: pkg.advisories.map(orderAdvisory),
-        })),
-      },
-    };
+    const vulnerabilities = groupVulnerabilityScanResult({
+      ...extended.vulnerabilities,
+      packages: extended.vulnerabilities.packages.map((pkg) => ({
+        ...pkg,
+        advisories: pkg.advisories.map(orderAdvisory),
+      })),
+    });
+    nextExtended = { ...extended, vulnerabilities };
+    const rest = findingsInput.filter((finding) => finding.ruleId !== VULN_RULE_ID);
+    findingsInput = [...rest, ...generateVulnerabilityFindings(vulnerabilities)];
   }
+  const findings = orderScanFindings(findingsInput);
   if (nextExtended?.security) {
     nextExtended = {
       ...nextExtended,
