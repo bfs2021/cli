@@ -132,6 +132,7 @@ For a quick overview, see the [README](./README.md). This document covers everyt
   - [Code Quality Metrics](#code-quality-metrics)
   - [OWASP Category Mapping](#owasp-category-mapping)
 - [CI Integration](#ci-integration)
+  - [Gating CI on vulnerability severity, RiskScore and EPSS](#gating-ci-on-vulnerability-severity-riskscore-and-epss)
   - [GitHub Actions](#github-actions)
   - [Azure DevOps](#azure-devops)
   - [GitLab CI](#gitlab-ci)
@@ -2434,7 +2435,7 @@ vg scan [path] [--vulns] [--full] [--iac] [--format text|json|sarif|md] [--out <
 | `--format` | `text` | Output format: `text`, `json`, `sarif`, or `md` |
 | `--out <file>` | — | Write output to a file |
 | `--junit <file>` | — | Also write a deterministic JUnit XML report of findings and gates. See [JUnit](#junit). Does not replace `--format` |
-| `--fail-on <level>` | — | Exit with code 2 if findings at this level exist. `warn` / `error` gate on drift findings. `architecture-finding` (hard boundary violations) and `architecture-warning` (violations and warnings) gate on the architecture module's boundary findings, judged under the policy pack in force — `hexagonal-v1` unless `.vibgrate/architecture.toml`, `VIBGRATE_ARCHITECTURE_POLICY` or `vg build --policy` says `layered-v1`. The output names the pack whether the gate passes or fails; each failing row is `file:line  symbol  violation: … (rule)`. Pick the pack before turning this on: see [Architecture policy packs](./docs/architecture-policies.md) |
+| `--fail-on <level>` | — | Exit with code 2 if findings at this level exist. `warn` / `error` gate on finding level, including drift findings and known-vulnerability findings from `--vulns`. See [Gating CI on vulnerability severity, RiskScore and EPSS](#gating-ci-on-vulnerability-severity-riskscore-and-epss). `architecture-finding` (hard boundary violations) and `architecture-warning` (violations and warnings) gate on the architecture module's boundary findings, judged under the policy pack in force — `hexagonal-v1` unless `.vibgrate/architecture.toml`, `VIBGRATE_ARCHITECTURE_POLICY` or `vg build --policy` says `layered-v1`. The output names the pack whether the gate passes or fails; each failing row is `file:line  symbol  violation: … (rule)`. Pick the pack before turning this on: see [Architecture policy packs](./docs/architecture-policies.md). `iac-finding[=<severity>]` and `security-finding[=<severity>]` gate infrastructure and security-pack findings (`critical`, `high`, `medium`, `low`, `info`; default `high`). They do not read known-vulnerability advisories |
 | `--baseline <file>` | — | Compare against a previous baseline. JSON records matching findings in `baselineComparison` (rule, location, and id, sorted). Text prints the count. SARIF lists the same ids as suppressions. Those findings stay in the report |
 | `--changed-only` | — | Only scan changed files |
 | `--concurrency <n>` | `8` | Max concurrent npm registry calls |
@@ -5969,6 +5970,81 @@ Maps security findings into OWASP Top 10 categories for security triage inside e
 
 ## CI Integration
 
+Known-vulnerability severity, local RiskScore limits, and EPSS are in [Gating CI on vulnerability severity, RiskScore and EPSS](#gating-ci-on-vulnerability-severity-riskscore-and-epss).
+
+### Gating CI on vulnerability severity, RiskScore and EPSS
+
+`vg scan --vulns` records each matched advisory as a finding. `--fail-on error` and `--fail-on warn` read that finding's level. A breach exits `2` (`GATE_FAILED`). See [Exit Codes](#exit-codes).
+
+Pass `--vulns`, or `--full`, which turns `--vulns` on. A scan that omits both does not match advisories, so this gate has no vulnerability findings to count.
+
+| Advisory severity | Finding level | Fails `--fail-on error` | Fails `--fail-on warn` |
+| ----------------- | ------------- | ----------------------- | ---------------------- |
+| `critical` | `error` | yes | yes |
+| `high` | `error` | yes | yes |
+| `moderate` | `warning` | no | yes |
+| `low` | `note` | no | no |
+| `unknown` | `note` | no | no |
+
+`unknown` means the advisory had no usable severity. It is a `note`, the same level as `low`. SARIF keeps the two apart in `properties.severity`. The same mapping is under [Severity and `level`](#severity-and-level).
+
+A CVSS v3 base score sets the severity when one is present: `9.0` and above is `critical`, from `7.0` up to `9.0` is `high`, from `4.0` up to `7.0` is `moderate`, above `0` and below `4.0` is `low`, and `0` is `unknown`. An online advisory from OSV uses that score when it is present, and a qualitative label otherwise. The label `medium` is read as `moderate`. An offline `--package-manifest` entry uses an explicit `severity` when you set one, then the CVSS score, then `unknown`.
+
+`--fail-on error` and `--fail-on warn` count every finding at that level, including drift findings on the same run. A `note` does not fail either value. Other gates on the same command can still exit `2`.
+
+`iac-finding[=<severity>]` and `security-finding[=<severity>]` gate infrastructure and security-pack findings. They do not read these advisories. Their severity names are `critical`, `high`, `medium`, `low`, and `info`, and the default threshold is `high`.
+
+The finding gate runs before `--drift-budget` and `--drift-worsening`. `--drift-worsening` compares against `--baseline`. When that flag is set, a measured DriftScore with no numeric `delta` exits `2`. See [CI gate](#ci-gate).
+
+When you pass them, `--out`, `--junit`, and `--summary-out` are written before the process exits. A later step that publishes those files needs `if: always()`. See [JUnit](#junit).
+
+#### RiskScore
+
+A local `vg scan` computes DriftScore. RiskScore is absent from the scan artifact. A missing RiskScore is omitted. It is never written as `0`.
+
+`maxRiskScore` and `maxRiskWorseningPercent` in [`driftBudget`](#drift-budget) print `Not evaluated on a local scan. The GitHub App computes RiskScore on a Team plan or above.` The status is `not_evaluated`. Those two limits do not exit `2`. `vg scan` has no `--fail-on` value for RiskScore.
+
+`drift.riskLevel` is the DriftScore band (`low`, `moderate`, or `high`). It is a separate field from RiskScore.
+
+#### EPSS
+
+JSON lists `epss`, `epssPercentile`, and `kev` on an advisory when the source already carried them. A missing value is omitted. It is never written as `0` or `false` to mean unknown. A present `0` is a real EPSS probability, and a present `false` means the source says the CVE is not in the KEV catalog. See [Vulnerabilities and exposure attribution](#vulnerabilities-and-exposure-attribution).
+
+EPSS does not set the finding level. `vg scan` does not fail the process on an EPSS probability or a KEV mark. A high probability stays in the report and leaves the exit code unchanged.
+
+`--offline` reads `epss`, `epssPercentile`, and `kev` from `--package-manifest` only. It does not call an EPSS or KEV service.
+
+#### CI commands
+
+Online, against the public OSV database. Critical and high advisories fail the job:
+
+```yaml
+name: Vulnerability severity gate
+on:
+  pull_request:
+jobs:
+  vulns:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Pin a reviewed calendar version on a required check. See examples/github-actions/README.md.
+      - name: Install Vibgrate CLI
+        run: npm install -g @vibgrate/cli
+      - name: Gate on critical and high advisories
+        run: vg scan --vulns --format sarif --out vibgrate.sarif --summary-out vibgrate-summary.json --fail-on error
+```
+
+Offline, from a package-version manifest on disk. The scan does not contact a registry or the OSV database:
+
+```bash
+vg scan --vulns --offline --package-manifest ./package-versions.json --format json --out vibgrate.json --fail-on error
+```
+
+`--fail-on warn` on either command also fails on `moderate`. `low` and `unknown` stay in the report under both values.
+
 ### GitHub Actions
 
 Use the maintained templates in this package for copy-paste setup:
@@ -5999,7 +6075,9 @@ steps:
 
 To gate pull requests on **known vulnerabilities** and surface them in the
 Security tab, the maintained `vibgrate/cli` Action does the scan, gate, and SARIF
-upload in one step (needs `permissions: security-events: write`):
+upload in one step (needs `permissions: security-events: write`). The severity
+mapping, and what a local scan does with RiskScore and EPSS, is in
+[Gating CI on vulnerability severity, RiskScore and EPSS](#gating-ci-on-vulnerability-severity-riskscore-and-epss):
 
 ```yaml
 steps:
