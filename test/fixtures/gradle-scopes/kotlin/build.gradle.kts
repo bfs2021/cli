@@ -1,0 +1,17 @@
+dependencies {
+    // Production declaration first. A later test declaration of the same coordinate does not win.
+    implementation("com.example:both:1.5.0")
+    testImplementation("com.example:both:9.9.9")
+
+    implementation("com.example:impl-lib:1.2.3")
+    api("com.example:api-lib:1.0.0")
+    compileOnly("com.example:compile-lib:1.0.0")
+    runtimeOnly("com.example:runtime-lib:1.0.0")
+
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.mockito:mockito-core:5.11.0")
+    testRuntimeOnly("com.example:test-runtime:1.0.0")
+    testCompileOnly("com.example:test-compile:1.0.0")
+
+    api(platform("org.springframework.boot:spring-boot-dependencies:3.2.5"))
+}
