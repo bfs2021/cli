@@ -1,8 +1,9 @@
 /**
  * PEP 621 `[project.optional-dependencies]` is an optional manifest row.
- * `[dependency-groups]` and Poetry dependency groups stay off that mark.
- * A name that is also in `[project] dependencies` stays optional, and the
- * exported document does not depend on which table is written first.
+ * A package that appears only in `[dependency-groups]` or a Poetry dependency
+ * group is a development row. A name listed in an optional extra and in
+ * `[project] dependencies` stays optional, and the exported document does
+ * not depend on which table is written first.
  */
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -109,7 +110,8 @@ describe('sbom export: PEP 621 optional extras', () => {
     expect(byPackage.get('psycopg')?.currentSpec).toBe('>=3.1');
     expect(byPackage.get('httpx')?.section).toBe('dependencies');
     expect(byPackage.get('httpx')?.currentSpec).toBe('>=0.27');
-    expect(byPackage.has('pytest')).toBe(false);
+    expect(byPackage.get('pytest')?.section).toBe('devDependencies');
+    expect(byPackage.get('pytest')?.currentSpec).toBe('>=8');
 
     const cdx = first.cdx as {
       components: Array<{ name: string; scope?: string; properties: Array<{ name: string; value: string }> }>;
@@ -121,10 +123,10 @@ describe('sbom export: PEP 621 optional extras', () => {
 
     expect(byName.get('psycopg')?.scope).toBe('optional');
     expect(byName.get('httpx')?.scope).toBeUndefined();
-    expect(byName.get('pytest')?.scope).toBeUndefined();
+    expect(byName.get('pytest')?.scope).toBe('excluded');
     expect(vibScope('psycopg')).toBe('direct');
     expect(vibScope('httpx')).toBe('direct');
-    expect(vibScope('pytest')).toBe('transitive');
+    expect(vibScope('pytest')).toBe('direct');
     expect(cdx.dependencies).toBeUndefined();
 
     const spdx = first.spdx as {
@@ -138,8 +140,12 @@ describe('sbom export: PEP 621 optional extras', () => {
         relatedSpdxElementId: 'SPDXRef-DOCUMENT',
         relationshipType: 'OPTIONAL_DEPENDENCY_OF',
       },
+      {
+        spdxElementId: id('pytest'),
+        relatedSpdxElementId: 'SPDXRef-DOCUMENT',
+        relationshipType: 'DEV_DEPENDENCY_OF',
+      },
     ]);
-    expect(spdx.relationships.some((rel) => rel.relationshipType === 'DEV_DEPENDENCY_OF')).toBe(false);
     expect(spdx.packages.map((pkg) => pkg.name)).toEqual(['httpx', 'psycopg', 'pytest']);
   });
 });

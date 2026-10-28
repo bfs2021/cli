@@ -223,11 +223,13 @@ function declaredSection(dep: PythonDependency): DepSection {
 
 /**
  * One row per normalised name.
- * `optionalDependencies` wins over a production listing. `devDependencies`
- * wins only when the name is not also in `dependencies` (including a
- * dev-only optional name). Two optional rows keep the code-unit-smaller
- * spec, then the smaller raw name, so extra order does not matter.
- * Two production rows keep the first one parsed.
+ * `devDependencies` wins when the name is not also in `dependencies`,
+ * including a name listed in both a dev group and an optional extra.
+ * `optionalDependencies` wins over a production listing, including when a
+ * dev group lists that same name. Two optional rows keep the
+ * code-unit-smaller spec, then the smaller raw name, so extra order does
+ * not matter. Two production rows, and two dev rows, keep the first one
+ * parsed.
  */
 function pickPythonDep(rows: PythonDependency[]): PythonDependency {
   if (rows.length === 1) return rows[0]!;
@@ -290,6 +292,31 @@ function skipTomlString(text: string, start: number): number {
   return text.length;
 }
 
+/** Index just after the inline table that starts at `start` (the `{`). */
+function skipTomlInlineTable(text: string, start: number): number {
+  let depth = 0;
+  let i = start;
+  while (i < text.length) {
+    const ch = text[i]!;
+    if (ch === '#') {
+      const nl = text.indexOf('\n', i);
+      i = nl === -1 ? text.length : nl + 1;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      i = skipTomlString(text, i);
+      continue;
+    }
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) return i + 1;
+    }
+    i++;
+  }
+  return text.length;
+}
+
 /** Index of the `]` that closes an array starting at `start` (the first character inside the array). */
 function indexOfClosingBracket(text: string, start: number): number {
   let i = start;
@@ -302,6 +329,11 @@ function indexOfClosingBracket(text: string, start: number): number {
     }
     if (ch === '"' || ch === "'") {
       i = skipTomlString(text, i);
+      continue;
+    }
+    // A `]` inside `{include-group = "..."}` does not end the array.
+    if (ch === '{') {
+      i = skipTomlInlineTable(text, i);
       continue;
     }
     if (ch === ']') return i;
@@ -317,6 +349,11 @@ function collectQuotedStrings(body: string, out: string[]): void {
     if (ch === '#') {
       const nl = body.indexOf('\n', i);
       i = nl === -1 ? body.length : nl + 1;
+      continue;
+    }
+    // PEP 735 `{include-group = "name"}` is not a requirement string.
+    if (ch === '{') {
+      i = skipTomlInlineTable(body, i);
       continue;
     }
     if (ch === '"' || ch === "'") {
@@ -352,7 +389,10 @@ function collectQuotedStrings(body: string, out: string[]): void {
 /**
  * Requirement strings from every array in a TOML table body.
  * A `]` inside a quoted requirement (an extra marker) does not end the array.
- * Comments are skipped. `[dependency-groups]` is a different table and is not read here.
+ * Comments are skipped. An inline table such as `{include-group = "other"}`
+ * is skipped, so its quoted strings are not requirements. PEP 735
+ * `include-group` entries are not expanded; each group's own array is read
+ * when this walks `[dependency-groups]`.
  */
 function requirementStringsFromTomlArrays(section: string): string[] {
   const out: string[] = [];
@@ -390,13 +430,65 @@ function poetryInlineOptional(line: string): boolean {
   return /(?:^|[,{\s])optional\s*=\s*true\b/.test(table[1]);
 }
 
+/** Headers of `[tool.poetry.group.<name>.dependencies]` tables, in file order. */
+function poetryGroupDependencyHeaders(content: string): string[] {
+  const re = /^[ \t]*\[\s*(tool\.poetry\.group\.[^.\]]+\.dependencies)\s*\]/gm;
+  const headers: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(content)) !== null) headers.push(match[1]!);
+  return headers;
+}
+
+/**
+ * `name = "spec"` and `name = { version = "spec", ... }` lines from one Poetry
+ * dependency table. The `python` key is the runtime on the main table and is
+ * ignored in a dev group or in `[tool.poetry.dev-dependencies]`.
+ */
+function appendPoetryDependencyTable(
+  body: string,
+  rows: PythonDependency[],
+  result: PyProjectToml,
+  kind: 'main' | 'dev',
+): void {
+  for (const line of body.split('\n')) {
+    const kv = line.match(/^\s*([A-Za-z0-9][-A-Za-z0-9_.]*)\s*=\s*(?:"([^"]+)"|{.*?version\s*=\s*"([^"]+)".*?})/);
+    if (!kv) continue;
+    const name = kv[1]!;
+    if (name.toLowerCase() === 'python') {
+      if (kind === 'main') result.pythonVersion = kv[2] ?? kv[3] ?? undefined;
+      continue;
+    }
+    const ver = kv[2] ?? kv[3] ?? '';
+    const normalisedName = name.toLowerCase().replace(/[_.]+/g, '-');
+    const spec = ver ? `==${ver}` : '';
+    // Quoted specs on the main table stay required. `optional = true` is read
+    // only from an inline table there. A dev-group row is `devDependencies`.
+    const optional = kind === 'main' && kv[3] !== undefined && poetryInlineOptional(line);
+    const section: DepSection | undefined = kind === 'dev'
+      ? 'devDependencies'
+      : optional
+        ? 'optionalDependencies'
+        : undefined;
+    rows.push({
+      name,
+      spec,
+      normalisedName,
+      ...(section ? { section } : {}),
+    });
+  }
+}
+
 /**
  * Very lightweight TOML parser — handles the subset we care about:
  * [project] name, requires-python, dependencies array,
  * [project.optional-dependencies] extra arrays,
- * [tool.poetry.dependencies] table.
+ * [dependency-groups] requirement arrays (section `devDependencies`),
+ * [tool.poetry.dependencies] (required, or `optionalDependencies` when the
+ * inline table sets `optional = true`),
+ * [tool.poetry.group.<name>.dependencies] and [tool.poetry.dev-dependencies]
+ * (section `devDependencies`).
  *
- * `[dependency-groups]` and `[tool.poetry.group.*.dependencies]` are not read.
+ * `{include-group = "..."}` inside a dependency group is not expanded.
  * We don't pull in a full TOML parser to keep deps minimal.
  */
 function parsePyprojectToml(content: string): PyProjectToml {
@@ -425,33 +517,8 @@ function parsePyprojectToml(content: string): PyProjectToml {
   }
 
   // Parse [tool.poetry.dependencies] section
-  const poetrySection = content.match(/\[tool\.poetry\.dependencies\]([\s\S]*?)(?=\n\s*\[|\n*$)/);
-  if (poetrySection) {
-    const lines = poetrySection[1]!.split('\n');
-    for (const line of lines) {
-      const kv = line.match(/^\s*([A-Za-z0-9][-A-Za-z0-9_.]*)\s*=\s*(?:"([^"]+)"|{.*?version\s*=\s*"([^"]+)".*?})/);
-      if (kv) {
-        const name = kv[1]!;
-        if (name.toLowerCase() === 'python') {
-          result.pythonVersion = kv[2] ?? kv[3] ?? undefined;
-          continue;
-        }
-        const ver = kv[2] ?? kv[3] ?? '';
-        const normalisedName = name.toLowerCase().replace(/[_.]+/g, '-');
-        const spec = ver ? `==${ver}` : '';
-        // Quoted specs stay required. `optional = true` is read only from an
-        // inline table (`psycopg = { version = "^3.1", optional = true }`).
-        // The `python` key continued above and is not a package row.
-        const optional = kv[3] !== undefined && poetryInlineOptional(line);
-        rows.push({
-          name,
-          spec,
-          normalisedName,
-          ...(optional ? { section: 'optionalDependencies' as const } : {}),
-        });
-      }
-    }
-  }
+  const poetrySection = tomlTableBody(content, 'tool.poetry.dependencies');
+  if (poetrySection) appendPoetryDependencyTable(poetrySection, rows, result, 'main');
 
   // PEP 621 extras. Every extra is optional, including one named `dev`.
   const optionalSection = tomlTableBody(content, 'project.optional-dependencies');
@@ -461,6 +528,23 @@ function parsePyprojectToml(content: string): PyProjectToml {
       if (dep) rows.push({ ...dep, section: 'optionalDependencies' });
     }
   }
+
+  // PEP 735 dependency groups. `{include-group = "..."}` is not expanded.
+  const dependencyGroups = tomlTableBody(content, 'dependency-groups');
+  if (dependencyGroups) {
+    for (const requirement of requirementStringsFromTomlArrays(dependencyGroups)) {
+      const dep = parseRequirementLine(requirement);
+      if (dep) rows.push({ ...dep, section: 'devDependencies' });
+    }
+  }
+
+  for (const header of poetryGroupDependencyHeaders(content)) {
+    const body = tomlTableBody(content, header);
+    if (body) appendPoetryDependencyTable(body, rows, result, 'dev');
+  }
+
+  const poetryLegacyDev = tomlTableBody(content, 'tool.poetry.dev-dependencies');
+  if (poetryLegacyDev) appendPoetryDependencyTable(poetryLegacyDev, rows, result, 'dev');
 
   result.dependencies = collapsePythonDeps(rows);
   return result;
