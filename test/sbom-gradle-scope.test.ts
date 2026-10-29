@@ -1,9 +1,11 @@
 /**
- * Gradle test configurations are dev manifest rows. `implementation`, `api`,
- * `compileOnly`, `runtimeOnly`, and `platform` stay production. A coordinate
- * declared in both a production configuration and a test configuration stays
- * production, whichever line comes first. The stored configuration is the
- * bare name in Groovy and in Kotlin DSL.
+ * Gradle test configurations are dev manifest rows. `testImplementation`,
+ * `testRuntimeOnly`, and `testCompileOnly` export as development dependencies
+ * in Groovy and Kotlin DSL. `implementation`, `api`, `compileOnly`,
+ * `runtimeOnly`, and `platform` stay production. A coordinate declared on
+ * both `implementation` and `testImplementation` stays production, and the
+ * production declaration supplies the version. The stored configuration is
+ * the bare name in both syntaxes.
  */
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -16,38 +18,34 @@ import { Semaphore } from '../src/core-open/utils/semaphore.js';
 import { collectLockfileGraph, toCycloneDx, toSpdx } from '../src/reporting/commands/sbom.js';
 import type { ProjectScan, ScanArtifact } from '../src/reporting/types.js';
 
-const GROOVY = fileURLToPath(new URL('./fixtures/gradle-scopes/groovy/build.gradle', import.meta.url));
-const KOTLIN = fileURLToPath(new URL('./fixtures/gradle-scopes/kotlin/build.gradle.kts', import.meta.url));
+const FIXTURE_DIR = fileURLToPath(new URL('./fixtures/gradle-scopes/', import.meta.url));
 
 /** package → section. Order is the scanner's code-unit sort (all drift unknown). */
 const SECTIONS: Array<[string, string]> = [
   ['com.example:api-lib', 'dependencies'],
-  ['com.example:both', 'dependencies'],
-  ['com.example:compile-lib', 'dependencies'],
+  ['com.example:both-lib', 'dependencies'],
+  ['com.example:compile-only-lib', 'dependencies'],
   ['com.example:impl-lib', 'dependencies'],
-  ['com.example:runtime-lib', 'dependencies'],
-  ['com.example:test-compile', 'devDependencies'],
-  ['com.example:test-runtime', 'devDependencies'],
+  ['com.example:platform-lib', 'dependencies'],
+  ['com.example:runtime-only-lib', 'dependencies'],
+  ['com.example:test-compile-lib', 'devDependencies'],
+  ['com.example:test-runtime-lib', 'devDependencies'],
   ['junit:junit', 'devDependencies'],
-  ['org.mockito:mockito-core', 'devDependencies'],
-  ['org.springframework.boot:spring-boot-dependencies', 'dependencies'],
 ];
 
-const PRODUCTION = [
-  'com.example:api-lib',
-  'com.example:both',
-  'com.example:compile-lib',
-  'com.example:impl-lib',
-  'com.example:runtime-lib',
-  'org.springframework.boot:spring-boot-dependencies',
-] as const;
+const DEV = new Set(['com.example:test-compile-lib', 'com.example:test-runtime-lib', 'junit:junit']);
 
-const DEVELOPMENT = [
-  'com.example:test-compile',
-  'com.example:test-runtime',
-  'junit:junit',
-  'org.mockito:mockito-core',
-] as const;
+const CONFIGURATIONS: Record<string, string> = {
+  'com.example:api-lib': 'api',
+  'com.example:both-lib': 'implementation',
+  'com.example:compile-only-lib': 'compileOnly',
+  'com.example:impl-lib': 'implementation',
+  'com.example:platform-lib': 'platform',
+  'com.example:runtime-only-lib': 'runtimeOnly',
+  'com.example:test-compile-lib': 'testCompileOnly',
+  'com.example:test-runtime-lib': 'testRuntimeOnly',
+  'junit:junit': 'testImplementation',
+};
 
 function artifact(projects: ProjectScan[], rootPath: string): ScanArtifact {
   return {
@@ -76,60 +74,40 @@ function offlineMavenCache(): MavenCache {
 }
 
 describe('sbom export: Gradle test configurations', () => {
-  const roots: string[] = [];
+  let root: string;
 
   afterEach(() => {
     vi.restoreAllMocks();
-    for (const dir of roots) fs.rmSync(dir, { recursive: true, force: true });
-    roots.length = 0;
-  });
-
-  it('stores the bare configuration name for Groovy and Kotlin DSL', () => {
-    const groovy = parseGradleBuild(fs.readFileSync(GROOVY, 'utf8'), GROOVY);
-    const kotlin = parseGradleBuild(fs.readFileSync(KOTLIN, 'utf8'), KOTLIN);
-    const configurations = (rows: typeof groovy.dependencies): string[] =>
-      rows.map((dep) => `${dep.groupId}:${dep.artifactId} ${dep.configuration}`).sort();
-
-    expect(configurations(groovy.dependencies)).toEqual([
-      'com.example:api-lib api',
-      'com.example:both implementation',
-      'com.example:compile-lib compileOnly',
-      'com.example:impl-lib implementation',
-      'com.example:runtime-lib runtimeOnly',
-      'com.example:test-compile testCompileOnly',
-      'com.example:test-runtime testRuntimeOnly',
-      'junit:junit testImplementation',
-      'org.mockito:mockito-core testImplementation',
-      'org.springframework.boot:spring-boot-dependencies platform',
-    ]);
-    expect(configurations(kotlin.dependencies)).toEqual(configurations(groovy.dependencies));
-
-    const both = groovy.dependencies.find((dep) => dep.artifactId === 'both');
-    expect(both?.version).toBe('1.5.0');
-    expect(both?.configuration).toBe('implementation');
-    const kotlinBoth = kotlin.dependencies.find((dep) => dep.artifactId === 'both');
-    expect(kotlinBoth?.version).toBe('1.5.0');
-    expect(kotlinBoth?.configuration).toBe('implementation');
+    if (root) fs.rmSync(root, { recursive: true, force: true });
   });
 
   it.each([
-    ['build.gradle', GROOVY],
-    ['build.gradle.kts', KOTLIN],
-  ] as const)('marks %s test rows in the scan and in CycloneDX and SPDX', async (fileName, fixture) => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vg-gradle-scope-'));
-    roots.push(root);
-    fs.copyFileSync(fixture, path.join(root, fileName));
+    ['build.gradle', 'gradle-scopes'],
+    ['build.gradle.kts', 'gradle-scopes-kts'],
+  ])('marks test rows in %s and keeps the bare configuration name', async (fileName, rootPath) => {
+    const source = fs.readFileSync(path.join(FIXTURE_DIR, fileName), 'utf8');
+    const parsed = parseGradleBuild(source, path.join('proj', fileName));
+    const stored = new Map(parsed.dependencies.map((dep) => [`${dep.groupId}:${dep.artifactId}`, dep]));
+    expect([...stored.keys()].sort()).toEqual(SECTIONS.map(([name]) => name).sort());
+    for (const [name, configuration] of Object.entries(CONFIGURATIONS)) {
+      expect(stored.get(name)?.configuration).toBe(configuration);
+      expect(stored.get(name)?.configuration).toMatch(/^[A-Za-z]+$/);
+    }
+    expect(stored.get('com.example:both-lib')?.version).toBe('1.2.3');
+
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'vg-gradle-scope-'));
+    fs.writeFileSync(path.join(root, fileName), source);
 
     const projects = await scanJavaProjects(root, offlineMavenCache());
     expect(projects).toHaveLength(1);
     const project = projects[0]!;
     expect(project.dependencies.map((dep) => [dep.package, dep.section])).toEqual(SECTIONS);
 
-    const both = project.dependencies.find((dep) => dep.package === 'com.example:both');
-    expect(both?.currentSpec).toBe('1.5.0');
+    const both = project.dependencies.find((dep) => dep.package === 'com.example:both-lib');
+    expect(both?.currentSpec).toBe('1.2.3');
     expect(both?.section).toBe('dependencies');
 
-    const scanArtifact = artifact(projects, fileName);
+    const scanArtifact = artifact(projects, rootPath);
     const graph = collectLockfileGraph(scanArtifact, root);
     const cdx = toCycloneDx(scanArtifact, graph) as {
       components: Array<{ name: string; scope?: string; properties: Array<{ name: string; value: string }> }>;
@@ -143,9 +121,9 @@ describe('sbom export: Gradle test configurations', () => {
     for (const [name] of SECTIONS) expect(vibScope(name)).toBe('direct');
     expect(cdx.dependencies).toBeUndefined();
 
-    const scopeOf = (name: string): string | undefined => byName.get(name)?.scope;
-    for (const name of PRODUCTION) expect(scopeOf(name)).toBeUndefined();
-    for (const name of DEVELOPMENT) expect(scopeOf(name)).toBe('excluded');
+    for (const [name] of SECTIONS) {
+      expect(byName.get(name)?.scope).toBe(DEV.has(name) ? 'excluded' : undefined);
+    }
 
     const spdx = toSpdx(scanArtifact, graph) as {
       packages: Array<{ name: string; annotations: Array<{ comment: string }> }>;
@@ -163,10 +141,13 @@ describe('sbom export: Gradle test configurations', () => {
     for (const pkg of spdx.packages) {
       expect(pkg.annotations.some((note) => note.comment.includes('scope=direct'))).toBe(true);
     }
-    for (const name of DEVELOPMENT) {
-      expect(rel(name)).toEqual({ relationshipType: 'DEV_DEPENDENCY_OF', relatedSpdxElementId: 'SPDXRef-DOCUMENT' });
+    for (const [name] of SECTIONS) {
+      expect(rel(name)).toEqual(
+        DEV.has(name)
+          ? { relationshipType: 'DEV_DEPENDENCY_OF', relatedSpdxElementId: 'SPDXRef-DOCUMENT' }
+          : undefined,
+      );
     }
-    for (const name of PRODUCTION) expect(rel(name)).toBeUndefined();
     expect(spdx.relationships.some((row) => row.relationshipType === 'DEPENDS_ON')).toBe(false);
   });
 });

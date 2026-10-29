@@ -1,0 +1,12 @@
+dependencies {
+    implementation 'com.example:impl-lib:1.2.3'
+    api 'com.example:api-lib:1.0.0'
+    compileOnly 'com.example:compile-only-lib:1.0.0'
+    runtimeOnly 'com.example:runtime-only-lib:1.0.0'
+    implementation platform('com.example:platform-lib:1.0.0')
+    testImplementation 'junit:junit:4.13.2'
+    testRuntimeOnly 'com.example:test-runtime-lib:1.0.0'
+    testCompileOnly 'com.example:test-compile-lib:1.0.0'
+    testImplementation 'com.example:both-lib:9.9.9'
+    implementation 'com.example:both-lib:1.2.3'
+}

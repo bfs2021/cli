@@ -14,7 +14,7 @@ backward compatible.
 
 ### Fixed
 
-- **`vg sbom export` treats Gradle test configurations as development dependencies.** A `testImplementation`, `testRuntimeOnly`, or `testCompileOnly` row in `build.gradle` or `build.gradle.kts` is section `devDependencies`. CycloneDX component `scope` is `excluded` and SPDX writes `DEV_DEPENDENCY_OF`. `implementation`, `api`, `compileOnly`, `runtimeOnly`, and `platform` rows still omit component `scope`. A coordinate that is also declared on a production configuration stays a production row. The test rows use the development DriftScore weight, the same as a Maven test-scoped dependency.
+- **`vg sbom export` marks Gradle test configurations as development dependencies.** A `testImplementation`, `testRuntimeOnly`, or `testCompileOnly` dependency in `build.gradle` or `build.gradle.kts` is stored as section `devDependencies`. CycloneDX component `scope` is `excluded`, and SPDX writes `DEV_DEPENDENCY_OF`. `implementation`, `api`, `compileOnly`, `runtimeOnly`, and `platform` stay section `dependencies`. A coordinate declared on a production configuration and a test configuration stays a production dependency, and the production declaration supplies the version. `vibgrate:scope` stays `direct`.
 
 - **`vg scan --vulns` JSON keeps one finding when CVE, GHSA, and OSV ids are aliases.** Linked ids, including a chain through a third id, collapse to one group. The group id is the lowest CVE in the group, or the lowest advisory id when there is no CVE. A single advisory keeps its own id. Alias lists are sorted, and the same tree with the same `--package-manifest` writes the same group on every run. SARIF still writes one result per advisory id.
 
