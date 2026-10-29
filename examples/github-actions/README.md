@@ -29,7 +29,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
 
       # Pin the calendar version you tested. Do not use @latest on a gate.
       # 2026.1005.1 is the scanner image pin in action.yml (image-tag).
@@ -60,7 +60,7 @@ npx @vibgrate/cli@2026.1005.1 scan --format json --out vibgrate-report.json --fa
 
 | What | Pin |
 | --- | --- |
-| Node.js | 22 or newer (`actions/setup-node@v4`, `node-version: 22`). |
+| Node.js | 24 or newer (`actions/setup-node@v4`, `node-version: 24`). |
 | Checkout, setup-node, upload-artifact, CodeQL upload | These examples use major tags: `actions/checkout@v4`, `actions/setup-node@v4`, `actions/upload-artifact@v4`, `github/codeql-action/upload-sarif@v3`. In a repository you keep, pin each `uses:` to a full commit SHA. |
 | CLI on the runner | `npm install -g @vibgrate/cli@<calendar version>`, then `vg`. A gate should not float on `@latest`. |
 | Composite Action | `uses: vibgrate/cli@v1` moves the wrapper. The scanner image stays on `image-tag`. The default in `action.yml` is `2026.1005.1`. Set `image-tag` when `v1` must not pick up a newer image. |

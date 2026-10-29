@@ -63,8 +63,8 @@ stop and leave it out.
 - Commit with Conventional Commits (`feat:`/`fix:`/`docs:`/`chore:`) and a DCO
   sign-off (`git commit -s`).
 - Use `vg` (not `vibgrate`) in docs and examples; both run the same binary.
-- Node >= 22, pnpm workspace. (Node 20 reached end-of-life; we stay current on
-  the runtime for the same reason we gate dependency drift — see below.)
+- Node >= 24, pnpm workspace. (We stay current on the runtime for the same
+  reason we gate dependency drift — see below.)
 
 ## Dependency-drift gate (dogfooding)
 

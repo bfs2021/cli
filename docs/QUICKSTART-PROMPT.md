@@ -48,7 +48,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: '22' }
+        with: { node-version: '24' }
       - run: npx @vibgrate/cli scan --format sarif -o drift.sarif
       - uses: github/codeql-action/upload-sarif@v3
         with: { sarif_file: drift.sarif }

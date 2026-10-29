@@ -1,7 +1,7 @@
 # Installing `vg`
 
 `vg` ships as the `vg` command inside the published **`@vibgrate/cli`** package
-(the bare `vg` npm name is unavailable). Node.js ≥ 22 is required. Every install
+(the bare `vg` npm name is unavailable). Node.js ≥ 24 is required. Every install
 path below lands the same `vg` command. Product overview and live demo:
 [vibgrate.com/cli](https://vibgrate.com/cli).
 

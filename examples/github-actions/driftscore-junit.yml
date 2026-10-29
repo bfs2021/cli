@@ -35,7 +35,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
 
       # Calendar pin. Same version as action.yml image-tag. Do not use @latest on a gate.
       - name: Drift gate

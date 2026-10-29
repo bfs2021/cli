@@ -23,7 +23,7 @@ export interface BrowserSession {
   pageWs?: WebSocketLike;
 }
 
-/** Minimal WebSocket surface (Node 22+ global WebSocket). */
+/** Minimal WebSocket surface (global WebSocket; the CLI requires Node 24+). */
 interface WebSocketLike {
   readyState: number;
   send(data: string): void;
@@ -144,7 +144,7 @@ function attachWs(url: string): Promise<WebSocketLike> {
   } }).WebSocket;
   if (!WS) {
     return Promise.reject(
-      new Error('WebSocket not available in this Node runtime (need Node 22+ for browser tools)'),
+      new Error('WebSocket not available in this Node runtime (need Node 24+ for browser tools)'),
     );
   }
   return new Promise((resolve, reject) => {

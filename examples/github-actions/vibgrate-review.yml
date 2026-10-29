@@ -41,7 +41,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
 
       # Review reasons from the code map. Without one it exits 6 —
       # "engine unavailable" — which is deliberately never read as a pass.

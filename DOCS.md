@@ -5258,7 +5258,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
       - name: Gate on the committed baseline
         run: npx @vibgrate/cli scan --baseline .vibgrate/baseline.json --drift-budget 40 --drift-worsening 5 --fail-on error
 ```
@@ -6034,7 +6034,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
       # Pin a reviewed calendar version on a required check. See examples/github-actions/README.md.
       - name: Install Vibgrate CLI
         run: npm install -g @vibgrate/cli
@@ -6501,7 +6501,7 @@ import type {
 
 ## Requirements
 
-- **Node.js** >= 22.0.0
+- **Node.js** >= 24.0.0
 - Works on macOS, Linux, and Windows
 
 ---

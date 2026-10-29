@@ -31,6 +31,8 @@ backward compatible.
 
 ### Changed
 
+- **The CLI requires Node.js 24 or later.** Node.js 22 is no longer supported.
+
 - **`vg sbom export` marks development and optional dependencies.** A scanned
   `devDependencies` row sets CycloneDX component `scope` to `excluded` and
   writes an SPDX `DEV_DEPENDENCY_OF` relationship. A scanned

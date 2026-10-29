@@ -11,7 +11,7 @@ By participating you agree to abide by our [Code of Conduct](./CODE_OF_CONDUCT.m
 
 Requirements:
 
-- **Node.js >= 22**
+- **Node.js >= 24**
 - **pnpm** (the repo is a pnpm workspace; use Corepack or install pnpm globally)
 
 ```bash

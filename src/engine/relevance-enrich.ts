@@ -49,7 +49,7 @@ import type { VgGraph } from '../schema.js';
 
 const MAGIC = Buffer.from('VGTAGS1\0', 'latin1');
 
-/** node:zlib gained crc32 in 22.2; engines pins Node >= 22 so it's present,
+/** node:zlib gained crc32 in 22.2; engines pins Node >= 24 so it's present,
  *  but guard anyway (same posture as engine/snapshot.ts). */
 const crc32: (data: Uint8Array) => number = zlib.crc32 ?? (() => 0);
 

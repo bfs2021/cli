@@ -15,7 +15,7 @@
   <a href="https://dash.vibgrate.com/badges/driftrisk/vibgrate/cli"><img src="https://badges.vibgrate.com/driftrisk/vibgrate/cli" alt="Vibgrate DriftRisk" /></a>
   <a href="https://vibgrate.com/cli"><img src="https://img.shields.io/badge/live%20demo-vibgrate.com%2Fcli-3FB0A4" alt="live demo" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="Apache 2.0" /></a>
-  <img src="https://img.shields.io/badge/node-%3E%3D22-brightgreen" alt="node 22+" />
+  <img src="https://img.shields.io/badge/node-%3E%3D24-brightgreen" alt="node 24+" />
 </p>
 
 Want to help? See [CONTRIBUTING.md](./CONTRIBUTING.md) and [good first issues](https://github.com/vibgrate/cli/labels/good%20first%20issue).
@@ -78,7 +78,7 @@ npx vg scan                     # vg is the primary command; vibgrate is an alia
 
 ## Windows installation
 
-Windows is supported with Node.js 22 or newer. PowerShell is the preferred shell for the Windows installer:
+Windows is supported with Node.js 24 or newer. PowerShell is the preferred shell for the Windows installer:
 
 ```powershell
 irm https://vibgrate.com/install.ps1 | iex
@@ -933,7 +933,7 @@ Recommended rollout: `vg build` + `vg install` now, add `vg scan` to CI this wee
 
 ## Requirements
 
-- Node.js **22+**
+- Node.js **24+**
 - macOS, Linux, Windows
 - VG Code additionally needs a model: a local runtime (a Code Mode pack, Ollama, LM Studio, or a GGUF on disk), a [Vibgrate Relay](https://vibgrate.com/relay) token, or an API key for another hosted provider. Run `vg models` to see what fits this machine.
 
