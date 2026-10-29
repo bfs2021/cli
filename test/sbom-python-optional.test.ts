@@ -1,9 +1,9 @@
 /**
  * PEP 621 `[project.optional-dependencies]` is an optional manifest row.
- * A package that appears only in `[dependency-groups]` or a Poetry dependency
- * group is a development row. A name listed in an optional extra and in
- * `[project] dependencies` stays optional, and the exported document does
- * not depend on which table is written first.
+ * A name that is also in `[project] dependencies` stays optional, and the
+ * exported document does not depend on which table is written first.
+ * A package the manifest does not declare stays transitive when the lockfile
+ * lists it. Dependency groups are covered in `sbom-python-dev-groups.test.ts`.
  */
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -29,12 +29,6 @@ version = "8.3.2"
 `;
 
 function manifest(order: 'prod-first' | 'extra-first'): string {
-  const noise = `[dependency-groups]
-dev = ["pytest>=8"]
-
-[tool.poetry.group.dev.dependencies]
-pytest = "^8.0.0"
-`;
   if (order === 'prod-first') {
     return `[project]
 name = "app"
@@ -43,11 +37,9 @@ dependencies = ["httpx>=0.27", "psycopg>=3.1"]
 [project.optional-dependencies]
 postgres = ["psycopg>=3.1"]
 db = ["psycopg>=3.1"]
-
-${noise}`;
+`;
   }
-  return `${noise}
-[project.optional-dependencies]
+  return `[project.optional-dependencies]
 db = ["psycopg>=3.1"]
 postgres = ["psycopg>=3.1"]
 
@@ -110,8 +102,7 @@ describe('sbom export: PEP 621 optional extras', () => {
     expect(byPackage.get('psycopg')?.currentSpec).toBe('>=3.1');
     expect(byPackage.get('httpx')?.section).toBe('dependencies');
     expect(byPackage.get('httpx')?.currentSpec).toBe('>=0.27');
-    expect(byPackage.get('pytest')?.section).toBe('devDependencies');
-    expect(byPackage.get('pytest')?.currentSpec).toBe('>=8');
+    expect(byPackage.has('pytest')).toBe(false);
 
     const cdx = first.cdx as {
       components: Array<{ name: string; scope?: string; properties: Array<{ name: string; value: string }> }>;
@@ -123,10 +114,10 @@ describe('sbom export: PEP 621 optional extras', () => {
 
     expect(byName.get('psycopg')?.scope).toBe('optional');
     expect(byName.get('httpx')?.scope).toBeUndefined();
-    expect(byName.get('pytest')?.scope).toBe('excluded');
+    expect(byName.get('pytest')?.scope).toBeUndefined();
     expect(vibScope('psycopg')).toBe('direct');
     expect(vibScope('httpx')).toBe('direct');
-    expect(vibScope('pytest')).toBe('direct');
+    expect(vibScope('pytest')).toBe('transitive');
     expect(cdx.dependencies).toBeUndefined();
 
     const spdx = first.spdx as {
@@ -140,12 +131,8 @@ describe('sbom export: PEP 621 optional extras', () => {
         relatedSpdxElementId: 'SPDXRef-DOCUMENT',
         relationshipType: 'OPTIONAL_DEPENDENCY_OF',
       },
-      {
-        spdxElementId: id('pytest'),
-        relatedSpdxElementId: 'SPDXRef-DOCUMENT',
-        relationshipType: 'DEV_DEPENDENCY_OF',
-      },
     ]);
+    expect(spdx.relationships.some((rel) => rel.relationshipType === 'DEV_DEPENDENCY_OF')).toBe(false);
     expect(spdx.packages.map((pkg) => pkg.name)).toEqual(['httpx', 'psycopg', 'pytest']);
   });
 });

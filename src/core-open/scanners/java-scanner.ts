@@ -286,6 +286,28 @@ function mavenManifestSection(dep: { scope?: string; optional?: boolean }): DepS
   return 'dependencies';
 }
 
+/**
+ * Gradle test configurations are dev rows. `implementation`, `api`,
+ * `compileOnly`, `runtimeOnly`, `annotationProcessor`, `kapt`, and `platform`
+ * stay production. A coordinate declared both ways keeps the production row.
+ */
+const GRADLE_TEST_CONFIGURATIONS = new Set(['testImplementation', 'testRuntimeOnly', 'testCompileOnly']);
+
+function isGradleTestConfiguration(configuration: string): boolean {
+  return GRADLE_TEST_CONFIGURATIONS.has(configuration);
+}
+
+function javaManifestSection(dep: { scope?: string; optional?: boolean; configuration?: string }): DepSection {
+  if (dep.configuration && isGradleTestConfiguration(dep.configuration)) return 'devDependencies';
+  return mavenManifestSection(dep);
+}
+
+/** The configuration name only. `testImplementation("g:a:v")` stores `testImplementation`. */
+function bareGradleConfiguration(fullMatch: string): string {
+  const name = /^[A-Za-z]+/.exec(fullMatch);
+  return name?.[0] ?? fullMatch;
+}
+
 // ── Gradle parsing ──
 
 interface GradleDependency {
@@ -301,7 +323,29 @@ interface GradleData {
   projectName: string;
 }
 
-function parseGradleBuild(content: string, filePath: string): GradleData {
+/**
+ * One row per coordinate. A versioned production configuration replaces a
+ * test row, whichever line comes first. A later versioned row fills a row
+ * that has no version. Two production rows, and two test rows, keep the first.
+ */
+function considerGradleDep(deps: GradleDependency[], dep: GradleDependency): void {
+  const index = deps.findIndex((row) => row.groupId === dep.groupId && row.artifactId === dep.artifactId);
+  if (index === -1) {
+    deps.push(dep);
+    return;
+  }
+  const existing = deps[index]!;
+  if (!dep.version) return;
+  if (!existing.version) {
+    deps[index] = dep;
+    return;
+  }
+  if (isGradleTestConfiguration(existing.configuration) && !isGradleTestConfiguration(dep.configuration)) {
+    deps[index] = dep;
+  }
+}
+
+export function parseGradleBuild(content: string, filePath: string): GradleData {
   const deps: GradleDependency[] = [];
   const projectName = path.basename(path.dirname(filePath));
 
@@ -316,36 +360,35 @@ function parseGradleBuild(content: string, filePath: string): GradleData {
   const toolchainMatch = content.match(/JavaLanguageVersion\.of\((\d+)\)/);
   if (toolchainMatch) javaVersion = toolchainMatch[1];
 
+  const configNames = 'implementation|api|compileOnly|runtimeOnly|testImplementation|testRuntimeOnly|testCompileOnly|annotationProcessor|kapt';
+
   // Parse dependencies: implementation 'group:artifact:version'
-  const depRegex = /(?:implementation|api|compileOnly|runtimeOnly|testImplementation|testRuntimeOnly|annotationProcessor|kapt)\s*(?:\(?\s*)?['"]([^'"]+)['"]/g;
+  // The optional parenthesis also matches Kotlin DSL `implementation("g:a:v")`.
+  const depRegex = new RegExp(`(?:${configNames})\\s*(?:\\(?\\s*)?['"]([^'"]+)['"]`, 'g');
   let match: RegExpExecArray | null;
   while ((match = depRegex.exec(content)) !== null) {
     const parts = match[1]!.split(':');
     if (parts.length >= 2) {
-      deps.push({
+      considerGradleDep(deps, {
         groupId: parts[0]!,
         artifactId: parts[1]!,
         version: parts[2] ?? '',
-        configuration: match[0]!.split(/\s/)[0]!,
+        configuration: bareGradleConfiguration(match[0]!),
       });
     }
   }
 
   // Parse Kotlin DSL: implementation("group:artifact:version")
-  const kotlinDepRegex = /(?:implementation|api|compileOnly|runtimeOnly|testImplementation|testRuntimeOnly|annotationProcessor|kapt)\s*\(\s*"([^"]+)"\s*\)/g;
+  const kotlinDepRegex = new RegExp(`(?:${configNames})\\s*\\(\\s*"([^"]+)"\\s*\\)`, 'g');
   while ((match = kotlinDepRegex.exec(content)) !== null) {
     const parts = match[1]!.split(':');
     if (parts.length >= 2) {
-      // Only add if not already captured
-      const key = `${parts[0]}:${parts[1]}`;
-      if (!deps.some((d) => `${d.groupId}:${d.artifactId}` === key)) {
-        deps.push({
-          groupId: parts[0]!,
-          artifactId: parts[1]!,
-          version: parts[2] ?? '',
-          configuration: match[0]!.split(/\s/)[0]!,
-        });
-      }
+      considerGradleDep(deps, {
+        groupId: parts[0]!,
+        artifactId: parts[1]!,
+        version: parts[2] ?? '',
+        configuration: bareGradleConfiguration(match[0]!),
+      });
     }
   }
 
@@ -354,7 +397,7 @@ function parseGradleBuild(content: string, filePath: string): GradleData {
   while ((match = platformRegex.exec(content)) !== null) {
     const parts = match[1]!.split(':');
     if (parts.length >= 2) {
-      deps.push({
+      considerGradleDep(deps, {
         groupId: parts[0]!,
         artifactId: parts[1]!,
         version: parts[2] ?? '',
@@ -456,7 +499,7 @@ async function scanOneJavaProject(
   const relDir = path.relative(rootDir, dir) || '.';
   let projectName = path.basename(dir === rootDir ? rootDir : dir);
   let javaVersion: string | undefined;
-  const allDeps = new Map<string, { groupId: string; artifactId: string; version: string; scope?: string; optional?: boolean }>();
+  const allDeps = new Map<string, { groupId: string; artifactId: string; version: string; scope?: string; optional?: boolean; configuration?: string }>();
   const projectReferences: ProjectReference[] = [];
 
   // Parse manifests — prefer pom.xml over Gradle
@@ -491,7 +534,19 @@ async function scanOneJavaProject(
 
       for (const dep of gradle.dependencies) {
         const key = `${dep.groupId}:${dep.artifactId}`;
-        if (!allDeps.has(key) && dep.version) {
+        if (!dep.version) continue;
+        const existing = allDeps.get(key);
+        if (!existing) {
+          allDeps.set(key, dep);
+          continue;
+        }
+        // A production configuration in a later Gradle file replaces a test
+        // row from an earlier one. A test row does not replace production.
+        if (
+          existing.configuration &&
+          isGradleTestConfiguration(existing.configuration) &&
+          !isGradleTestConfiguration(dep.configuration)
+        ) {
           allDeps.set(key, dep);
         }
       }
@@ -574,7 +629,7 @@ async function scanOneJavaProject(
 
     dependencies.push({
       package: key,
-      section: mavenManifestSection(dep),
+      section: javaManifestSection(dep),
       currentSpec: dep.version,
       resolvedVersion,
       latestStable,

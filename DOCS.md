@@ -3358,7 +3358,7 @@ error: `vg verify` has moved to `vg build --verify`
 
 A code-map `import` edge runs from the POM's `package` node to an `external` node. The external name is `groupId:artifactId`. The edge fields are `kind: "import"`, `epistemic: "declared"`, `resolution: "heuristic"`, `confidence: 1`, `count: 1`. There is no version field and no scope field. The package node's qualified name is `groupId:artifactId` when the POM has its own `<groupId>`. When `<groupId>` is only on a parent POM, the qualified name is the `<artifactId>` alone.
 
-A scan row has `package` (`groupId:artifactId`), `section`, `currentSpec`, `resolvedVersion`, `latestStable`, `majorsBehind`, and `drift`. For a Maven coordinate, `section` is `devDependencies` when `<scope>` is `test` (trimmed, any letter case), including when `<optional>` is also true. It is `optionalDependencies` when `<optional>` is true and the scope is not test. `compile`, `runtime`, `provided`, `system`, `import`, a missing scope, and `<optional>false</optional>` stay `dependencies`. A Gradle coordinate stays `dependencies`, including `testImplementation`. Scope and the Gradle configuration name are not their own fields. A missing resolved version is `null`, and a missing major lag is `null`.
+A scan row has `package` (`groupId:artifactId`), `section`, `currentSpec`, `resolvedVersion`, `latestStable`, `majorsBehind`, and `drift`. For a Maven coordinate, `section` is `devDependencies` when `<scope>` is `test` (trimmed, any letter case), including when `<optional>` is also true. It is `optionalDependencies` when `<optional>` is true and the scope is not test. `compile`, `runtime`, `provided`, `system`, `import`, a missing scope, and `<optional>false</optional>` stay `dependencies`. A Gradle `testImplementation`, `testRuntimeOnly`, or `testCompileOnly` coordinate is `devDependencies`. `implementation`, `api`, `compileOnly`, `runtimeOnly`, `annotationProcessor`, `kapt`, and a `platform` row stay `dependencies`. A coordinate declared on a production configuration and a test configuration stays `dependencies`, and the production declaration supplies the version. Scope and the Gradle configuration name are not their own fields. A missing resolved version is `null`, and a missing major lag is `null`.
 
 `resolvedVersion` is the declared version when that string converts to a semantic version, with a missing patch padded (`1.2` becomes `1.2.0`). `32.1.3-jre` is kept. `1.2.3+build.7` stays `1.2.3+build.7`. `1.2.3-SNAPSHOT` and a Maven range such as `[1.0,2.0)` stay in `currentSpec` and set `resolvedVersion` to `null`. With `--offline`, `latestStable` is `null` and `drift` is `unknown`. A run that can reach Maven Central fills `latestStable` and `drift` from that registry.
 
@@ -3382,7 +3382,7 @@ A direct dependency and a `<dependencyManagement>` entry for the same coordinate
 
 #### Gradle
 
-`vg scan` reads `build.gradle` and `build.gradle.kts`. The match is a text search over the whole file for these configuration names: `implementation`, `api`, `compileOnly`, `runtimeOnly`, `testImplementation`, `testRuntimeOnly`, `annotationProcessor`, `kapt`. The coordinate has to be a quoted `group:artifact:version` (`implementation 'g:a:v'` or `implementation("g:a:v")`). `implementation platform('g:a:v')` and `api(platform("g:a:v"))` are included too. The configuration name is not stored.
+`vg scan` reads `build.gradle` and `build.gradle.kts`. The match is a text search over the whole file for these configuration names: `implementation`, `api`, `compileOnly`, `runtimeOnly`, `testImplementation`, `testRuntimeOnly`, `testCompileOnly`, `annotationProcessor`, `kapt`. The coordinate has to be a quoted `group:artifact:version` (`implementation 'g:a:v'` or `implementation("g:a:v")`). `implementation platform('g:a:v')` and `api(platform("g:a:v"))` are included too. The configuration name is not stored. `testImplementation`, `testRuntimeOnly`, and `testCompileOnly` are `section` `devDependencies`. The other names in that list, and a `platform` row, are `section` `dependencies`. A coordinate declared on a production configuration and one of those test configurations is stored once, as `dependencies`, and the production declaration supplies the version.
 
 | Declaration | `vg build` import edge | `vg scan` row |
 | --- | --- | --- |
@@ -3405,7 +3405,7 @@ A directory that contains both `pom.xml` and `build.gradle` (or `build.gradle.kt
 - Profile activation is not evaluated. Active and inactive profile dependencies are both omitted from `vg scan` and from `vg build`.
 - `import` edges never carry a version or a scope, including when the POM has both.
 - Gradle dependencies never become `import` edges. `gradle.lockfile` is not read by `vg build`.
-- A Maven `<scope>test</scope>` row is `section: "devDependencies"`. `<optional>true</optional>` is `section: "optionalDependencies"`. Test scope wins when both are set. Other Maven scopes stay `section: "dependencies"`. Gradle configurations are still not recorded. `testImplementation` stays `section: "dependencies"`.
+- A Maven `<scope>test</scope>` row is `section: "devDependencies"`. `<optional>true</optional>` is `section: "optionalDependencies"`. Test scope wins when both are set. Other Maven scopes stay `section: "dependencies"`. Gradle `testImplementation`, `testRuntimeOnly`, and `testCompileOnly` are `section: "devDependencies"`. A coordinate also declared on `implementation`, `api`, `compileOnly`, `runtimeOnly`, `annotationProcessor`, `kapt`, or `platform` stays `section: "dependencies"`. The configuration name is not a scan field.
 - A versioned `<dependencyManagement>` entry becomes a scan row even when the POM does not depend on that artifact. A BOM import can show up as its own row.
 - Parent POMs, imported BOMs that this file does not restate, and `${project.version}` do not fill a missing child version.
 - A `gradle.lockfile` does not create a row for a coordinate the build file declared without a version.
@@ -3416,7 +3416,7 @@ A directory that contains both `pom.xml` and `build.gradle` (or `build.gradle.kt
 
 **Maven, scan row missing.** Put a literal `<version>` on the `<dependency>` in that same `pom.xml`, or use `${name}` with `<name>` defined in that file's `<properties>`. A versioned `<dependencyManagement>` entry in that same file also creates the row. Move a profile coordinate you need scored into the top-level `<dependencies>` or into that file's `<dependencyManagement>`, with a version. Repeat a parent-managed or BOM-managed version in this file. Replace `${project.version}` with a literal or with a `<properties>` entry in this file.
 
-**Gradle, scan row missing.** Declare `group:artifact:version` on `implementation`, `api`, `compileOnly`, `runtimeOnly`, `testImplementation`, `testRuntimeOnly`, `annotationProcessor`, or `kapt`, or use `implementation platform('g:a:v')` / `api(platform("g:a:v"))`. A declaration with no version stays omitted; add the version on that line. `gradle.lockfile` then supplies `resolvedVersion` for a dynamic declared version (`1.+`) and leaves `currentSpec` as the text you wrote. Generate the lockfile with Gradle's dependency locking so the line is `group:artifact:version=configurations`, and keep it next to the build file. For a custom configuration or a version-catalog alias, declare the same coordinate again on one of the configurations above. Delete a commented-out coordinate if it should not be a row.
+**Gradle, scan row missing.** Declare `group:artifact:version` on `implementation`, `api`, `compileOnly`, `runtimeOnly`, `testImplementation`, `testRuntimeOnly`, `testCompileOnly`, `annotationProcessor`, or `kapt`, or use `implementation platform('g:a:v')` / `api(platform("g:a:v"))`. A declaration with no version stays omitted; add the version on that line. `gradle.lockfile` then supplies `resolvedVersion` for a dynamic declared version (`1.+`) and leaves `currentSpec` as the text you wrote. Generate the lockfile with Gradle's dependency locking so the line is `group:artifact:version=configurations`, and keep it next to the build file. For a custom configuration or a version-catalog alias, declare the same coordinate again on one of the configurations above. Delete a commented-out coordinate if it should not be a row.
 
 **`resolvedVersion` is null.** The row is present and `currentSpec` holds the declared text, and the text is not a semantic version (`1.2.3-SNAPSHOT`, `[1.0,2.0)`, `1.+` with no lockfile pin). Pin a semantic version in the declaration, or add a `gradle.lockfile` pin for a dynamic Gradle version.
 
@@ -3603,7 +3603,7 @@ vg scan --offline --format json --out scan.json --no-graph
   },
   {
     "package": "junit:junit",
-    "section": "dependencies",
+    "section": "devDependencies",
     "currentSpec": "4.13.2",
     "resolvedVersion": "4.13.2",
     "latestStable": null,
@@ -3613,7 +3613,7 @@ vg scan --offline --format json --out scan.json --no-graph
 ]
 ```
 
-`com.example:managed` is absent even though the lockfile pins `4.5.6`, because the build file has no version. `com.example:it` is absent because `integrationTestImplementation` is a custom configuration. JUnit's `testImplementation` row is still `section: "dependencies"`. `currentSpec` for the dynamic coordinate stays `1.+`; the lockfile supplies `resolvedVersion`.
+`com.example:managed` is absent even though the lockfile pins `4.5.6`, because the build file has no version. `com.example:it` is absent because `integrationTestImplementation` is a custom configuration. JUnit's `testImplementation` row is `section: "devDependencies"`. `currentSpec` for the dynamic coordinate stays `1.+`; the lockfile supplies `resolvedVersion`.
 
 ---
 
