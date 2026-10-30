@@ -5,7 +5,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { discover } from './discover.js';
 import { LockfileParseError } from '../core-open/utils/lockfile-parse.js';
-import { lockfileVersion, fullDependencyTree, fullDependencyGraph } from './lockfile.js';
+import { lockfileVersion, fullDependencyTree, fullDependencyGraph, gemfileSpecPattern } from './lockfile.js';
 
 /**
  * The point of reading lockfiles at all is that `node_modules` is empty in CI
@@ -554,6 +554,15 @@ describe('Gemfile.lock and composer.lock edge cases', () => {
     expect(lockfileVersion(root, 'ruby', 'rack')).toBe('3.0.9');
     expect(lockfileVersion(root, 'ruby', 'rails')).toBe('7.1.3');
     expect(lockfileVersion(root, 'ruby', 'rails-html-sanitizer')).toBe('1.6.0');
+  });
+
+  it('ruby: a hostile spec line does not backtrack quadratically', () => {
+    // No closing paren: the old pattern had to try every split between the
+    // version and the optional platform group, which is quadratic.
+    const hostile = `    nokogiri (1${'-a'.repeat(100_000)}`;
+    const started = Date.now();
+    expect(gemfileSpecPattern('nokogiri').test(hostile)).toBe(false);
+    expect(Date.now() - started).toBeLessThan(1000);
   });
 
   it('php: packages-dev entries resolve', () => {

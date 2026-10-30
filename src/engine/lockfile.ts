@@ -169,8 +169,17 @@ function gemfileLock(root: string, name: string): string | undefined {
   // A `-<platform>` suffix (`nokogiri (1.16.2-x86_64-linux)`) is not part of the
   // version: RubyGems prerelease segments are dot-separated (`1.0.0.pre`), so a
   // dash always starts a platform and is dropped here.
-  const m = new RegExp(`^    ${escapeRegExp(name)} \\((\\d[^)]*?)(?:-[\\w.-]+)?\\)`, 'm').exec(text);
+  const m = gemfileSpecPattern(name).exec(text);
   return m ? m[1] : undefined;
+}
+
+/**
+ * The spec-line pattern for one gem. The version stops at the first `)` or `-`
+ * and the optional platform group cannot overlap it, so the two parts never
+ * compete over the same dashed text (no quadratic backtracking).
+ */
+export function gemfileSpecPattern(name: string): RegExp {
+  return new RegExp(`^    ${escapeRegExp(name)} \\((\\d[^)-]*)(?:-[^)]*)?\\)`, 'm');
 }
 
 /** PHP `composer.lock` — JSON `packages` / `packages-dev` arrays of `{ name, version }`. */
