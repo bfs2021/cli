@@ -166,7 +166,10 @@ function gemfileLock(root: string, name: string): string | undefined {
   if (text === undefined) return undefined;
   // Spec definitions are 4-space-indented with a concrete (digit-leading) version;
   // nested dep constraints (6-space) and the DEPENDENCIES list (2-space) don't match.
-  const m = new RegExp(`^    ${escapeRegExp(name)} \\((\\d[^)]*)\\)`, 'm').exec(text);
+  // A `-<platform>` suffix (`nokogiri (1.16.2-x86_64-linux)`) is not part of the
+  // version: RubyGems prerelease segments are dot-separated (`1.0.0.pre`), so a
+  // dash always starts a platform and is dropped here.
+  const m = new RegExp(`^    ${escapeRegExp(name)} \\((\\d[^)]*?)(?:-[\\w.-]+)?\\)`, 'm').exec(text);
   return m ? m[1] : undefined;
 }
 
