@@ -14,6 +14,8 @@ backward compatible.
 
 ### Fixed
 
+- **`vg scan` reads Elixir keyword options in `mix.exs`.** A dependency tuple with a keyword list of any length is a scan row, including a tuple written across multiple lines. `only: :dev`, `only: :test`, and a list whose every environment is `:dev` or `:test` are section `devDependencies`. `only: [:dev, :prod]` stays a production dependency. `optional: true` is section `optionalDependencies`, and a development `only:` wins when both are set. `optional: false` stays section `dependencies`. A `git:`, `github:`, `path:`, or `in_umbrella:` dependency is still skipped. Development rows are not looked up on Hex and do not change drift age buckets.
+
 - **`vg sbom export` marks Python dependency groups as development dependencies.**
   A package declared only in `pyproject.toml` `[dependency-groups]`,
   `[tool.poetry.group.<name>.dependencies]`, or the legacy
