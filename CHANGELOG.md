@@ -20,6 +20,16 @@ backward compatible.
 
 - **`vg sbom export` marks Cargo dev and build crates as development dependencies.** A crate declared only in `Cargo.toml` `[dev-dependencies]`, `[build-dependencies]`, or a `[target.<spec>.dev-dependencies]` or `[target.<spec>.build-dependencies]` table is stored as section `devDependencies`. CycloneDX component `scope` is `excluded`, and SPDX writes `DEV_DEPENDENCY_OF`. `vibgrate:scope` stays `direct`. `[target.<spec>.dependencies]` maps to `[dependencies]`, including `optional = true`. The target spec may be a single-quoted cfg, a double-quoted cfg with an escaped quote, or a bare triple. A crate that is also in a production table stays a production row, and that production declaration supplies the version. `[dependencies]` wins over a target production table. `[dev-dependencies]` wins over `[build-dependencies]`. Production drift buckets do not include dev or build crates.
 
+- **`vg sbom export` marks Pipfile dev packages and dev requirements files as development dependencies.**
+  A package declared only in `Pipfile` `[dev-packages]`, or only in a requirements
+  file whose base name has a `dev` or `test` segment (`requirements-dev.txt`,
+  `requirements_dev.txt`, `requirements-test.txt`, `dev-requirements.txt`), is
+  stored as section `devDependencies`. CycloneDX component `scope` is `excluded`,
+  and SPDX writes `DEV_DEPENDENCY_OF`. `vibgrate:scope` stays `direct`.
+  `[packages]` and `requirements.txt` stay production rows. A package that is
+  also in a production manifest row stays a production row, and that production
+  declaration supplies the spec, whichever file is read first.
+
 - **`vg sbom export` marks Python dependency groups as development dependencies.**
   A package declared only in `pyproject.toml` `[dependency-groups]`,
   `[tool.poetry.group.<name>.dependencies]`, or the legacy
