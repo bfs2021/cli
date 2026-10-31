@@ -18,6 +18,8 @@ backward compatible.
 
 - **`vg sbom export` marks .NET `PrivateAssets="all"` package references as development dependencies.** A `<PackageReference>` whose `PrivateAssets` attribute or child element is `all` (trimmed, any letter case) is stored as section `devDependencies`. CycloneDX component `scope` is `excluded`, and SPDX writes `DEV_DEPENDENCY_OF`. Any other value, including `compile`, and a reference with no `PrivateAssets`, stays section `dependencies`. The same package referenced again in that project without `PrivateAssets=all` stays a production dependency, and the production reference supplies the version. `vibgrate:scope` stays `direct`.
 
+- **`vg sbom export` marks Cargo dev and build crates as development dependencies.** A crate declared only in `Cargo.toml` `[dev-dependencies]`, `[build-dependencies]`, or a `[target.<spec>.dev-dependencies]` or `[target.<spec>.build-dependencies]` table is stored as section `devDependencies`. CycloneDX component `scope` is `excluded`, and SPDX writes `DEV_DEPENDENCY_OF`. `vibgrate:scope` stays `direct`. `[target.<spec>.dependencies]` maps to `[dependencies]`, including `optional = true`. The target spec may be a single-quoted cfg, a double-quoted cfg with an escaped quote, or a bare triple. A crate that is also in a production table stays a production row, and that production declaration supplies the version. `[dependencies]` wins over a target production table. `[dev-dependencies]` wins over `[build-dependencies]`. Production drift buckets do not include dev or build crates.
+
 - **`vg sbom export` marks Python dependency groups as development dependencies.**
   A package declared only in `pyproject.toml` `[dependency-groups]`,
   `[tool.poetry.group.<name>.dependencies]`, or the legacy
@@ -129,8 +131,8 @@ backward compatible.
   CycloneDX component `scope` is `optional`, and SPDX writes
   `OPTIONAL_DEPENDENCY_OF`. A required crate still omits component `scope`.
   `vibgrate:scope` stays `direct`. An `optional = true` entry under
-  `[dev-dependencies]` is still left out of the scan artifact with the other
-  dev-dependencies.
+  `[dev-dependencies]` or `[build-dependencies]` stays a development row, not
+  an optional row.
 
 - **`vg report --format html` does not turn a skipped security pack into a
   row of zeros.** A DriftScore that was not measured stays `n/a`. A security
